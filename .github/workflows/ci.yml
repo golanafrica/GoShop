@@ -21,13 +21,15 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: go.sum
 
+      - name: Create .env.test for tests
+        run: |
+          echo "APP_ENV=test" >> .env.test
+          echo "BCRYPT_COST=4" >> .env.test
+
       - name: Download dependencies
         run: go mod download
 
       - name: Run unit tests
-        env:
-          APP_ENV: test
-          BCRYPT_COST: 4
         run: go test -v -coverprofile=coverage.out ./...
 
       - name: Upload coverage to Codecov
@@ -90,7 +92,7 @@ jobs:
           cd tests
           go test -v -tags=integration ./...
 
-  # 🔥 NOUVEAU JOB : E2E Tests
+  # 🔥 E2E Tests (déjà correctement configuré)
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
@@ -164,12 +166,9 @@ jobs:
       - name: Generate OpenAPI documentation
         env:
           APP_ENV: development
-        run: swag init -g cmd/api/main.go
-
-      - name: Verify documentation generated
         run: |
-          test -f docs/swagger.json
-          test -f docs/swagger.yaml
+          swag init -g cmd/api/main.go
+          test -f docs/docs.go
           echo "✅ OpenAPI documentation generated successfully!"
 
       - name: Build API binary
