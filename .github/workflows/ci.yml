@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  GO_VERSION: '1.25'  # ← Aligné avec ton projet (pas 1.23)
+
 jobs:
   test:
     name: Run Unit Tests (mocked, no DB)
@@ -18,28 +21,27 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
-          cache-dependency-path: go.sum
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Create minimal .env.test
+        run: |
+          echo "APP_ENV=test" > .env.test
+          echo "BCRYPT_COST=4" >> .env.test
 
       - name: Download dependencies
-        run: go mod download
-
-      - name: Run unit tests (exclude integration/E2E/loadtest)
         run: |
-          go test -v -coverprofile=coverage.out \
-            $(go list ./... | \
-              grep -v /tests$ | \
-              grep -v /tests/ | \
-              grep -v /migrations | \
-              grep -v /docs | \
-              grep -v /mocks)
+          go mod download
+          go mod verify
 
-      - name: Upload coverage to Codecov
+      - name: Run unit tests
+        run: go test -v -race -coverprofile=coverage.out ./... 
+
+      - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.out
           flags: unittests
-          name: codecov-umbrella
 
   integration-test:
     name: Run Integration Tests
@@ -75,27 +77,42 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for services
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres && redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+              echo "✅ All services ready"
+              break
+            fi
+            sleep 2
+          done
 
       - name: Create .env.test
         run: |
-          echo "APP_ENV=test" >> .env.test
-          echo "APP_PORT=8081" >> .env.test
-          echo "DB_HOST=localhost" >> .env.test
-          echo "DB_PORT=5432" >> .env.test
-          echo "DB_USER=postgres" >> .env.test
-          echo "DB_PASSWORD=root" >> .env.test
-          echo "DB_NAME=goshop_test" >> .env.test
-          echo "DB_SSLMODE=disable" >> .env.test
-          echo "REDIS_HOST=localhost" >> .env.test
-          echo "REDIS_PORT=6379" >> .env.test
-          echo "BCRYPT_COST=4" >> .env.test
+          cat > .env.test << 'EOF'
+          APP_ENV=test
+          APP_PORT=8081
+          DB_HOST=localhost
+          DB_PORT=5432
+          DB_USER=postgres
+          DB_PASSWORD=root
+          DB_NAME=goshop_test
+          DB_SSLMODE=disable
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          BCRYPT_COST=4
+          EOF
 
       - name: Run integration tests
         run: |
-          go test -v -tags=integration \
-            ./application/usecase/... \
-            ./infrastructure/postgres/...
+          cd tests
+          go test -v -tags=integration ./...
 
   e2e-test:
     name: Run E2E Tests
@@ -131,21 +148,36 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for services
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres && redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
 
       - name: Create .env.test
         run: |
-          echo "APP_ENV=test" >> .env.test
-          echo "APP_PORT=8081" >> .env.test
-          echo "DB_HOST=localhost" >> .env.test
-          echo "DB_PORT=5432" >> .env.test
-          echo "DB_USER=postgres" >> .env.test
-          echo "DB_PASSWORD=root" >> .env.test
-          echo "DB_NAME=goshop_test" >> .env.test
-          echo "DB_SSLMODE=disable" >> .env.test
-          echo "REDIS_HOST=localhost" >> .env.test
-          echo "REDIS_PORT=6379" >> .env.test
-          echo "BCRYPT_COST=4" >> .env.test
+          cat > .env.test << 'EOF'
+          APP_ENV=test
+          APP_PORT=8081
+          DB_HOST=localhost
+          DB_PORT=5432
+          DB_USER=postgres
+          DB_PASSWORD=root
+          DB_NAME=goshop_test
+          DB_SSLMODE=disable
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          BCRYPT_COST=4
+          EOF
 
       - name: Run E2E tests
         run: go test -v ./tests/e2e/...
@@ -160,30 +192,42 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Download dependencies
-        run: go mod download
+        run: |
+          go mod download
+          go mod tidy
 
-      - name: Install Swag (OpenAPI generator)
+      - name: Install Swag
         run: go install github.com/swaggo/swag/cmd/swag@latest
 
+      - name: Create minimal .env for Swag
+        run: echo "APP_ENV=development" > .env
+
       - name: Generate OpenAPI documentation
-        env:
-          APP_ENV: development
         run: |
-          swag init -g ./cmd/api/main.go
+          swag init -g ./cmd/api/main.go --output ./docs --parseDependency --parseInternal
           test -f docs/docs.go
-          echo "✅ OpenAPI documentation generated successfully!"
+          test -f docs/swagger.json
+          test -f docs/swagger.yaml
+          echo "✅ OpenAPI docs generated"
 
       - name: Build API binary
         env:
-          APP_ENV: development
-          BCRYPT_COST: 4
-        run: go build -o goshop-api ./cmd/api
+          CGO_ENABLED: 0
+        run: |
+          go build -v -ldflags="-w -s" -o goshop-api ./cmd/api
+          ./goshop-api --help || true  # Ne doit pas se connecter à la DB
 
-      - name: Verify binary
-        run: ./goshop-api --help || true
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: goshop-api
+          path: |
+            goshop-api
+            docs/
 
   security:
     name: Security Scan
@@ -195,9 +239,29 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Run gosec security scanner
+      - name: Run gosec
         run: |
-          go mod tidy
-          docker run --rm -v $(pwd):/src -w /src securego/gosec ./...
+          go mod download
+          docker run --rm -v $PWD:/src -w /src securego/gosec ./...
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          args: --timeout=5m
