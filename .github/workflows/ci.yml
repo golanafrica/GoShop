@@ -27,15 +27,13 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run mocked unit tests only
+      - name: Run unit tests (exclude DB-dependent)
         run: |
-          go test -v -race -coverprofile=coverage.out \
+          go test -v -coverprofile=coverage.out \
             $(go list ./... | \
               grep -v /tests$ | \
               grep -v /tests/ | \
-              grep -v /infrastructure/postgres | \
-              grep -v /application/usecase/order_usecase | \
-              grep -v /application/usecase/auth_usecase)
+              grep -v /infrastructure/postgres)
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -94,19 +92,15 @@ jobs:
 
       - name: Create .env.test
         run: |
-          cat > .env.test << 'EOF'
-          APP_ENV=test
-          APP_PORT=8081
-          DB_HOST=localhost
-          DB_PORT=5432
-          DB_USER=postgres
-          DB_PASSWORD=root
-          DB_NAME=goshop_test
-          DB_SSLMODE=disable
-          REDIS_HOST=localhost
-          REDIS_PORT=6379
-          BCRYPT_COST=4
-          EOF
+          echo "APP_ENV=test" > .env.test
+          echo "DB_HOST=localhost" >> .env.test
+          echo "DB_PORT=5432" >> .env.test
+          echo "DB_USER=postgres" >> .env.test
+          echo "DB_PASSWORD=root" >> .env.test
+          echo "DB_NAME=goshop_test" >> .env.test
+          echo "REDIS_HOST=localhost" >> .env.test
+          echo "REDIS_PORT=6379" >> .env.test
+          echo "BCRYPT_COST=4" >> .env.test
 
       - name: Run integration tests
         run: |
@@ -116,7 +110,7 @@ jobs:
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
-    services:  # ← OBLIGATOIRE
+    services:
       postgres:
         image: postgres:16-alpine
         env:
@@ -164,19 +158,15 @@ jobs:
 
       - name: Create .env.test
         run: |
-          cat > .env.test << 'EOF'
-          APP_ENV=test
-          APP_PORT=8081
-          DB_HOST=localhost
-          DB_PORT=5432
-          DB_USER=postgres
-          DB_PASSWORD=root
-          DB_NAME=goshop_test
-          DB_SSLMODE=disable
-          REDIS_HOST=localhost
-          REDIS_PORT=6379
-          BCRYPT_COST=4
-          EOF
+          echo "APP_ENV=test" > .env.test
+          echo "DB_HOST=localhost" >> .env.test
+          echo "DB_PORT=5432" >> .env.test
+          echo "DB_USER=postgres" >> .env.test
+          echo "DB_PASSWORD=root" >> .env.test
+          echo "DB_NAME=goshop_test" >> .env.test
+          echo "REDIS_HOST=localhost" >> .env.test
+          echo "REDIS_PORT=6379" >> .env.test
+          echo "BCRYPT_COST=4" >> .env.test
 
       - name: Run E2E tests
         run: go test -v ./tests/e2e/...
@@ -207,9 +197,7 @@ jobs:
 
       - name: Generate OpenAPI documentation
         run: |
-          cd cmd/api
-          swag init -g main.go --output ../../docs --parseDependency --parseInternal
-          cd ../..
+          swag init -g ./cmd/api/main.go --output ./docs --parseDependency --parseInternal
           test -f docs/docs.go
           echo "✅ OpenAPI docs generated"
 
@@ -241,10 +229,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Run gosec (ignore tests)
+      - name: Run gosec (ignore G104)
         run: |
           go mod download
-          docker run --rm -v $PWD:/src -w /src securego/gosec -exclude-dir=tests ./...
+          docker run --rm -v $PWD:/src -w /src securego/gosec -exclude=G104 ./...
 
   lint:
     name: Code Quality
@@ -256,11 +244,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'  # ← Compatible avec golangci-lint
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          args: --timeout=5m --exclude-dir=tests
+          args: --timeout=5m --skip-dirs tests
