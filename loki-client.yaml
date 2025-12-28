@@ -1,0 +1,10 @@
+# loki-client.yaml
+loki:
+  host: loki
+  port: 3100
+  path_prefix: /loki/api/v1/push
+  batch_wait: 1s
+  batch_size: 100k
+  labels:
+    job: goshop-api
+    environment: development

@@ -1,0 +1,47 @@
+# Crée le fichier .gitignore avec le contenu recommandé
+@"
+# Binaires et builds
+*.exe
+*.test
+api
+bin/
+_build/
+
+# Fichiers d'environnement
+.env
+.env.local
+.env.test
+.env.development
+.env.production
+
+# Documentation OpenAPI générée
+/docs/swagger.json
+/docs/swagger.yaml
+
+# Couverture de code
+coverage.out
+coverage.html
+
+# Logs
+*.log
+logs/
+
+# Dossiers temporaires
+tmp/
+temp/
+
+# Docker
+.dockerignore
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+"@ | Out-File -FilePath .gitignore -Encoding utf8

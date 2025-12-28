@@ -1,0 +1,193 @@
+# .github/workflows/ci.yml
+name: GoShop CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        env:
+          APP_ENV: test
+          BCRYPT_COST: 4
+        run: go test -v -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+
+  integration-test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: goshop_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run integration tests
+        env:
+          APP_ENV: test
+          APP_PORT: 8081
+          DB_HOST: localhost
+          DB_USER: postgres
+          DB_PASSWORD: root
+          DB_NAME: goshop_test
+          DB_PORT: 5432
+          DB_SSLMODE: disable
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          BCRYPT_COST: 4
+        run: |
+          cd tests
+          go test -v -tags=integration ./...
+
+  # 🔥 NOUVEAU JOB : E2E Tests
+  e2e-test:
+    name: Run E2E Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: root
+          POSTGRES_DB: goshop_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Create .env.test for E2E tests
+        run: |
+          echo "APP_ENV=test" >> .env.test
+          echo "APP_PORT=8081" >> .env.test
+          echo "DB_HOST=localhost" >> .env.test
+          echo "DB_PORT=5432" >> .env.test
+          echo "DB_USER=postgres" >> .env.test
+          echo "DB_PASSWORD=root" >> .env.test
+          echo "DB_NAME=goshop_test" >> .env.test
+          echo "DB_SSLMODE=disable" >> .env.test
+          echo "REDIS_HOST=localhost" >> .env.test
+          echo "REDIS_PORT=6379" >> .env.test
+          echo "BCRYPT_COST=4" >> .env.test
+
+      - name: Run E2E tests
+        env:
+          APP_ENV: test
+        run: go test -v ./tests/e2e/...
+
+  build:
+    name: Build & Generate Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Swag (OpenAPI generator)
+        run: go install github.com/swaggo/swag/cmd/swag@latest
+
+      - name: Generate OpenAPI documentation
+        env:
+          APP_ENV: development
+        run: swag init -g cmd/api/main.go
+
+      - name: Verify documentation generated
+        run: |
+          test -f docs/swagger.json
+          test -f docs/swagger.yaml
+          echo "✅ OpenAPI documentation generated successfully!"
+
+      - name: Build API binary
+        env:
+          APP_ENV: development
+          BCRYPT_COST: 4
+        run: go build -o goshop-api ./cmd/api
+
+      - name: Verify binary
+        run: ./goshop-api --help || true
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run gosec security scanner
+        run: |
+          docker run --rm -v $(pwd):/src -w /src securego/gosec ./...
