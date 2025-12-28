@@ -21,9 +21,18 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: go.sum
 
-      - name: Create .env.test for tests
+      - name: Create .env.test for unit tests
         run: |
           echo "APP_ENV=test" >> .env.test
+          echo "APP_PORT=8081" >> .env.test
+          echo "DB_HOST=localhost" >> .env.test
+          echo "DB_PORT=5432" >> .env.test
+          echo "DB_USER=postgres" >> .env.test
+          echo "DB_PASSWORD=root" >> .env.test
+          echo "DB_NAME=goshop_test" >> .env.test
+          echo "DB_SSLMODE=disable" >> .env.test
+          echo "REDIS_HOST=localhost" >> .env.test
+          echo "REDIS_PORT=6379" >> .env.test
           echo "BCRYPT_COST=4" >> .env.test
 
       - name: Download dependencies
@@ -75,24 +84,25 @@ jobs:
         with:
           go-version: '1.25'
 
+      - name: Create .env.test for integration tests
+        run: |
+          echo "APP_ENV=test" >> .env.test
+          echo "APP_PORT=8081" >> .env.test
+          echo "DB_HOST=localhost" >> .env.test
+          echo "DB_PORT=5432" >> .env.test
+          echo "DB_USER=postgres" >> .env.test
+          echo "DB_PASSWORD=root" >> .env.test
+          echo "DB_NAME=goshop_test" >> .env.test
+          echo "DB_SSLMODE=disable" >> .env.test
+          echo "REDIS_HOST=localhost" >> .env.test
+          echo "REDIS_PORT=6379" >> .env.test
+          echo "BCRYPT_COST=4" >> .env.test
+
       - name: Run integration tests
-        env:
-          APP_ENV: test
-          APP_PORT: 8081
-          DB_HOST: localhost
-          DB_USER: postgres
-          DB_PASSWORD: root
-          DB_NAME: goshop_test
-          DB_PORT: 5432
-          DB_SSLMODE: disable
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
-          BCRYPT_COST: 4
         run: |
           cd tests
           go test -v -tags=integration ./...
 
-  # 🔥 E2E Tests (déjà correctement configuré)
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
@@ -144,8 +154,6 @@ jobs:
           echo "BCRYPT_COST=4" >> .env.test
 
       - name: Run E2E tests
-        env:
-          APP_ENV: test
         run: go test -v ./tests/e2e/...
 
   build:
