@@ -27,14 +27,15 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run unit tests (exclude DB-dependent)
+      - name: Run mocked unit tests only
         run: |
           go test -v -coverprofile=coverage.out \
             $(go list ./... | \
               grep -v /tests$ | \
               grep -v /tests/ | \
               grep -v /usecase/order_usecase | \
-              grep -v /usecase/auth_usecase)
+              grep -v /usecase/auth_usecase | \
+              grep -v /infrastructure/postgres)
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -86,6 +87,7 @@ jobs:
         run: |
           for i in {1..30}; do
             if pg_isready -h localhost -p 5432 -U postgres && redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+              echo "✅ Services ready"
               break
             fi
             sleep 2
@@ -94,11 +96,13 @@ jobs:
       - name: Create .env.test
         run: |
           echo "APP_ENV=test" > .env.test
+          echo "APP_PORT=8081" >> .env.test
           echo "DB_HOST=localhost" >> .env.test
           echo "DB_PORT=5432" >> .env.test
           echo "DB_USER=postgres" >> .env.test
           echo "DB_PASSWORD=root" >> .env.test
           echo "DB_NAME=goshop_test" >> .env.test
+          echo "DB_SSLMODE=disable" >> .env.test
           echo "REDIS_HOST=localhost" >> .env.test
           echo "REDIS_PORT=6379" >> .env.test
           echo "BCRYPT_COST=4" >> .env.test
@@ -160,11 +164,13 @@ jobs:
       - name: Create .env.test
         run: |
           echo "APP_ENV=test" > .env.test
+          echo "APP_PORT=8081" >> .env.test
           echo "DB_HOST=localhost" >> .env.test
           echo "DB_PORT=5432" >> .env.test
           echo "DB_USER=postgres" >> .env.test
           echo "DB_PASSWORD=root" >> .env.test
           echo "DB_NAME=goshop_test" >> .env.test
+          echo "DB_SSLMODE=disable" >> .env.test
           echo "REDIS_HOST=localhost" >> .env.test
           echo "REDIS_PORT=6379" >> .env.test
           echo "BCRYPT_COST=4" >> .env.test
@@ -199,7 +205,7 @@ jobs:
       - name: Generate OpenAPI documentation
         run: |
           swag init -g ./cmd/api/main.go --output ./docs --parseDependency --parseInternal
-          test -f docs/docs.go
+          test -f ./docs/docs.go
           echo "✅ OpenAPI docs generated"
 
       - name: Build API binary
@@ -230,7 +236,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Run gosec (exclude tests)
+      - name: Run gosec (exclude tests and G104)
         run: |
           go mod download
           docker run --rm -v $PWD:/src -w /src securego/gosec -exclude-dir=tests -exclude=G104 ./...
@@ -248,7 +254,7 @@ jobs:
           go-version: '1.24'  # Compatible avec golangci-lint
           cache: true
 
-      - name: Run golangci-lint
+      - name: Run golangci-lint (exclude tests)
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
