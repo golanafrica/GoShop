@@ -175,7 +175,7 @@ jobs:
         env:
           APP_ENV: development
         run: |
-          swag init -g cmd/api/main.go
+          swag init -g ./cmd/api/main.go
           test -f docs/docs.go
           echo "✅ OpenAPI documentation generated successfully!"
 
@@ -195,6 +195,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
       - name: Run gosec security scanner
         run: |
+          go mod tidy
           docker run --rm -v $(pwd):/src -w /src securego/gosec ./...
