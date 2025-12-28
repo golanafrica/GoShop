@@ -8,7 +8,7 @@ on:
     branches: [ main ]
 
 env:
-  GO_VERSION: '1.23'  # ✅ Corrigé : 1.25 n'existe pas
+  GO_VERSION: '1.23'
 
 jobs:
   test:
@@ -182,6 +182,7 @@ jobs:
           for i in {1..30}; do
             if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null && \
                redis-cli -h localhost -p 6379 ping 2>/dev/null | grep -q PONG; then
+              echo "✅ Services ready"
               break
             fi
             sleep 2
@@ -223,16 +224,24 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Verify Go installation
+      - name: Verify project structure
         run: |
-          go version
-          go env GOPATH
+          echo "📁 Project root:"
+          ls -la
+          echo ""
+          echo "📂 cmd/api exists:"
+          test -d cmd/api && echo "✅ YES" || echo "❌ NO"
+          echo ""
+          echo "📄 cmd/api/main.go exists:"
+          test -f cmd/api/main.go && echo "✅ YES" || echo "❌ NO"
+          echo ""
+          echo "📂 docs directory:"
+          test -d docs && ls -la docs/ || echo "docs directory will be created"
 
       - name: Download dependencies
         run: |
           go mod download
           go mod verify
-          go mod tidy
 
       - name: Install Swag
         run: |
@@ -245,7 +254,7 @@ jobs:
           which swag
           swag --version
 
-      - name: Create minimal .env
+      - name: Create .env file
         run: |
           cat > .env << 'EOF'
           APP_ENV=development
@@ -261,26 +270,39 @@ jobs:
           BCRYPT_COST=4
           EOF
 
-      - name: Generate OpenAPI documentation
+      - name: Generate Swagger documentation
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           
           echo "📚 Generating Swagger documentation..."
+          echo "Current directory: $(pwd)"
+          
+          # Méthode 1: Depuis la racine
           swag init \
-            -g ./cmd/api/main.go \
+            --generalInfo ./cmd/api/main.go \
+            --dir ./ \
             --output ./docs \
             --parseDependency \
             --parseInternal \
-            --parseDepth 3
+            --parseDepth 3 || {
+              echo "⚠️ Method 1 failed, trying method 2..."
+              
+              # Méthode 2: Depuis cmd/api
+              cd cmd/api
+              swag init --output ../../docs
+              cd ../..
+            }
           
-          echo "✅ Verifying generated files..."
+          echo ""
+          echo "✅ Checking generated files..."
           ls -la docs/
-          
-          test -f ./docs/docs.go || (echo "❌ docs/docs.go not found" && exit 1)
-          test -f ./docs/swagger.json || (echo "❌ swagger.json not found" && exit 1)
-          test -f ./docs/swagger.yaml || (echo "❌ swagger.yaml not found" && exit 1)
-          
-          echo "✅ OpenAPI documentation generated successfully!"
+
+      - name: Verify documentation files
+        run: |
+          test -f docs/docs.go || (echo "❌ docs/docs.go missing" && exit 1)
+          test -f docs/swagger.json || (echo "❌ swagger.json missing" && exit 1)
+          test -f docs/swagger.yaml || (echo "❌ swagger.yaml missing" && exit 1)
+          echo "✅ All documentation files generated successfully!"
 
       - name: Build API binary
         env:
@@ -291,7 +313,7 @@ jobs:
           echo "🔨 Building GoShop API..."
           go build \
             -v \
-            -ldflags="-w -s -X main.Version=$(git describe --tags --always --dirty)" \
+            -ldflags="-w -s" \
             -o goshop-api \
             ./cmd/api
           
@@ -304,7 +326,7 @@ jobs:
           test -f goshop-api || (echo "❌ Binary not found" && exit 1)
           test -x goshop-api || (echo "❌ Binary not executable" && exit 1)
           
-          # Test avec timeout (va échouer car pas de DB, c'est normal)
+          # Test avec timeout (échouera car pas de DB - c'est normal)
           timeout 3s ./goshop-api || true
           
           echo "✅ Binary is valid and executable!"
@@ -315,9 +337,7 @@ jobs:
           name: goshop-build
           path: |
             goshop-api
-            docs/swagger.json
-            docs/swagger.yaml
-            docs/docs.go
+            docs/
           retention-days: 7
 
   security:
@@ -378,7 +398,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}  # ✅ Utilise la même version partout
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Run golangci-lint
