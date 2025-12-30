@@ -1,8 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: goshop-migrations
+  namespace: goshop
+data:
+  # Le contenu des fichiers SQL sera injecté par kubectl
+  # Utilise: kubectl create configmap goshop-migrations -n goshop --from-file=migrations/
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: goshop
   namespace: goshop
+  labels:
+    app: goshop
 spec:
   replicas: 2
   selector:
@@ -13,12 +24,24 @@ spec:
       labels:
         app: goshop
     spec:
+      # InitContainer pour appliquer les migrations AVANT le démarrage de l'API
+      initContainers:
+      - name: migrate
+        image: postgres:16-alpine
+        command: ["psql", "-h", "postgres", "-U", "postgres", "-d", "goshop", "-f", "/migrations/001_init.sql"]
+        env:
+        - name: PGPASSWORD
+          value: "root"
+        volumeMounts:
+        - name: migrations
+          mountPath: /migrations
       containers:
       - name: goshop
         image: goshop:latest
-        imagePullPolicy: Never  # ← Crucial pour Minikube
+        imagePullPolicy: Never
         ports:
         - containerPort: 8080
+          name: http
         env:
         - name: APP_ENV
           value: "production"
@@ -38,19 +61,48 @@ spec:
           value: "6379"
         - name: BCRYPT_COST
           value: "10"
+        
+        # 🔒 Sécurité renforcée
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 10001
+          capabilities:
+            drop: ["ALL"]
+        
+        # 📊 Ressources
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        
+        # 🩺 Probes de santé optimisées
+        startupProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          failureThreshold: 60  # jusqu'à 5 minutes (60 * 5s)
+          periodSeconds: 5
         livenessProbe:
           httpGet:
             path: /health/live
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 45
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /health/ready
             port: 8080
-          initialDelaySeconds: 10
+          initialDelaySeconds: 20
           periodSeconds: 5
-
+      volumes:
+      - name: migrations
+        configMap:
+          name: goshop-migrations
 ---
 apiVersion: v1
 kind: Service
@@ -64,4 +116,5 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8080
+      name: http
   type: LoadBalancer
