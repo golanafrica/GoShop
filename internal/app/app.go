@@ -133,7 +133,7 @@ func (a *App) setupRouter() {
 	)
 
 	// ============ 3. ROUTES PUBLIQUES ============
-	//r.Use(middl.PrometheusMiddleware)
+	r.Use(middl.PrometheusMiddleware)
 
 	// ✅ SUPPRIMEZ withRequestLogging() de toutes les routes !
 	r.Get("/health/live", hh.Live)
