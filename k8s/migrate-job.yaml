@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: goshop-migrate
+  namespace: goshop
+spec:
+  template:
+    spec:
+      containers:
+      - name: migrate
+        image: goshop:latest
+        imagePullPolicy: Never
+        command: ["/app/goshop-api"]
+        args: ["--migrate"]
+        env:
+        - name: APP_ENV
+          value: "production"
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          value: "root"
+        - name: DB_NAME
+          value: "goshop"
+        - name: DB_PORT
+          value: "5432"
+      restartPolicy: Never
+  backoffLimit: 2

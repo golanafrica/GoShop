@@ -139,10 +139,9 @@ DB_PASSWORD=root
 DB_NAME=goshop_db
 REDIS_HOST=redis
 
-🎯 Pourquoi ce projet ?
-En entretien technique, ce projet démontre :
-Architecture propre : Séparation claire des responsabilités (DDD)
-Qualité du code : Tests, couverture, bonnes pratiques
-Production-ready : Observabilité, sécurité, Docker
-Pensée système : Gestion des erreurs, recovery, health checks
-Compétences DevOps : Docker, Prometheus, k6, CI/CD ready
+## 🚢 Déploiement Kubernetes (Minikube)
+
+```bash
+minikube start
+kubectl apply -f k8s/
+minikube service goshop -n goshop

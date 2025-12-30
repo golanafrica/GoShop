@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
-	"gopkg.in/natefinch/lumberjack.v2"
+	//"github.com/rs/zerolog/pkgerrors"
 )
 
 // Config contient la configuration du logging
@@ -165,18 +165,9 @@ func createConsoleWriter() io.Writer {
 }
 
 // createFileWriter crée un writer fichier avec rotation pour la production
+// createFileWriter utilise toujours stdout pour la compatibilité cloud-native
 func createFileWriter(cfg Config) io.Writer {
-	if cfg.LogFilePath == "" {
-		cfg.LogFilePath = "/var/log/goshop/app.log"
-	}
-
-	return &lumberjack.Logger{
-		Filename:   cfg.LogFilePath,
-		MaxSize:    cfg.MaxSizeMB,  // MB
-		MaxBackups: cfg.MaxBackups, // nombre de fichiers
-		MaxAge:     cfg.MaxAgeDays, // jours
-		Compress:   cfg.Compress,
-	}
+	return os.Stdout
 }
 
 // colorize ajoute des codes couleur ANSI
