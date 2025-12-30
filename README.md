@@ -1,53 +1,58 @@
-🛒 GoShop API
-Backend e-commerce moderne en Go avec authentification JWT, gestion de produits, clients et commandes. Conçu avec une architecture DDD/Hexagonale, tests complets et observabilité intégrée.
+# 🛒 GoShop API
 
+Backend e-commerce moderne en Go avec authentification JWT, gestion de produits, clients et commandes.  
+Conçu avec une **architecture DDD/Hexagonale**, **tests complets**, **observabilité intégrée**, et **déploiement Kubernetes production-ready**.
 
+---
 
+## 🚀 Démarrage rapide
 
+### Prérequis
+- Docker et Docker Compose
+- Go 1.25+ (optionnel, pour le développement natif)
 
-🚀 Démarrage rapide
-Prérequis
-Docker et Docker Compose
-Go 1.25+ (optionnel, pour le développement natif)
-Lancement
-bash
-1234
+### Lancement
+```bash
 # Démarrer l'application complète (API + DB + Redis + Prometheus)
 docker-compose up --build
 
 # API disponible sur http://localhost:8080
-Accès
+
+
 Service
 URL
 API
 http://localhost:8080
 Health Check
 GET /health/live
+Readiness
+GET /health/ready
 Métriques
 GET /metrics → Prometheus UI
-Swagger
-(À implémenter)
-🧪 Tests
-Tests unitaires et d'intégration
-bash
-1
+Swagger UI
+GET /swagger/index.html ✅
+
+###🧪 Tests
+###Tests unitaires et d'intégration
 go test ./... -v
-Tests End-to-End (E2E)
-bash
-12
+
+### Tests End-to-End (E2E)
+# Exécuter les tests E2E
+go test -tags=e2e ./tests/e2e/... -v
+
 Tests de charge (k6)
-bash
-12345
 # Vérifier l'installation de k6
 k6 version
 
 # Exécuter les tests de charge
 go test ./tests/loadtest/... -v
+
 Scénarios E2E couverts
 ✅ Authentification : Inscription → Connexion → Accès profil
 ✅ Gestion produits : CRUD complet
 ✅ Commandes : Création avec items multiples
 ✅ Sécurité : Headers de sécurité, CORS, endpoints publics
+
 📊 Observabilité
 Logs structurés
 Format JSON avec zerolog
@@ -74,9 +79,11 @@ Non-root user dans les conteneurs Docker
 Mot de passe hashé (bcrypt) en base de données
 Variables sensibles via variables d'environnement (pas dans le code)
 Requêtes SQL paramétrées (protection contre les injections)
+
+
 🛠️ Architecture
 Structure du projet (Clean Architecture)
-123456789
+
 ├── cmd/api              # Point d'entrée
 ├── internal/app         # Application principale
 ├── domain               # Entités métier et interfaces
@@ -86,6 +93,7 @@ Structure du projet (Clean Architecture)
 ├── config               # Configuration et logging
 ├── tests                # Tests à tous les niveaux
 └── migrations           # Scripts d'initialisation DB
+
 Stack technique
 Langage : Go 1.25
 Framework : chi (router léger)
@@ -113,6 +121,8 @@ GET /health/ready - Readiness probe
 GET /help - Vérification de disponibilité
 🐳 Docker Compose
 Services
+
+
 Service
 Port
 Description
@@ -128,9 +138,9 @@ Cache et sessions
 prometheus
 9090
 Monitoring
+
 Variables d'environnement
-env
-1234567
+
 APP_ENV=development
 LOG_LEVEL=debug
 DB_HOST=db
@@ -139,9 +149,23 @@ DB_PASSWORD=root
 DB_NAME=goshop_db
 REDIS_HOST=redis
 
-## 🚢 Déploiement Kubernetes (Minikube)
+🚢 Déploiement Kubernetes (Minikube)
 
-```bash
 minikube start
 kubectl apply -f k8s/
 minikube service goshop -n goshop
+
+🔍 Runbook Opérationnel
+Diagnostique
+Pods stuck : kubectl logs <pod> -n goshop -c migrate
+État DB : kubectl exec deployment/postgres -n goshop -- psql -U postgres goshop -c "\dt"
+Logs API : kubectl logs -l app=goshop -n goshop
+Scaling
+
+kubectl scale deployment/goshop --replicas=5 -n goshop
+
+Mise à jour
+docker build -t goshop:new .
+Mettre à jour image: goshop:new dans k8s/goshop.yaml
+kubectl apply -f k8s/goshop.yaml
+
