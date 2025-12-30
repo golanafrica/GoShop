@@ -1,25 +1,21 @@
 // cmd/api/main.go
-// cmd/api/main.go
 package main
 
 // @title GoShop API
 // @version 1.0.0
 // @description GoShop - E-commerce API with observability and metrics
 // @termsOfService http://swagger.io/terms/
-
 // @contact.name API Support
 // @contact.email support@goshop.dev
-
 // @license.name MIT
 // @license.url https://opensource.org/licenses/MIT
-
 // @host localhost:8080
 // @BasePath /
 // @schemes http
-
 // @securityDefinitions.apikey ApiKeyAuth
 // @in header
 // @name Authorization
+
 import (
 	"context"
 	"net/http"
@@ -32,6 +28,7 @@ import (
 	"Goshop/config"
 	"Goshop/config/setupLogging"
 	"Goshop/infrastructure/postgres"
+	"Goshop/interfaces/utils"
 	"Goshop/internal/app"
 
 	_ "Goshop/docs"
@@ -70,13 +67,6 @@ func main() {
 			Str("db_user", cfg.DBUser).
 			Msg("Échec de connexion à la base de données")
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			appLogger.Error().Err(err).Msg("Erreur lors de la fermeture de la base de données")
-		} else {
-			appLogger.Info().Msg("Connexion à la base de données fermée")
-		}
-	}()
 
 	appLogger.Info().Msg("✅ Connexion à la base de données établie")
 
@@ -84,82 +74,51 @@ func main() {
 	appLogger.Info().Msg("Initialisation de l'application...")
 	appInstance := app.NewApp(db, appLogger)
 
-	// 5. Configurer le serveur avec graceful shutdown
+	// 5. Configurer le serveur
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(cfg.AppPort),
 		Handler:      appInstance.Handler(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
-		//ErrorLog:     createStdLogger(appLogger),
 	}
 
-	// 6. Graceful shutdown
-	done := make(chan bool)
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
+	// 6. Démarrer le serveur dans une goroutine
 	go func() {
-		<-quit
-		appLogger.Info().Msg("Arrêt gracieux du serveur...")
+		appLogger.Info().
+			Str("address", server.Addr).
+			Str("environment", loggingConfig.Environment).
+			Str("log_level", loggingConfig.LogLevel).
+			Str("service_name", loggingConfig.ServiceName).
+			Str("version", loggingConfig.Version).
+			Msg("🚀 Serveur HTTP démarré")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(ctx); err != nil {
-			appLogger.Fatal().Err(err).Msg("Serveur forcé à s'arrêter")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Fatal().Err(err).Msg("❌ Erreur critique du serveur")
 		}
-
-		close(done)
 	}()
 
-	// 7. Démarrer le serveur
-	appLogger.Info().
-		Str("address", server.Addr).
-		Str("environment", loggingConfig.Environment).
-		Str("log_level", loggingConfig.LogLevel).
-		Str("service_name", loggingConfig.ServiceName).
-		Str("version", loggingConfig.Version).
-		Msg("Serveur HTTP démarré")
+	// 7. Graceful shutdown complet
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		appLogger.Fatal().Err(err).Msg("Échec du démarrage du serveur")
+	appLogger.Info().Msg("👋 Arrêt gracieux du serveur demandé...")
+
+	// Shutdown HTTP propre
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		appLogger.Fatal().Err(err).Msg("💀 Forcé à arrêter immédiatement")
 	}
 
-	<-done
-	appLogger.Info().Msg("Serveur arrêté avec succès")
-}
-
-// setupGlobalLogging est supprimé → on utilise directement setupLogging.GetDefaultConfig()
-
-// createStdLogger convertit zerolog en log.Logger pour http.Server
-//func createStdLogger(appLogger *setupLogging.Logger) *log.Logger {
-//	return log.New(&zerologWriter{logger: appLogger}, "", 0)
-//}
-
-// zerologWriter implémente io.Writer pour zerolog
-type zerologWriter struct {
-	logger *setupLogging.Logger
-}
-
-func (z *zerologWriter) Write(p []byte) (n int, err error) {
-	msg := string(p)
-	if len(msg) > 0 && msg[len(msg)-1] == '\n' {
-		msg = msg[:len(msg)-1]
+	// Fermer les dépendances dans l'ordre inverse
+	appLogger.Info().Msg("CloseOperation des connexions...")
+	db.Close()
+	if utils.Rdb != nil {
+		utils.Rdb.Close()
 	}
 
-	z.logger.Error().
-		Str("source", "http_server").
-		Str("message", msg).
-		Msg("Erreur serveur HTTP")
-
-	return len(p), nil
+	appLogger.Info().Msg("✅ Serveur arrêté proprement")
 }
-
-// getEnv helper — gardé pour compatibilité si besoin ailleurs
-//func getEnv(key, defaultValue string) string {
-//if value := os.Getenv(key); value != "" {
-//	return value
-//}
-//return defaultValue
-//}
