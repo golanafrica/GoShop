@@ -1,5 +1,5 @@
-# .github/workflows/ci.yml
-name: GoShop CI Pipeline
+# .github/workflows/ci-cd.yml
+name: GoShop CI/CD Pipeline
 
 on:
   push:
@@ -8,7 +8,8 @@ on:
     branches: [ main ]
 
 env:
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.25'
+  DOCKER_IMAGE: ghcr.io/${{ github.repository_owner }}/goshop
 
 jobs:
   test:
@@ -277,7 +278,6 @@ jobs:
           echo "📚 Generating Swagger documentation..."
           echo "Current directory: $(pwd)"
           
-          # Méthode 1: Depuis la racine
           swag init \
             --generalInfo ./cmd/api/main.go \
             --dir ./ \
@@ -285,12 +285,8 @@ jobs:
             --parseDependency \
             --parseInternal \
             --parseDepth 3 || {
-              echo "⚠️ Method 1 failed, trying method 2..."
-              
-              # Méthode 2: Depuis cmd/api
-              cd cmd/api
-              swag init --output ../../docs
-              cd ../..
+              echo "⚠️ Swagger generation failed"
+              exit 1
             }
           
           echo ""
@@ -407,3 +403,65 @@ jobs:
           version: latest
           args: --timeout=10m --issues-exit-code=0 --skip-dirs=tests
         continue-on-error: true
+
+  docker:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [build, security, lint]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long,priority=100
+            type=ref,event=branch
+            type=ref,event=pr
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-security:
+    name: Docker Security Scan
+    runs-on: ubuntu-latest
+    needs: docker
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_IMAGE }}:latest
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
