@@ -9,7 +9,7 @@ on:
 
 env:
   GO_VERSION: '1.25'
-  DOCKER_IMAGE: ghcr.io/ifbbu/goshop
+  DOCKER_IMAGE: ghcr.io/golanafrica/goshop  # ← namespace du repo
 
 jobs:
   test:
@@ -322,7 +322,6 @@ jobs:
           test -f goshop-api || (echo "❌ Binary not found" && exit 1)
           test -x goshop-api || (echo "❌ Binary not executable" && exit 1)
           
-          # Test avec timeout (échouera car pas de DB - c'est normal)
           timeout 3s ./goshop-api || true
           
           echo "✅ Binary is valid and executable!"
@@ -423,8 +422,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: golanafrica                 # ← propriétaire du repo
+          password: ${{ secrets.CR_PAT }}       # ← secret sécurisé
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
