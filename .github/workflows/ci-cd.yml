@@ -422,8 +422,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: golanafrica                 # ← propriétaire du repo
-          password: ${{ secrets.CR_PAT }}       # ← secret sécurisé
+          username: golanafrica
+          password: ${{ secrets.CR_PAT }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
