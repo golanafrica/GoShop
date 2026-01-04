@@ -195,3 +195,5 @@ Mise à jour
 docker build -t goshop:new .
 # Modifier l'image dans k8s/goshop.yaml
 kubectl apply -f k8s/goshop.yaml
+
+![CI/CD Pipeline](https://github.com/golanafrica/GoShop/workflows/GoShop%20CI%2FCD%20Pipeline/badge.svg)
