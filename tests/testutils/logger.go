@@ -1,5 +1,5 @@
-// tests/testutilitis/logger.go
-package testutilitis
+// tests/testutils/logger.go
+package testutils
 
 import "Goshop/config/setupLogging"
 

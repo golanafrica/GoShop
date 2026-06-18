@@ -63,7 +63,7 @@ func TestProductHandler_CreateProduct_Success(t *testing.T) {
 		Stock:       25,
 	}
 
-	// ✅ CREATE utilise une transaction
+	// ? CREATE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -130,15 +130,15 @@ func TestProductHandler_GetProductById_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockProductRepository(ctrl)
-	mockTxMgr := mockrepo.NewMockTxManager(ctrl) // Pas utilisé mais nécessaire pour le constructeur
+	mockTxMgr := mockrepo.NewMockTxManager(ctrl) // Pas utilise mais necessaire pour le constructeur
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
 	product := createTestProduct("123")
 
-	// ✅ GET BY ID n'utilise PAS de transaction
+	// ? GET BY ID n'utilise PAS de transaction
 	mockRepo.EXPECT().FindByID(gomock.Any(), "123").Return(product, nil)
-	// ❌ NE PAS mocker: BeginTx, WithTX, Commit, Rollback
+	// ? NE PAS mocker: BeginTx, WithTX, Commit, Rollback
 
 	req := httptest.NewRequest("GET", "/products/123", nil)
 	req = setupChiContext(req, "123")
@@ -164,9 +164,9 @@ func TestProductHandler_GetProductById_NotFound(t *testing.T) {
 	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ✅ GET BY ID n'utilise PAS de transaction
+	// ? GET BY ID n'utilise PAS de transaction
 	mockRepo.EXPECT().FindByID(gomock.Any(), "999").Return(nil, sql.ErrNoRows)
-	// ❌ NE PAS mocker: BeginTx, WithTX, Rollback
+	// ? NE PAS mocker: BeginTx, WithTX, Rollback
 
 	req := httptest.NewRequest("GET", "/products/999", nil)
 	req = setupChiContext(req, "999")
@@ -213,7 +213,7 @@ func TestProductHandler_UpdateProduct_Success(t *testing.T) {
 	updatedProduct.Stock = 15
 	updatedProduct.UpdatedAt = time.Now()
 
-	// ✅ UPDATE utilise une transaction
+	// ? UPDATE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "123").Return(existingProduct, nil)
@@ -253,7 +253,7 @@ func TestProductHandler_DeleteProduct_Success(t *testing.T) {
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ✅ DELETE utilise une transaction
+	// ? DELETE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "123").Return(createTestProduct("123"), nil)
@@ -283,7 +283,7 @@ func TestProductHandler_DeleteProduct_NotFound(t *testing.T) {
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ✅ DELETE utilise une transaction
+	// ? DELETE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "999").Return(nil, sql.ErrNoRows)
@@ -322,14 +322,14 @@ func TestProductHandler_GetAllProducts_Success(t *testing.T) {
 		createTestProduct("3"),
 	}
 
-	// ✅ GET ALL n'utilise PAS de transaction
+	// ? GET ALL n'utilise PAS de transaction
 	mockRepo.EXPECT().FindAll(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, limit, offset int) ([]*entity.Product, error) {
 			assert.Equal(t, 50, limit) // Default limit
 			assert.Equal(t, 0, offset) // Default offset
 			return products, nil
 		})
-	// ❌ NE PAS mocker: BeginTx, WithTX, Commit, Rollback
+	// ? NE PAS mocker: BeginTx, WithTX, Commit, Rollback
 
 	req := httptest.NewRequest("GET", "/products", nil)
 	w := httptest.NewRecorder()
@@ -357,7 +357,7 @@ func TestProductHandler_CreateProduct_ValidationError(t *testing.T) {
 	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// Données avec prix négatif
+	// Donn�es avec prix n�gatif
 	reqBody := map[string]interface{}{
 		"name":        "Invalid Product",
 		"description": "Product with negative price",

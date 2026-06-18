@@ -398,7 +398,7 @@ func TestCreateOrderUsecase_CreateOrderError(t *testing.T) {
 	// Update stock OK
 	mockProductRepoTx.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
-	// âŒ CREATE ORDER FAILS
+	// ❌ CREATE ORDER FAILS
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("order creation failed"))
 
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -468,7 +468,7 @@ func TestCreateOrderUsecase_OrderItemError(t *testing.T) {
 
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(createdOrder, nil)
 
-	// âŒ ORDER ITEM FAILS
+	// ❌ ORDER ITEM FAILS
 	mockOrderItemRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("item error"))
 
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -499,7 +499,7 @@ func TestCreateOrderUsecase_BeginTxError(t *testing.T) {
 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	// AJOUTEZ CES LIGNES pour définir les mocks (même si vous ne les utilisez pas)
+	// AJOUTEZ CES LIGNES pour definir les mocks (meme si vous ne les utilisez pas)
 	mockProductRepo := mockrepo.NewMockProductRepository(ctrl)
 	mockCustomerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := mockrepo.NewMockOrderItemRepository(ctrl)
@@ -570,7 +570,7 @@ func TestCreateOrderUsecase_CommitError(t *testing.T) {
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.Order{ID: "o1"}, nil)
 	mockOrderItemRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{}, nil)
 
-	// âŒ COMMIT FAILS
+	// ❌ COMMIT FAILS
 	mockTx.EXPECT().Commit().Return(errors.New("commit error"))
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 

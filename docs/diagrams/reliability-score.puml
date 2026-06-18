@@ -1,0 +1,52 @@
+@startuml
+title Score de fiabilité client
+
+|Système|
+start
+:Client commande en cash;
+:Vérifie le score actuel;
+
+if (Score == "EXCELLENTE") then (Oui)
+    :✅ Accès à tous les plans;
+    :Acompte minimum possible;
+    :Cash automatiquement accepté;
+    note right
+      Exemple :
+      - 2 fois sans frais
+      - Acompte 30%
+    end note
+    
+elseif (Score == "BONNE") then (Non)
+    :✅ Accès aux plans standards;
+    :Cash accepté avec validation;
+    note right
+      Exemple :
+      - 3 fois standard
+      - Acompte 40%
+    end note
+    
+elseif (Score == "PASSABLE") then (Non)
+    :⚠️ Cash avec avertissement;
+    :Acompte plus élevé;
+    :Validation manuelle requise;
+    note right
+      Exemple :
+      - Cash uniquement avec caution
+      - Acompte 50%
+    end note
+    
+else (Score == "MAUVAISE")
+    :❌ Cash désactivé;
+    :Uniquement paiement comptant;
+    :(Wave / Orange Money);
+    note right
+      Le client doit payer
+      en ligne pour regagner
+      la confiance
+    end note
+endif
+
+:Le marchand voit le score;
+:Il décide d'accepter ou non;
+
+@enduml

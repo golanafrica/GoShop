@@ -47,7 +47,7 @@ func TestCreateCustomerUsecase_Success(t *testing.T) {
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
 
 	// AVANT : FindByCustomerID
-	// APRÈS : FindByEmail
+	// APRES : FindByEmail
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
 
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(createdCustomer, nil)

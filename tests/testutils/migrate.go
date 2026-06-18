@@ -1,5 +1,5 @@
-// Package testutilitis fournit des utilitaires pour les tests
-package testutilitis
+// Package testutils fournit des utilitaires pour les tests
+package testutils
 
 import (
 	"database/sql"

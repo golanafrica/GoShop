@@ -25,7 +25,7 @@ func TestDeleteProductUsecase_Success(t *testing.T) {
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).Times(1)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx).Times(1)
 
-	// ✅ Utilisez entity.Product (et non domain.Product)
+	// ? Utilisez entity.Product (et non domain.Product)
 	mockRepoWithTx.EXPECT().FindByID(gomock.Any(), "ID123").Return(
 		&entity.Product{
 			ID:   "ID123",
@@ -38,7 +38,7 @@ func TestDeleteProductUsecase_Success(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(nil).Times(1)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// ❗ Vérifiez que cette fonction existe
+	// Vérifiez que cette fonction existe
 	// Si elle n'existe pas, utilisez NewDeleteProductUsecase
 	uc := productuscase.NewDeleteProductUsecase(mockRepo, mockTxManager)
 
@@ -59,7 +59,7 @@ func TestDeleteProductUsecase_RepositoryError(t *testing.T) {
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).Times(1)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx).Times(1)
 
-	// ✅ Utilisez entity.Product
+	// ? Utilisez entity.Product
 	mockRepoWithTx.EXPECT().FindByID(gomock.Any(), "ID123").Return(
 		&entity.Product{
 			ID:   "ID123",
@@ -95,5 +95,5 @@ func TestDeleteProductUsecase_BeginTxError(t *testing.T) {
 	err := uc.Execute(context.Background(), "ID123")
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to begin transaction") // CORRIGÃ‰
+	assert.Contains(t, err.Error(), "failed to begin transaction") // CORRIGÉ
 }

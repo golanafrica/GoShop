@@ -1,4 +1,4 @@
-﻿// refresh_handler_test.go
+// refresh_handler_test.go
 package refreshhandler_test
 
 import (
@@ -83,7 +83,7 @@ func TestRefreshHandler_Success_Header(t *testing.T) {
 func TestRefreshHandler_NoToken(t *testing.T) {
 	mockUc := &mockRefreshUsecase{
 		executeFunc: func(token string) (string, string, error) {
-			t.Error("Execute ne devrait pas Ãªtre appelÃ©")
+			t.Error("Execute ne devrait pas être appelé")
 			return "", "", nil
 		},
 	}

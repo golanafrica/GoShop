@@ -1,4 +1,5 @@
-﻿package userusecase_test
+﻿// C:\Users\ifbbu\Desktop\GoShop\application\usecase\user_usecase\loginUsecase_test.go
+package userusecase_test
 
 import (
 	"context"
@@ -17,7 +18,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// createContextWithLogger crée un contexte avec un logger silencieux pour les tests
+// createContextWithLogger cr�e un contexte avec un logger silencieux pour les tests
 func createContextWithLogger() context.Context {
 	logger := zerolog.New(zerolog.NewConsoleWriter()).Level(zerolog.Disabled)
 	return logger.WithContext(context.Background())
@@ -29,8 +30,8 @@ func TestLoginUsecase_Success(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger (DERNIER)
+		repo,                         // 1er param�tre: repo
+		setupLogging.GetTestLogger(), // 2�me param�tre: logger (DERNIER)
 	)
 
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
@@ -56,8 +57,8 @@ func TestLoginUsecase_EmailNotFound(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger
+		repo,                         // 1er param�tre: repo
+		setupLogging.GetTestLogger(), // 2�me param�tre: logger
 	)
 
 	repo.EXPECT().
@@ -76,8 +77,8 @@ func TestLoginUsecase_InvalidPassword(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger
+		repo,                         // 1er param�tre: repo
+		setupLogging.GetTestLogger(), // 2�me param�tre: logger
 	)
 
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("correctpassword"), bcrypt.DefaultCost)

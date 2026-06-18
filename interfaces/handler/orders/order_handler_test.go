@@ -126,7 +126,7 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 	product := createTestProduct("product-123", 10)
 	createdOrder := createTestOrder("order-456", "customer-123", 2000)
 
-	// CORRECTION : Mock pour l'appel direct du handler à productRepo
+	// CORRECTION : Mock pour l'appel direct du handler  productRepo
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
 	// Mock expectations
@@ -158,7 +158,7 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 
 	// Transaction commit/rollback
 	mockTx.EXPECT().Commit().Return(nil)
-	// ✅ CORRECTION : Ajout de Rollback().AnyTimes()
+	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	// Act
@@ -302,7 +302,7 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 		},
 	}
 
-	// CORRECTION : Mock pour l'appel direct du handler à productRepo
+	// CORRECTION : Mock pour l'appel direct du handler � productRepo
 	product := createTestProduct("product-123", 10)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
@@ -313,7 +313,7 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 	mockOrderItemRepo.EXPECT().WithTX(mockTx).Return(mockOrderItemRepoWithTX)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 
-	// ✅ CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
+	// ? CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
 	mockCustomerRepoWithTX.EXPECT().FindByCustomerID(gomock.Any(), "non-existent-customer").Return(nil, sql.ErrNoRows)
 
 	mockTx.EXPECT().Rollback().Return(nil)
@@ -372,11 +372,11 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 
 	customer := createTestCustomer("customer-123")
 
-	// CORRECTION : Mock pour l'appel direct du handler à productRepo (retourne nil pour produit non trouvé)
+	// CORRECTION : Mock pour l'appel direct du handler � productRepo (retourne nil pour produit non trouv�)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "non-existent-product").Return(nil, sql.ErrNoRows)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appelés car le handler retourne une erreur avant
-	// Ne pas définir d'attentes pour ces mocks OU utiliser AnyTimes()
+	// CORRECTION : Les mocks de transaction NE SERONT PAS appel�s car le handler retourne une erreur avant
+	// Ne pas d�finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -440,11 +440,11 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 	customer := createTestCustomer("customer-123")
 	product := createTestProduct("product-123", 5) // Only 5 in stock
 
-	// CORRECTION : Mock pour l'appel direct du handler à productRepo
+	// CORRECTION : Mock pour l'appel direct du handler � productRepo
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appelés car le handler retourne une erreur avant
-	// Ne pas définir d'attentes pour ces mocks OU utiliser AnyTimes()
+	// CORRECTION : Les mocks de transaction NE SERONT PAS appel�s car le handler retourne une erreur avant
+	// Ne pas d�finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -503,7 +503,7 @@ func TestOrderHandler_GetOrderById_Success(t *testing.T) {
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindByID(gomock.Any(), "order-123").Return(order, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ✅ CORRECTION : Ajout de Rollback().AnyTimes()
+	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	// Act
@@ -552,7 +552,7 @@ func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
 	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
-	// ✅ CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
+	// ? CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
 	mockOrderRepoWithTX.EXPECT().FindByID(gomock.Any(), "non-existent-order").Return(nil, sql.ErrNoRows)
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -646,7 +646,7 @@ func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindAll(gomock.Any()).Return(orders, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ✅ CORRECTION : Ajout de Rollback().AnyTimes()
+	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	// Act
@@ -696,7 +696,7 @@ func TestOrderHandler_GetAllOrders_Empty(t *testing.T) {
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindAll(gomock.Any()).Return([]*entity.Order{}, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ✅ CORRECTION : Ajout de Rollback().AnyTimes()
+	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	// Act

@@ -1,0 +1,26 @@
+@startuml
+!include <C4/C4_Container>
+Person(client, "Client", "Achète en ligne")
+Person(merchant, "Marchand", "Gère sa boutique")
+
+System_Boundary(goshop, "GoShop Platform") {
+    Container(api, "API", "Go", "Clean Architecture")
+    Container(db, "Database", "PostgreSQL", "Stores data")
+    Container(cache, "Cache", "Redis", "Sessions, rate limiting")
+    Container(dashboard, "Dashboard", "Next.js", "Marchand")
+    Container(storefront, "Storefront", "Next.js", "Client")
+}
+
+System_Ext(wave, "Wave", "Mobile Money")
+System_Ext(orange, "Orange Money", "Mobile Money")
+
+Rel(client, storefront, "HTTPS")
+Rel(merchant, dashboard, "HTTPS")
+Rel(storefront, api, "HTTPS")
+Rel(dashboard, api, "HTTPS")
+Rel(api, db, "SQL")
+Rel(api, cache, "TCP")
+Rel(api, wave, "HTTPS")
+Rel(api, orange, "HTTPS")
+@enduml
+

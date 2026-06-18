@@ -1,6 +1,6 @@
-// tests/testutilitis/fixtures.go
-// tests/testutilitis/fixtures.go
-package testutilitis
+// tests/testutils/fixtures.go
+// tests/testutils/fixtures.go
+package testutils
 
 import (
 	"fmt"

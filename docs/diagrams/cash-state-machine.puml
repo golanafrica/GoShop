@@ -1,0 +1,32 @@
+@startuml
+title Machine d'état - Commande Cash
+
+[*] --> PENDING_CONFIRMATION : Client commande
+PENDING_CONFIRMATION --> CONFIRMED : Marchand accepte
+PENDING_CONFIRMATION --> CANCELLED : Marchand refuse
+PENDING_CONFIRMATION --> EXPIRED : Délai dépassé
+
+CONFIRMED --> PREPARING : Marchand prépare
+PREPARING --> OUT_FOR_DELIVERY : Livreur part
+
+OUT_FOR_DELIVERY --> DELIVERED_AND_PAID : Paiement collecté
+OUT_FOR_DELIVERY --> DELIVERY_FAILED : Client absent
+
+DELIVERY_FAILED --> CANCELLED : Marchand annule
+DELIVERY_FAILED --> OUT_FOR_DELIVERY : Nouvelle tentative
+
+CANCELLED --> [*]
+EXPIRED --> [*]
+DELIVERED_AND_PAID --> [*]
+
+note right of PENDING_CONFIRMATION
+  Réservation stock : 24h
+  Notification marchand : immédiate
+end note
+
+note right of OUT_FOR_DELIVERY
+  Rappel client J-1
+  Mode : cash uniquement
+end note
+
+@enduml

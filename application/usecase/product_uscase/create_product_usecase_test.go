@@ -59,8 +59,8 @@ func TestCreateProductUsecase_ValidationError_EmptyName(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ Pas de mocks attendus pour les erreurs de validation
-	// La transaction n'est pas démarrée quand la validation échoue
+	// ? Pas de mocks attendus pour les erreurs de validation
+	// La transaction n'est pas demarree quand la validation echoue
 
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
@@ -84,14 +84,14 @@ func TestCreateProductUsecase_NegativePrice(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ Pas de mocks attendus pour les erreurs de validation
-	// La transaction n'est pas démarrée quand la validation échoue
+	// ? Pas de mocks attendus pour les erreurs de validation
+	// La transaction n'est pas d�marr�e quand la validation �choue
 
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
 	input := dto.CreateProductRequest{
 		Name:       "Test",
-		PriceCents: -100, // Prix négatif
+		PriceCents: -100, // Prix n�gatif
 		Stock:      5,
 	}
 
@@ -99,7 +99,7 @@ func TestCreateProductUsecase_NegativePrice(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Equal(t, utils.ErrProductInvalidPrice, err) // ✅ CORRIGÉ
+	assert.Equal(t, utils.ErrProductInvalidPrice, err) // ? CORRIG�
 }
 
 func TestCreateProductUsecase_NegativeStock(t *testing.T) {
@@ -109,22 +109,22 @@ func TestCreateProductUsecase_NegativeStock(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ Pas de mocks attendus pour les erreurs de validation
-	// La transaction n'est pas démarrée quand la validation échoue
+	// ? Pas de mocks attendus pour les erreurs de validation
+	// La transaction n'est pas d�marr�e quand la validation �choue
 
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
 	input := dto.CreateProductRequest{
 		Name:       "Test",
 		PriceCents: 10000,
-		Stock:      -5, // Stock négatif
+		Stock:      -5, // Stock n�gatif
 	}
 
 	response, err := uc.Execute(context.Background(), input)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Equal(t, utils.ErrProductInvalidStock, err) // ✅ CORRIGÉ
+	assert.Equal(t, utils.ErrProductInvalidStock, err) // ? CORRIG�
 }
 
 func TestCreateProductUsecase_RepositoryError(t *testing.T) {
@@ -136,7 +136,7 @@ func TestCreateProductUsecase_RepositoryError(t *testing.T) {
 	mockTx := repository.NewMockTx(ctrl)
 	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
 
-	// ✅ Mocks attendus car la validation passe mais la création échoue
+	// ? Mocks attendus car la validation passe mais la cr�ation �choue
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).Times(1)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx).Times(1)
 	mockRepoWithTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("connection lost")).Times(1)
@@ -154,5 +154,5 @@ func TestCreateProductUsecase_RepositoryError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Equal(t, utils.ErrProductCreateFail, err) // ✅ CORRIGÉ
+	assert.Equal(t, utils.ErrProductCreateFail, err) // ? CORRIG�
 }

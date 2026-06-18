@@ -24,7 +24,7 @@ import (
 // --- Initialisation DB ---
 func setupTestDB_Get() *sql.DB {
 	if err := godotenv.Load("../../../.env"); err != nil {
-		log.Println("⚠️ .env non trouvé (mode défaut)")
+		log.Println("?? .env non trouvé (mode defaut)")
 	}
 
 	connStr := fmt.Sprintf(
@@ -39,10 +39,10 @@ func setupTestDB_Get() *sql.DB {
 
 	db, err := postgres.Connect(connStr)
 	if err != nil {
-		log.Fatalf("❌ Connexion DB échouée : %v", err)
+		log.Fatalf("? Connexion DB �chou�e : %v", err)
 	}
 
-	log.Println("✅ Connexion PostgreSQL OK")
+	log.Println("? Connexion PostgreSQL OK")
 	return db
 }
 
@@ -75,7 +75,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	)
 
 	// --------------------------
-	// 1️⃣ Création Customer
+	// 1?? Cr�ation Customer
 	// --------------------------
 	customerEntity := &entity.Customer{
 		FirstName: "Client",
@@ -88,7 +88,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, createdCustomer.ID)
 
 	// --------------------------
-	// 2️⃣ Création Produit
+	// 2?? Cr�ation Produit
 	// --------------------------
 	productEntity := &entity.Product{
 		Name:        "Produit A",
@@ -102,7 +102,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, productEntity.ID)
 
 	// --------------------------
-	// 3️⃣ Création Commande
+	// 3?? Cr�ation Commande
 	// --------------------------
 	orderEntity := &entity.Order{
 		CustomerID: createdCustomer.ID,
@@ -116,14 +116,14 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, createdOrder.ID)
 
 	// --------------------------
-	// 4️⃣ Test GetOrderByID
+	// 4?? Test GetOrderByID
 	// --------------------------
 	orderFromDB, err := getOrderUsecase.Execute(ctx, createdOrder.ID)
 	assert.NoError(t, err)
 	assert.NotNil(t, orderFromDB)
 
 	// --------------------------
-	// 5️⃣ Vérifications
+	// 5?? V�rifications
 	// --------------------------
 	assert.Equal(t, createdOrder.ID, orderFromDB.ID)
 	assert.Equal(t, createdCustomer.ID, orderFromDB.CustomerID)
@@ -136,5 +136,5 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.Equal(t, int64(10000), item.PriceCents)
 	assert.Equal(t, int64(20000), item.SubTotal_Cents)
 
-	fmt.Printf("✅ Order récupéré avec GetOrderById : %+v\n", orderFromDB)
+	fmt.Printf("? Order r�cup�r� avec GetOrderById : %+v\n", orderFromDB)
 }

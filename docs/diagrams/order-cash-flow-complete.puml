@@ -1,0 +1,47 @@
+@startuml
+title Flux complet - Cash à la livraison (tous les acteurs)
+
+actor "Client" as C
+actor "Marchand" as M
+actor "Livreur" as L
+actor "Système" as S
+
+== 1. Commande ==
+C -> S : Commande en cash
+S -> S : Stock réservé 24h
+S -> M : 🔔 Nouvelle commande cash
+activate M
+M -> S : Accepte/Refuse
+
+== 2. Validation ==
+alt Acceptée
+    S -> C : ✅ Commande confirmée
+    S -> C : 📅 Livraison prévue
+    S -> L : 📦 Commande à livrer
+else Refusée
+    S -> C : ❌ Commande annulée
+    S -> S : Stock libéré
+    deactivate M
+    destroy
+end
+
+== 3. Préparation ==
+M -> M : Prépare la commande
+M -> L : 📦 Remet la commande
+S -> C : 📱 Rappel J-1 (SMS)
+activate L
+
+== 4. Livraison ==
+L -> C : Livraison
+C -> L : 💵 Paiement cash
+L -> S : ✅ Marque comme payé
+deactivate L
+
+== 5. Clôture ==
+S -> S : Commande clôturée
+S -> S : Score client +1
+S -> M : ✅ Commande livrée et payée
+deactivate M
+
+@enduml
+

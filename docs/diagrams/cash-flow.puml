@@ -1,0 +1,123 @@
+@startuml
+title Flux de paiement - Cash à la livraison
+
+|Client|
+start
+:Panier validé;
+:Choisit "Cash à la livraison";
+:Confirme la commande;
+:❌ Aucun paiement maintenant;
+
+|Système|
+:Crée la commande;
+:Statut: PENDING_CONFIRMATION;
+:Stock réservé (24h par défaut);
+:📧 Envoie notification au marchand;
+note right
+  Notification :
+  - Dashboard (temps réel)
+  - SMS
+  - WhatsApp (si configuré)
+end note
+
+:Système planifie l'expiration;
+note right
+  Cron job :
+  - Vérifie toutes les heures
+  - Si non confirmé après Xh
+  - Commande → EXPIRED
+  - Stock libéré
+end note
+
+|Marchand|
+:Reçoit l'alerte;
+:Consulte la commande depuis le dashboard;
+
+if (Commande acceptée ?) then (Oui)
+    :Statut → CONFIRMED;
+    :Prépare la commande;
+    :Planifie la livraison;
+    :📧 Client notifié;
+    
+    |Client|
+    :Reçoit confirmation;
+    note right
+      SMS + notification app :
+      "Votre commande est confirmée,
+      livraison sous 24-48h"
+    end note
+    :Prépare le paiement cash;
+    
+    |Système|
+    :Envoie rappel automatique J-1;
+    note right
+      SMS :
+      "Préparez 45 000 FCFA en espèces
+      pour votre livraison de demain"
+    end note
+    
+    |Livreur|
+    :Récupère la commande;
+    :Se rend chez le client;
+    :Collecte les espèces;
+    :Marque comme "payé cash" dans l'app;
+    note right
+      App livreur ou dashboard :
+      - Montant collecté
+      - Heure de livraison
+      - Signature (optionnelle)
+    end note
+    
+    |Système|
+    :Commande → DELIVERED_AND_PAID;
+    :✅ Score fiabilité client +1;
+    note right
+      Impact score :
+      - Excellent : +2 points
+      - Bon : +1 point
+      - Passable : 0 point (stable)
+      - Mauvais : +1 point (remontée)
+    end note
+    :Clôture la commande;
+    stop
+
+else (Non - Refusée)
+    |Marchand|
+    :Refuse la commande;
+    :Statut → CANCELLED;
+    
+    |Système|
+    :Libère le stock;
+    :📧 Notifie le client;
+    note right
+      SMS :
+      "Votre commande n'a pas été
+      acceptée par le marchand"
+    end note
+    :❌ Score fiabilité client -1;
+    note right
+      Si récurrent :
+      - Accès restreint au cash
+      - Acompte plus élevé
+    end note
+    stop
+endif
+
+else (Non - Expiration)
+|Système|
+:Le délai de réservation est dépassé;
+:Commande → EXPIRED;
+:Libère le stock;
+:📧 Notifie le client;
+note right
+  SMS :
+  "Votre commande a expiré,
+  veuillez recommander"
+end note
+stop
+endif
+
+|Client|
+:Commande clôturée (payée ou annulée);
+
+@enduml

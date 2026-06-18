@@ -21,14 +21,14 @@ import (
 	mockrepo "Goshop/mocks/repository"
 )
 
-// Helper pour injecter le paramètre ID de façon fiable
+// Helper pour injecter le paramatre ID de fa�on fiable
 func setupChiContext(r *http.Request, id string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", id)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
-// Helper pour créer un customer de test
+// Helper pour creer un customer de test
 func createTestCustomer(id, email string) *entity.Customer {
 	return &entity.Customer{
 		ID:        id,
@@ -56,7 +56,7 @@ func TestCreateCustomerHandler_Success(t *testing.T) {
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 
 	// AVANT : FindByCustomerID
-	// APRÈS : FindByEmail
+	// APR�S : FindByEmail
 	mockRepoWithTx.EXPECT().FindByEmail(gomock.Any(), "john@example.com").Return(nil, sql.ErrNoRows)
 
 	mockRepoWithTx.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, customer *entity.Customer) (*entity.Customer, error) {
@@ -168,7 +168,7 @@ func TestGetCustomerByIdHandler_Success(t *testing.T) {
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(customer, nil)
 	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback après
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
 
 	req := httptest.NewRequest(http.MethodGet, "/customers/cust-123", nil)
 	req = setupChiContext(req, "cust-123")
@@ -267,8 +267,8 @@ func TestGetAllCustomersHandler_Success(t *testing.T) {
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindAllCustomers(gomock.Any()).Return(customers, nil)
-	mockTx.EXPECT().Commit().Return(nil)              // S'assurer que Commit est appelé
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Après Commit
+	mockTx.EXPECT().Commit().Return(nil)              // S'assurer que Commit est appel�
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Apr�s Commit
 
 	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
 	w := httptest.NewRecorder()
@@ -298,19 +298,19 @@ func TestGetAllCustomersHandler_Empty(t *testing.T) {
 	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
 
 	// Mock expectations - L'ORDRE EST CRITIQUE
-	// 1. BeginTx doit être appelé en premier
+	// 1. BeginTx doit �tre appel� en premier
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
-	// 2. WithTX doit être appelé ensuite
+	// 2. WithTX doit �tre appel� ensuite
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 
-	// 3. FindAllCustomers doit être appelé
+	// 3. FindAllCustomers doit �tre appel�
 	mockRepoWithTx.EXPECT().FindAllCustomers(gomock.Any()).Return([]*entity.Customer{}, nil)
 
-	// 4. Commit doit être appelé APRÈS FindAllCustomers
+	// 4. Commit doit �tre appel� APR�S FindAllCustomers
 	mockTx.EXPECT().Commit().Return(nil)
 
-	// 5. Rollback peut être appelé à tout moment (AnyTimes)
+	// 5. Rollback peut �tre appel� � tout moment (AnyTimes)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
@@ -349,7 +349,7 @@ func TestUpdateCustomerHandler_Success(t *testing.T) {
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(existingCustomer, nil)
 	mockRepoWithTx.EXPECT().UpdateCustomer(gomock.Any(), gomock.Any()).Return(updatedCustomer, nil)
 	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback après
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
 
 	body := map[string]interface{}{
 		"first_name": "Jane",
@@ -471,7 +471,7 @@ func TestDeleteCustomerHandler_Success(t *testing.T) {
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(customer, nil)
 	mockRepoWithTx.EXPECT().DeleteCustomer(gomock.Any(), "cust-123").Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback après
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
 
 	req := httptest.NewRequest(http.MethodDelete, "/customers/cust-123", nil)
 	req = setupChiContext(req, "cust-123")

@@ -1,0 +1,32 @@
+@startuml
+title Configuration cash - Paramètres marchand
+
+package "Paramètres cash" {
+    [Délai de réservation] as DR
+    [Zones de livraison] as ZL
+    [Montant minimum] as MM
+    [Score client minimum] as SC
+    [Rappel automatique] as RA
+}
+
+rectangle "Valeurs par défaut" {
+    [24h (6h - 72h)] as DR_def
+    [Secteur 22, 23] as ZL_def
+    [10 000 FCFA] as MM_def
+    [Bonne] as SC_def
+    [Activé, J-1] as RA_def
+}
+
+DR --> DR_def
+ZL --> ZL_def
+MM --> MM_def
+SC --> SC_def
+RA --> RA_def
+
+note bottom
+  Le marchand peut modifier
+  ces paramètres à tout moment
+  depuis son dashboard
+end note
+
+@enduml

@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"testing"
 
-	"Goshop/tests/testutilitis"
+	"Goshop/tests/testutils"
 )
 
 // TestSecurityHeaders vérifie les headers de sécurité
 func TestSecurityHeaders(t *testing.T) {
-	server := testutilitis.NewTestServer(t)
-	client := testutilitis.NewHTTPClient(server.URL)
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
 
 	resp := client.MustDoRequest(t, "GET", "/help", nil)
 	defer resp.Body.Close()
@@ -31,8 +31,8 @@ func TestSecurityHeaders(t *testing.T) {
 
 // TestCORS vérifie la configuration CORS
 func TestCORS(t *testing.T) {
-	server := testutilitis.NewTestServer(t)
-	client := testutilitis.NewHTTPClient(server.URL)
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
 
 	// Simuler une requête cross-origin
 	req, _ := http.NewRequest("GET", server.URL+"/help", nil)
@@ -57,8 +57,8 @@ func TestCORS(t *testing.T) {
 func TestRateLimiting(t *testing.T) {
 	t.Skip("Rate limiting non implémenté en dev")
 
-	server := testutilitis.NewTestServer(t)
-	client := testutilitis.NewHTTPClient(server.URL)
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
 
 	// Envoyer 5 requêtes rapides
 	for i := 0; i < 5; i++ {
@@ -76,8 +76,8 @@ func TestRateLimiting(t *testing.T) {
 
 // TestPublicEndpoints vérifie les endpoints publics
 func TestPublicEndpoints(t *testing.T) {
-	server := testutilitis.NewTestServer(t)
-	client := testutilitis.NewHTTPClient(server.URL)
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
 
 	endpoints := []struct {
 		path   string

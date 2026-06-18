@@ -1,6 +1,6 @@
-// tests/testutilitis/helpers.go
-// tests/testutilitis/helpers.go
-package testutilitis
+// tests/testutils/helpers.go
+// tests/testutils/helpers.go
+package testutils
 
 import (
 	"bytes"

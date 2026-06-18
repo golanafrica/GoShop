@@ -1,0 +1,51 @@
+
+@startuml
+title Flux de paiement - Cash & Mobile Money
+
+|Client|
+start
+:Choisit un moyen de paiement;
+if (Cash à la livraison?) then (Oui)
+  :Commande sans paiement immédiat;
+  :Stock réservé 24h;
+else (Mobile Money)
+  :Initie paiement via Wave/Orange;
+  :Redirigé vers le provider;
+  :Effectue le paiement;
+  :Retour sur le storefront;
+endif
+
+|Système|
+:Crée la commande;
+if (Cash) then (Oui)
+  :Statut: pending_confirmation;
+  :Notification au marchand;
+else (Mobile Money)
+  :Statut: paid;
+  :Confirmation au client;
+endif
+
+|Marchand|
+if (Cash) then (Oui)
+  :Accepte ou refuse la commande;
+  if (Acceptée) then
+    :Statut: confirmed;
+    :Prépare la livraison;
+  else
+    :Statut: cancelled;
+    :Stock libéré;
+    :Client notifié;
+  endif
+endif
+
+|Livreur|
+if (Cash) then (Oui)
+  :Livraison et encaissement;
+  :Marque comme payé;
+endif
+
+|Système|
+:Commande clôturée;
+:Score client mis à jour;
+stop
+@enduml

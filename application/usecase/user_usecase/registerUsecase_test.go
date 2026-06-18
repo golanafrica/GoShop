@@ -15,7 +15,7 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
-// createContextWithLogger crée un contexte avec un logger silencieux pour les tests
+// createContextWithLogger creer un contexte avec un logger silencieux pour les tests
 func RecreateContextWithLogger() context.Context {
 	logger := zerolog.New(zerolog.NewConsoleWriter()).Level(zerolog.Disabled)
 	return logger.WithContext(context.Background())
@@ -27,8 +27,8 @@ func TestRegisterUsecase_Success(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewRegisterUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger (DERNIER)
+		repo,                         // 1er paramatre: repo
+		setupLogging.GetTestLogger(), // 2eme paramatre: logger (DERNIER)
 	)
 
 	repo.EXPECT().

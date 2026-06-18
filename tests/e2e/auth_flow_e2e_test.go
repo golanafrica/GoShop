@@ -3,12 +3,11 @@
 package e2e
 
 import (
+	"Goshop/tests/testutils"
 	"fmt"
-	"strings" // ← N'oublie pas cet import
+	"strings"
 	"testing"
 	"time"
-
-	"Goshop/tests/testutilitis"
 
 	"github.com/google/uuid"
 )
@@ -34,8 +33,8 @@ func TestAuthFlowE2E(t *testing.T) {
 	t.Log("🧪 Test E2E : Flux d'authentification complet")
 
 	// Utiliser le serveur de test UNIFIÉ (cohérent avec main.go)
-	server := testutilitis.NewTestServer(t)
-	client := testutilitis.NewHTTPClient(server.URL)
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
 
 	// Email unique pour idempotence
 	uniqueEmail := fmt.Sprintf("test.auth.%d.%s@example.com", time.Now().UnixNano(), uuid.New().String()[:6])
@@ -50,7 +49,7 @@ func TestAuthFlowE2E(t *testing.T) {
 		resp := client.MustDoRequest(t, "POST", "/register", userData)
 		defer resp.Body.Close()
 
-		testutilitis.AssertStatus(t, resp, 201)
+		testutils.AssertStatus(t, resp, 201)
 		t.Log("✅ Utilisateur enregistré")
 	})
 
@@ -64,12 +63,12 @@ func TestAuthFlowE2E(t *testing.T) {
 		resp := client.MustDoRequest(t, "POST", "/login", loginData)
 		defer resp.Body.Close()
 
-		testutilitis.AssertStatus(t, resp, 200)
+		testutils.AssertStatus(t, resp, 200)
 
 		var loginResp struct {
 			Token string `json:"token"`
 		}
-		testutilitis.ParseJSONBody(t, resp, &loginResp)
+		testutils.ParseJSONBody(t, resp, &loginResp)
 
 		if loginResp.Token == "" {
 			t.Fatal("❌ Token JWT vide")
@@ -83,12 +82,12 @@ func TestAuthFlowE2E(t *testing.T) {
 		resp := client.MustDoRequest(t, "GET", "/auth/me", nil)
 		defer resp.Body.Close()
 
-		testutilitis.AssertStatus(t, resp, 200)
+		testutils.AssertStatus(t, resp, 200)
 
 		var profile struct {
 			Email string `json:"email"`
 		}
-		testutilitis.ParseJSONBody(t, resp, &profile)
+		testutils.ParseJSONBody(t, resp, &profile)
 
 		// 🔥 CORRECTION : Compare avec l'email MASQUÉ
 		expectedMaskedEmail := maskEmail(uniqueEmail)

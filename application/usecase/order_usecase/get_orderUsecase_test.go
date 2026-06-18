@@ -18,7 +18,7 @@ import (
 
 func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	// Setup - utilisez la fonction existante setupTestDB_Get()
-	// qui est déjà définie dans get_order_by_id_integration_test.go
+	// qui est deja definie dans get_order_by_id_integration_test.go
 	db := setupTestDB_Get()
 	defer db.Close()
 	ctx := context.Background()
@@ -47,7 +47,7 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 
 	)
 
-	// --- 1. Créer un customer ---
+	// --- 1. Cr�er un customer ---
 	customerEntity := &entity.Customer{
 		FirstName: "Integration2",
 		LastName:  "Test2",
@@ -58,10 +58,10 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, createdCustomer.ID)
 
-	// --- 2. Créer un produit ---
+	// --- 2. Cr�er un produit ---
 	productEntity := &entity.Product{
 		Name:        "Table artisanale",
-		Description: "Fabriquée à la main",
+		Description: "Fabriqu�e � la main",
 		PriceCents:  20000,
 		Stock:       10,
 	}
@@ -70,7 +70,7 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, productEntity.ID)
 
-	// --- 3. Créer 2 commandes pour tester le listing ---
+	// --- 3. Cr�er 2 commandes pour tester le listing ---
 	for i := 0; i < 2; i++ {
 		orderEntity := &entity.Order{
 			CustomerID: createdCustomer.ID,
@@ -83,12 +83,12 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// --- 4. Récupérer toutes les commandes ---
+	// --- 4. R�cup�rer toutes les commandes ---
 	orders, err := getAllUsecase.Execute(ctx)
 	assert.NoError(t, err)
 	assert.True(t, len(orders) >= 2, "on doit avoir au moins 2 commandes")
 
-	// --- Vérification basique ---
+	// --- V�rification basique ---
 	for _, o := range orders {
 		assert.NotEmpty(t, o.ID)
 		assert.NotEmpty(t, o.CustomerID)
@@ -97,5 +97,5 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		assert.True(t, len(o.Items) > 0)
 	}
 
-	fmt.Println("✅ GetAllOrderUsecase fonctionne, commandes trouvées :", len(orders))
+	fmt.Println("? GetAllOrderUsecase fonctionne, commandes trouv�es :", len(orders))
 }

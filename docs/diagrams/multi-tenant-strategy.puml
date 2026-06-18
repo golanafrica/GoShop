@@ -1,0 +1,40 @@
+@startuml
+title Stratégie Multi-tenant (Option B → A)
+
+package "Phase 1: Option B (colonne shop_id)" {
+  rectangle "public.products" as Prod1 {
+    column "id"
+    column "shop_id"
+    column "name"
+  }
+  rectangle "public.orders" as Ord1 {
+    column "id"
+    column "shop_id"
+    column "total"
+  }
+  note right: Une seule base de données\nFiltrage par shop_id
+}
+
+package "Phase 2: Option A (schéma par tenant)" {
+  rectangle "tenant_mamadou.products" as Prod2 {
+    column "id"
+    column "name"
+  }
+  rectangle "tenant_mamadou.orders" as Ord2 {
+    column "id"
+    column "total"
+  }
+  rectangle "tenant_fatouma.products" as Prod3 {
+    column "id"
+    column "name"
+  }
+  rectangle "tenant_fatouma.orders" as Ord3 {
+    column "id"
+    column "total"
+  }
+  note right: Un schéma par boutique\nIsolation complète
+}
+
+note top of Prod1 : Même interface Repository\nMême code Domain/Application\nSeule l'implémentation change
+
+@enduml

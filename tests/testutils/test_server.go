@@ -1,5 +1,5 @@
-// Package testutilitis fournit des utilitaires pour les tests E2E
-package testutilitis
+// Package testutils fournit des utilitaires pour les tests E2E
+package testutils
 
 import (
 	"database/sql"

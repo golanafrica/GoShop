@@ -55,10 +55,10 @@ func TestUpdateProductUsecase_Success(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(nil).Times(1)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// ✅ Utilisez le constructeur avec logger
+	// ? Utilisez le constructeur avec logger
 	usecase := productuscase.NewUpdateProductUsecase(mockRepo, mockTxManager)
 
-	// ✅ Prend *entity.Product comme paramètre
+	// ? Prend *entity.Product comme paramatre
 	input := &entity.Product{
 		ID:          "product-123",
 		Name:        "New Product",
@@ -81,7 +81,7 @@ func TestUpdateProductUsecase_EmptyName(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ SUPPRIMEZ ces mocks - la validation échoue avant la transaction
+	// ? SUPPRIMEZ ces mocks - la validation �choue avant la transaction
 	// mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil)
 	// mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	// mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -99,7 +99,7 @@ func TestUpdateProductUsecase_EmptyName(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductInvalidName, err) // ✅ Utilisez l'erreur exacte
+	assert.Equal(t, utils.ErrProductInvalidName, err) // ? Utilisez l'erreur exacte
 }
 
 func TestUpdateProductUsecase_NegativePrice(t *testing.T) {
@@ -109,7 +109,7 @@ func TestUpdateProductUsecase_NegativePrice(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ SUPPRIMEZ ces mocks
+	// ? SUPPRIMEZ ces mocks
 	// mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil)
 	// mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	// mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -119,7 +119,7 @@ func TestUpdateProductUsecase_NegativePrice(t *testing.T) {
 	input := &entity.Product{
 		ID:         "p1",
 		Name:       "Test",
-		PriceCents: -100, // Prix négatif
+		PriceCents: -100, // Prix n�gatif
 		Stock:      10,
 	}
 
@@ -127,7 +127,7 @@ func TestUpdateProductUsecase_NegativePrice(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductInvalidPrice, err) // ✅ Utilisez l'erreur exacte
+	assert.Equal(t, utils.ErrProductInvalidPrice, err) // ? Utilisez l'erreur exacte
 }
 
 func TestUpdateProductUsecase_NegativeStock(t *testing.T) {
@@ -137,7 +137,7 @@ func TestUpdateProductUsecase_NegativeStock(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ SUPPRIMEZ ces mocks
+	// ? SUPPRIMEZ ces mocks
 	// mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil)
 	// mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	// mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -148,14 +148,14 @@ func TestUpdateProductUsecase_NegativeStock(t *testing.T) {
 		ID:         "p1",
 		Name:       "Test",
 		PriceCents: 100,
-		Stock:      -5, // Stock négatif
+		Stock:      -5, // Stock n�gatif
 	}
 
 	result, err := usecase.Execute(context.Background(), input)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductInvalidStock, err) // ✅ Utilisez l'erreur exacte
+	assert.Equal(t, utils.ErrProductInvalidStock, err) // ? Utilisez l'erreur exacte
 }
 
 func TestUpdateProductUsecase_EmptyID(t *testing.T) {
@@ -165,7 +165,7 @@ func TestUpdateProductUsecase_EmptyID(t *testing.T) {
 	mockRepo := repository.NewMockProductRepository(ctrl)
 	mockTxManager := repository.NewMockTxManager(ctrl)
 
-	// ❌ SUPPRIMEZ ces mocks
+	// ? SUPPRIMEZ ces mocks
 	// mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil)
 	// mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	// mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -183,7 +183,7 @@ func TestUpdateProductUsecase_EmptyID(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductNotFound, err) // ✅ Selon votre code
+	assert.Equal(t, utils.ErrProductNotFound, err) // ? Selon votre code
 }
 
 func TestUpdateProductUsecase_ProductNotFound(t *testing.T) {
@@ -197,7 +197,7 @@ func TestUpdateProductUsecase_ProductNotFound(t *testing.T) {
 
 	ctx := context.Background()
 
-	// ✅ GARDEZ ces mocks car la validation passe mais FindByID échoue
+	// ? GARDEZ ces mocks car la validation passe mais FindByID �choue
 	mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil).Times(1)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx).Times(1)
 	mockRepoWithTx.EXPECT().FindByID(ctx, "p1").Return(nil, errors.New("not found")).Times(1)
@@ -216,7 +216,7 @@ func TestUpdateProductUsecase_ProductNotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductNotFound, err) // ✅ Utilisez l'erreur exacte
+	assert.Equal(t, utils.ErrProductNotFound, err) // ? Utilisez l'erreur exacte
 }
 
 func TestUpdateProductUsecase_RepositoryUpdateError(t *testing.T) {
@@ -239,7 +239,7 @@ func TestUpdateProductUsecase_RepositoryUpdateError(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 
-	// ✅ GARDEZ ces mocks car la validation passe mais Update échoue
+	// ? GARDEZ ces mocks car la validation passe mais Update �choue
 	mockTxManager.EXPECT().BeginTx(ctx).Return(mockTx, nil).Times(1)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx).Times(1)
 	mockRepoWithTx.EXPECT().FindByID(ctx, "p1").Return(existing, nil).Times(1)
@@ -259,5 +259,5 @@ func TestUpdateProductUsecase_RepositoryUpdateError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, utils.ErrProductUpdateFail, err) // ✅ Utilisez l'erreur exacte
+	assert.Equal(t, utils.ErrProductUpdateFail, err) // ? Utilisez l'erreur exacte
 }

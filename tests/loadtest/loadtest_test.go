@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"Goshop/tests/testutilitis"
+	testutils "Goshop/tests/testutils"
 )
 
 // skipIfNoK6 arrête le test si k6 n'est pas installé
@@ -28,7 +28,7 @@ func TestLoadSmoke(t *testing.T) {
 	skipIfNoK6(t)
 
 	// Démarrer le serveur réel
-	server := testutilitis.NewTestServer(t)
+	server := testutils.NewTestServer(t)
 	serverURL := server.URL
 
 	t.Run("Auth_smoke", func(t *testing.T) {
@@ -56,7 +56,7 @@ func TestLoadAuth(t *testing.T) {
 
 	skipIfNoK6(t)
 
-	server := testutilitis.NewTestServer(t)
+	server := testutils.NewTestServer(t)
 	serverURL := server.URL
 
 	t.Run("Auth_load", func(t *testing.T) {
