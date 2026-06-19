@@ -38,7 +38,7 @@ var (
 
 	ErrTokenMalformed = NewAppError(
 		"TOKEN_MALFORMED",
-		"invalid or corrupted token", // ✅ MODIFIÉ
+		"invalid or corrupted token",
 		http.StatusUnauthorized,
 	)
 
@@ -50,7 +50,7 @@ var (
 
 	ErrTokenMissing = NewAppError(
 		"TOKEN_MISSING",
-		"missing Authorization header", // ✅ MODIFIÉ
+		"missing Authorization header",
 		http.StatusUnauthorized,
 	)
 
@@ -65,28 +65,28 @@ var (
 		"token jti invalid or missing",
 		http.StatusUnauthorized,
 	)
-)
 
-var (
-
-	// Ajoutez cette erreur :
 	ErrTokenFormatInvalid = NewAppError(
 		"TOKEN_FORMAT_INVALID",
 		"invalid token format",
 		http.StatusUnauthorized,
 	)
 
-	// Et si vous ne l'avez pas, ajoutez aussi :
 	ErrTokenSubjectInvalid = NewAppError(
 		"TOKEN_SUBJECT_INVALID",
 		"invalid token subject",
 		http.StatusUnauthorized,
 	)
+)
+
+var (
 	// Erreurs générales
 	ErrInvalidPayload   = NewAppError("INVALID_PAYLOAD", "invalid request body", http.StatusBadRequest)
 	ErrValidationFailed = NewAppError("VALIDATION_FAILED", "invalid fields in request", http.StatusBadRequest)
 	ErrInternalServer   = NewAppError("INTERNAL_SERVER_ERROR", "unexpected server error", http.StatusInternalServerError)
 	ErrNotFound         = NewAppError("NOT_FOUND", "resource not found", http.StatusNotFound)
+	ErrUnauthorized     = NewAppError("UNAUTHORIZED", "unauthorized", http.StatusUnauthorized)
+	ErrForbidden        = NewAppError("FORBIDDEN", "forbidden", http.StatusForbidden)
 
 	// Customer errors
 	ErrCustomerNotFound   = NewAppError("CUSTOMER_NOT_FOUND", "customer not found", http.StatusNotFound)
@@ -103,6 +103,7 @@ var (
 	ErrProductInvalidPrice      = NewAppError("INVALID_PRICE", "product price must be greater than 0", http.StatusBadRequest)
 	ErrProductInvalidStock      = NewAppError("INVALID_STOCK", "product stock cannot be negative", http.StatusBadRequest)
 	ErrProductInvalidName       = NewAppError("INVALID_NAME", "product name is required", http.StatusBadRequest)
+	ErrProductOutOfStock        = NewAppError("PRODUCT_OUT_OF_STOCK", "product is out of stock", http.StatusBadRequest)
 
 	// Order errors
 	ErrOrderNotFound          = NewAppError("ORDER_NOT_FOUND", "order not found", http.StatusNotFound)
@@ -133,13 +134,12 @@ var (
 	ErrUserAlreadyExists  = NewAppError("USER_ALREADY_EXISTS", "email already registered", http.StatusBadRequest)
 	ErrInvalidCredentials = NewAppError("INVALID_CREDENTIALS", "email or password incorrect", http.StatusUnauthorized)
 
-	ErrUnauthorized = NewAppError("UNAUTHORIZED", "unauthorized", http.StatusUnauthorized)
-
-	ErrForbidden = NewAppError("FORBIDDEN", "...", http.StatusForbidden)
-)
-
-var (
-	// ... autres erreurs
-	ErrProductOutOfStock = NewAppError("PRODUCT_OUT_OF_STOCK", " ",
-		http.StatusBadRequest)
+	// Shop errors (multi-tenant)
+	ErrShopNotFound    = NewAppError("SHOP_NOT_FOUND", "shop not found", http.StatusNotFound)
+	ErrShopCreateFail  = NewAppError("SHOP_CREATION_FAILED", "unable to create shop", http.StatusInternalServerError)
+	ErrShopUpdateFail  = NewAppError("SHOP_UPDATE_FAILED", "unable to update shop", http.StatusInternalServerError)
+	ErrShopSlugTaken   = NewAppError("SHOP_SLUG_TAKEN", "this slug is already taken", http.StatusConflict)
+	ErrShopDomainTaken = NewAppError("SHOP_DOMAIN_TAKEN", "this custom domain is already taken", http.StatusConflict)
+	ErrShopNotOwner    = NewAppError("SHOP_NOT_OWNER", "you are not the owner of this shop", http.StatusForbidden)
+	ErrShopInvalidID   = NewAppError("SHOP_INVALID_ID", "invalid shop ID", http.StatusBadRequest)
 )

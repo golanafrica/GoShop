@@ -45,3 +45,11 @@ temp/
 # Windows
 Thumbs.db
 "@ | Out-File -FilePath .gitignore -Encoding utf8
+# Tests load results (generated at runtime)
+tests/loadtest/results/*.json
+tests/loadtest/results/*.html
+tests/loadtest/archive.tar
+tests/loadtest/results/*.log
+
+# Keep the directory structure
+!tests/loadtest/results/.gitkeep

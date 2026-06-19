@@ -2,6 +2,7 @@ package order_test
 
 import (
 	"Goshop/domain/entity"
+	"Goshop/domain/tenant"
 	"Goshop/infrastructure/postgres/order"
 	"context"
 	"regexp"
@@ -9,8 +10,22 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
+
+// testShop pour les tests
+var testShop = &entity.Shop{
+	ID:       uuid.MustParse("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+	Name:     "Test Shop",
+	Slug:     "test-shop",
+	IsActive: true,
+}
+
+// contextWithTenant retourne un contexte avec le shop de test
+func contextWithTenant() context.Context {
+	return tenant.WithTenant(context.Background(), testShop)
+}
 
 func TestOrderRepository_Create(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -30,13 +45,14 @@ func TestOrderRepository_Create(t *testing.T) {
 	}).AddRow("order-1", "1234", 50000, "PENDING", time.Now(), time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(
-		`INSERT INTO orders (customer_id, total_cents, status, created_at, updated_at) VALUES( $1,$2,$3,NOW(),NOW())
-RETURNING id, customer_id, total_cents, status,created_at, updated_at`,
+		`INSERT INTO orders (shop_id, customer_id, total_cents, status, created_at, updated_at) 
+	VALUES ($1, $2, $3, $4, NOW(), NOW())
+	RETURNING id, customer_id, total_cents, status, created_at, updated_at`,
 	)).
-		WithArgs(orderEntity.CustomerID, orderEntity.TotalCents, orderEntity.Status).
+		WithArgs(testShop.ID.String(), orderEntity.CustomerID, orderEntity.TotalCents, orderEntity.Status).
 		WillReturnRows(rows)
 
-	result, err := repo.Create(context.Background(), orderEntity)
+	result, err := repo.Create(contextWithTenant(), orderEntity)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "order-1", result.ID)
@@ -51,17 +67,15 @@ func TestOrderRepository_FindByID(t *testing.T) {
 
 	repo := order.NewOrderPostgresInfra(db)
 
-	// 1️⃣ Requête principale : orders
+	// 1️⃣ Requête principale : orders (avec shop_id)
 	orderRows := sqlmock.NewRows([]string{
 		"id", "customer_id", "total_cents", "status", "created_at", "updated_at",
 	}).AddRow("order-1", "cust-123", 100000, "PENDING", time.Now(), time.Now())
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, customer_id, total_cents, status, created_at, 
-		updated_at
-		FROM orders 
-		WHERE id = $1`)).
-		WithArgs("order-1").
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, customer_id, total_cents, status, created_at, updated_at
+	FROM orders 
+	WHERE id = $1 AND shop_id = $2`)).
+		WithArgs("order-1", testShop.ID.String()).
 		WillReturnRows(orderRows)
 
 	// 2️⃣ Requête secondaire : order_items
@@ -71,15 +85,14 @@ func TestOrderRepository_FindByID(t *testing.T) {
 		"item-1", "order-1", "prod-99", int64(2), int64(50000), int64(100000),
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
-		FROM order_items
-		WHERE order_id = $1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
+	FROM order_items
+	WHERE order_id = $1`)).
 		WithArgs("order-1").
 		WillReturnRows(itemRows)
 
 	// 3️⃣ Exécution
-	result, err := repo.FindByID(context.Background(), "order-1")
+	result, err := repo.FindByID(contextWithTenant(), "order-1")
 
 	// 4️⃣ Assertions
 	assert.NoError(t, err)
@@ -97,7 +110,6 @@ func TestOrderRepository_FindAll(t *testing.T) {
 
 	repo := order.NewOrderPostgresInfra(db)
 
-	// ✅ On crée de vraies valeurs time.Time
 	date1 := time.Now()
 	date2 := time.Now().Add(-24 * time.Hour)
 
@@ -127,10 +139,11 @@ func TestOrderRepository_FindAll(t *testing.T) {
 			oi.subtotal_cents
 		FROM orders o
 		LEFT JOIN order_items oi ON o.id = oi.order_id
+		WHERE o.shop_id = $1
 		ORDER BY o.created_at DESC
-	`)).WillReturnRows(rows)
+	`)).WithArgs(testShop.ID.String()).WillReturnRows(rows)
 
-	results, err := repo.FindAll(context.Background())
+	results, err := repo.FindAll(contextWithTenant())
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 

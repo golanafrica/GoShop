@@ -4,6 +4,7 @@ import (
 	orderdto "Goshop/application/dto/order_dto"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/domain/tenant"
 	"context"
 	"database/sql"
 	"fmt"
@@ -27,21 +28,63 @@ func (or *OrderPostgresInfra) WithTX(tx repository.Tx) repository.OrderRepositor
 	return &OrderPostgresInfra{db: or.db, tx: tx}
 }
 
+func (or *OrderPostgresInfra) queryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	if or.tx != nil {
+		return or.tx.QueryRowContext(ctx, query, args...)
+	}
+	return or.db.QueryRowContext(ctx, query, args...)
+}
+
+func (or *OrderPostgresInfra) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	if or.tx != nil {
+		return or.tx.QueryContext(ctx, query, args...)
+	}
+	return or.db.QueryContext(ctx, query, args...)
+}
+
+func (or *OrderPostgresInfra) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	if or.tx != nil {
+		return or.tx.ExecContext(ctx, query, args...)
+	}
+	return or.db.ExecContext(ctx, query, args...)
+}
+
+// getShopID extrait le shop_id du contexte (multi-tenant)
+func (or *OrderPostgresInfra) getShopID(ctx context.Context) (string, error) {
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("multi-tenant: %w", err)
+	}
+	return shop.ID.String(), nil
+}
+
+// CountByCustomerID compte les commandes d'un client dans le shop courant
 func (or *OrderPostgresInfra) CountByCustomerID(ctx context.Context, customerID string) (int, error) {
-	query := `SELECT COUNT(*) FROM orders WHERE customer_id = $1`
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	query := `SELECT COUNT(*) FROM orders WHERE customer_id = $1 AND shop_id = $2`
 	var count int
-	err := or.queryRowContext(ctx, query, customerID).Scan(&count)
+	err = or.queryRowContext(ctx, query, customerID, shopID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count orders for customer %s: %w", customerID, err)
 	}
 	return count, nil
 }
 
+// CountAll compte les commandes du shop avec filtres
 func (or *OrderPostgresInfra) CountAll(ctx context.Context, filter orderdto.OrderFilter) (int, error) {
-	baseQuery := `SELECT COUNT(DISTINCT o.id) FROM orders o`
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	baseQuery := `SELECT COUNT(DISTINCT o.id) FROM orders o WHERE o.shop_id = $1`
+	args := []interface{}{shopID}
+	argPos := 2
 	conditions := []string{}
-	args := []interface{}{}
-	argPos := 1
 
 	if filter.Status != nil {
 		conditions = append(conditions, fmt.Sprintf("o.status = $%d", argPos))
@@ -55,15 +98,13 @@ func (or *OrderPostgresInfra) CountAll(ctx context.Context, filter orderdto.Orde
 		argPos++
 	}
 
-	whereClause := ""
+	query := baseQuery
 	if len(conditions) > 0 {
-		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+		query += " AND " + strings.Join(conditions, " AND ")
 	}
 
-	query := baseQuery + whereClause
-
 	var total int
-	err := or.queryRowContext(ctx, query, args...).Scan(&total)
+	err = or.queryRowContext(ctx, query, args...).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count orders: %w", err)
 	}
@@ -71,8 +112,13 @@ func (or *OrderPostgresInfra) CountAll(ctx context.Context, filter orderdto.Orde
 	return total, nil
 }
 
+// FindAllWithPagination récupère les commandes du shop avec pagination
 func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, offset int, filter orderdto.OrderFilter) ([]*entity.Order, error) {
-	// Base query
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	baseQuery := `
 		SELECT 
 			o.id AS order_id,
@@ -88,12 +134,12 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 			oi.subtotal_cents
 		FROM orders o
 		LEFT JOIN order_items oi ON o.id = oi.order_id
+		WHERE o.shop_id = $1
 	`
 
-	// Conditions dynamiques
+	args := []interface{}{shopID}
+	argPos := 2
 	conditions := []string{}
-	args := []interface{}{}
-	argPos := 1 // position des $1, $2, etc.
 
 	if filter.Status != nil {
 		conditions = append(conditions, fmt.Sprintf("o.status = $%d", argPos))
@@ -107,24 +153,20 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 		argPos++
 	}
 
-	// Construire la clause WHERE
 	whereClause := ""
 	if len(conditions) > 0 {
-		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+		whereClause = " AND " + strings.Join(conditions, " AND ")
 	}
 
-	// Ajouter ORDER + LIMIT/OFFSET
 	query := baseQuery + whereClause + " ORDER BY o.created_at DESC LIMIT $" + strconv.Itoa(argPos) + " OFFSET $" + strconv.Itoa(argPos+1)
 	args = append(args, limit, offset)
 
-	// Exécuter
 	rows, err := or.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch paginated orders: %w", err)
 	}
 	defer rows.Close()
 
-	// Mapper les résultats (inchangé)
 	orderMap := make(map[string]*entity.Order)
 	for rows.Next() {
 		var (
@@ -197,35 +239,19 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 	return orders, nil
 }
 
-func (or *OrderPostgresInfra) queryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	if or.tx != nil {
-		return or.tx.QueryRowContext(ctx, query, args...)
-	}
-	return or.db.QueryRowContext(ctx, query, args...)
-}
-
-func (or *OrderPostgresInfra) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	if or.tx != nil {
-		return or.tx.QueryContext(ctx, query, args...)
-	}
-	return or.db.QueryContext(ctx, query, args...)
-
-}
-
-func (or *OrderPostgresInfra) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-
-	if or.tx != nil {
-		return or.tx.ExecContext(ctx, query, args...)
-	}
-	return or.db.ExecContext(ctx, query, args...)
-
-}
-
+// Create crée une commande avec shop_id
 func (or *OrderPostgresInfra) Create(ctx context.Context, order *entity.Order) (*entity.Order, error) {
-	query := `INSERT INTO orders (customer_id, total_cents, status, created_at, updated_at) VALUES( $1,$2,$3,NOW(),NOW())
-	RETURNING id, customer_id, total_cents, status,created_at, updated_at  `
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	err := or.queryRowContext(ctx, query,
+	query := `INSERT INTO orders (shop_id, customer_id, total_cents, status, created_at, updated_at) 
+	VALUES ($1, $2, $3, $4, NOW(), NOW())
+	RETURNING id, customer_id, total_cents, status, created_at, updated_at`
+
+	err = or.queryRowContext(ctx, query,
+		shopID,
 		order.CustomerID,
 		order.TotalCents,
 		order.Status,
@@ -239,21 +265,25 @@ func (or *OrderPostgresInfra) Create(ctx context.Context, order *entity.Order) (
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("faille to create order %w", err)
+		return nil, fmt.Errorf("failed to create order %w", err)
 	}
 
 	return order, nil
 }
 
+// FindByID trouve une commande par ID dans le shop courant
 func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.Order, error) {
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	query := `SELECT id, customer_id, total_cents, status, created_at, 
-	updated_at
+	query := `SELECT id, customer_id, total_cents, status, created_at, updated_at
 	FROM orders 
-	WHERE id = $1`
+	WHERE id = $1 AND shop_id = $2`
 
 	order := &entity.Order{}
-	err := or.queryRowContext(ctx, query, id).Scan(
+	err = or.queryRowContext(ctx, query, id, shopID).Scan(
 		&order.ID,
 		&order.CustomerID,
 		&order.TotalCents,
@@ -269,14 +299,15 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 		return nil, fmt.Errorf("failed to fetch order: %w", err)
 	}
 
-	queryItem := `SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents FROM order_items
+	// Récupérer les items de la commande
+	queryItem := `SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
+	FROM order_items
 	WHERE order_id = $1`
 
 	rows, err := or.queryContext(ctx, queryItem, id)
 	if err != nil {
-		return nil, fmt.Errorf("falled order item %w", err)
+		return nil, fmt.Errorf("failed to fetch order items: %w", err)
 	}
-
 	defer rows.Close()
 
 	for rows.Next() {
@@ -290,16 +321,20 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 			&item.SubTotal_Cents,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failled scan order item %w", err)
+			return nil, fmt.Errorf("failed to scan order item: %w", err)
 		}
 		order.Items = append(order.Items, item)
-
 	}
 
 	return order, nil
 }
 
+// FindAll retourne toutes les commandes du shop courant
 func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, error) {
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	query := `
 		SELECT 
@@ -316,10 +351,11 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			oi.subtotal_cents
 		FROM orders o
 		LEFT JOIN order_items oi ON o.id = oi.order_id
+		WHERE o.shop_id = $1
 		ORDER BY o.created_at DESC
 	`
 
-	rows, err := or.queryContext(ctx, query)
+	rows, err := or.queryContext(ctx, query, shopID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch orders: %w", err)
 	}
@@ -328,7 +364,6 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 	orderMap := make(map[string]*entity.Order)
 
 	for rows.Next() {
-
 		var (
 			orderID       string
 			customerID    string
@@ -360,7 +395,6 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			return nil, fmt.Errorf("failed to scan order: %w", err)
 		}
 
-		// Récupérer l'ordre existant ou le créer
 		order, exists := orderMap[orderID]
 		if !exists {
 			order = &entity.Order{
@@ -375,7 +409,6 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			orderMap[orderID] = order
 		}
 
-		// Ajouter l'item si valable
 		if itemID.Valid {
 			item := &entity.OrderItem{
 				ID:             itemID.String,
@@ -389,7 +422,6 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 		}
 	}
 
-	// Convertir map → slice
 	orders := make([]*entity.Order, 0, len(orderMap))
 	for _, ord := range orderMap {
 		orders = append(orders, ord)
