@@ -13,11 +13,12 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	shopusecase "Goshop/application/usecase/shop_usecase"
 	authrefreshrepositoryinfra "Goshop/infrastructure/postgres/auth_refresh_repository_infra"
 	"Goshop/infrastructure/postgres/customer"
 	"Goshop/infrastructure/postgres/order"
 	"Goshop/infrastructure/postgres/product"
-	"Goshop/infrastructure/postgres/shop" // ← NEW : Shop repository
+	"Goshop/infrastructure/postgres/shop"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 
@@ -28,6 +29,7 @@ import (
 	"Goshop/interfaces/handler/orders"
 	productHandler "Goshop/interfaces/handler/product"
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
+	shophandler "Goshop/interfaces/handler/shop_handler"
 	userhandler "Goshop/interfaces/handler/user_handler"
 	middleware "Goshop/interfaces/middl/user_middleware"
 
@@ -89,8 +91,6 @@ func (a *App) setupRouter() {
 	postgresOrderItem := order.NewOrderItemPostgresInfra(a.DB)
 	postgresUserRepo := userpostgres.NewUserPostgres(a.DB)
 	refreshSessionRepo := authrefreshrepositoryinfra.NewRefreshSessionPostgres(a.DB)
-
-	// ← NEW : Shop Repository pour le multi-tenant
 	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
 	// -- Usecases
@@ -103,6 +103,11 @@ func (a *App) setupRouter() {
 		uuid.NewString,
 		30*24*time.Hour,
 	)
+
+	// Shop Usecases
+	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo)
+	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
+	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
 
 	// -- Handlers
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -131,6 +136,12 @@ func (a *App) setupRouter() {
 		a.Logger.WithComponent("user_handler"),
 	)
 
+	shopHandler := shophandler.NewShopHandler(
+		createShopUsecase,
+		listShopsUsecase,
+		updateShopUsecase,
+	)
+
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
 
@@ -154,33 +165,47 @@ func (a *App) setupRouter() {
 
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
-		// ← NEW : Multi-tenant middleware (APRÈS auth pour avoir l'user)
+		// Authentification obligatoire pour toutes les routes /api
 		r.Use(middleware.AuthMiddleware)
-		r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 
-		// Products
-		r.Route("/products", func(r chi.Router) {
-			r.Post("/", middl.ErrorHandler(productHandler.CreateProduct))
-			r.Get("/", middl.ErrorHandler(productHandler.GetAllProducts))
-			r.Get("/{id}", middl.ErrorHandler(productHandler.GetProductById))
-			r.Put("/{id}", middl.ErrorHandler(productHandler.UpdateProduct))
-			r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
+		// ⭐ Routes de gestion des shops (SANS TenantResolver)
+		// Ces routes ne nécessitent PAS de shop dans le contexte
+		r.Route("/shops", func(r chi.Router) {
+			r.Post("/", middl.ErrorHandler(shopHandler.CreateShop))
+			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
+			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
 		})
 
-		// Customers
-		r.Route("/customers", func(r chi.Router) {
-			r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
-			r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
-			r.Get("/{id}", middl.ErrorHandler(customerHandler.GetCustomerByIdHandler))
-			r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
-			r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
-		})
+		// ⭐ Routes multi-tenant (AVEC TenantResolver)
+		// Utilisation de Group() pour ajouter un middleware à un sous-groupe
+		r.Group(func(r chi.Router) {
+			// Multi-tenant middleware : résout le shop depuis Host ou X-Shop-Slug
+			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 
-		// Orders
-		r.Route("/orders", func(r chi.Router) {
-			r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
-			r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
-			r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
+			// Products
+			r.Route("/products", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(productHandler.CreateProduct))
+				r.Get("/", middl.ErrorHandler(productHandler.GetAllProducts))
+				r.Get("/{id}", middl.ErrorHandler(productHandler.GetProductById))
+				r.Put("/{id}", middl.ErrorHandler(productHandler.UpdateProduct))
+				r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
+			})
+
+			// Customers
+			r.Route("/customers", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
+				r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
+				r.Get("/{id}", middl.ErrorHandler(customerHandler.GetCustomerByIdHandler))
+				r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
+				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
+			})
+
+			// Orders
+			r.Route("/orders", func(r chi.Router) {
+				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
+				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
+				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
+			})
 		})
 	})
 
