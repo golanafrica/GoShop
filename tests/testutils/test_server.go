@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/joho/godotenv"
@@ -19,6 +20,10 @@ import (
 	"Goshop/infrastructure/postgres"
 	"Goshop/internal/app"
 )
+
+// 🆕 sync.Once garantit que les migrations ne s'exécutent QU'UNE SEULE FOIS
+// même si plusieurs tests s'exécutent en parallèle
+var migrationOnce sync.Once
 
 // getProjectRoot retourne le chemin racine du projet
 func getProjectRoot() string {
@@ -53,11 +58,13 @@ func NewTestServer(t *testing.T) *TestServer {
 		t.Fatalf("❌ Connexion à la base de test échouée: %v", err)
 	}
 
-	// 2. Appliquer les migrations depuis le bon répertoire
-	migrationDir := filepath.Join(projectRoot, "migrations")
-	if err := RunMigrationsFromDir(db, migrationDir); err != nil {
-		t.Fatalf("❌ Échec des migrations: %v", err)
-	}
+	// 🆕 Utiliser sync.Once pour éviter les deadlocks lors des migrations parallèles
+	migrationOnce.Do(func() {
+		migrationDir := filepath.Join(projectRoot, "migrations")
+		if err := RunMigrationsFromDir(db, migrationDir); err != nil {
+			t.Fatalf("❌ Échec des migrations: %v", err)
+		}
+	})
 
 	t.Cleanup(func() {
 		if !t.Failed() {
@@ -117,8 +124,8 @@ func truncateTables(t *testing.T, db *sql.DB) {
 		"orders",
 		"products",
 		"customers",
-		"shop_payment_settings", // ← NOUVEAU
-		"shops",                 // ← NOUVEAU
+		"shop_payment_settings",
+		"shops",
 		"refresh_sessions",
 		"users",
 	}

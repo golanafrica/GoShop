@@ -11,7 +11,7 @@ export const options = {
   thresholds: {
     // ✅ Seuils réalistes en dev local
     http_req_failed: ['rate < 0.01'],    // < 1% d'erreurs
-    http_req_duration: ['p(95) < 2000'], // < 2s (plutôt que 500ms)
+    http_req_duration: ['p(95) < 2000'], // < 2s
     checks: ['rate > 0.95'],             // > 95% de réussite
   },
 };
@@ -22,9 +22,8 @@ export default function () {
   const timestamp = Date.now();
   const vuId = __VU;
   const iter = __ITER;
-  const uniqueId = uuidv4().slice(0, 8); // 🆕 UUID pour garantir l'unicité
+  const uniqueId = uuidv4().slice(0, 8);
 
-  // 🆕 Email unique avec UUID pour éviter les collisions entre VUs
   const email = `smoketest_${timestamp}_${vuId}_${iter}_${uniqueId}@example.com`;
   const password = 'Password123!';
 
@@ -39,14 +38,12 @@ export default function () {
     '✅ register status is 201': (r) => r.status === 201,
   });
 
-  // 🆕 Si l'inscription échoue, on arrête cette itération
   if (!registerOk) {
     console.error(`❌ Register failed for ${email}: ${registerRes.status}`);
     sleep(0.1);
     return;
   }
 
-  // ⏱️ Pause courte
   sleep(0.5);
 
   // 2. Connexion
@@ -68,18 +65,15 @@ export default function () {
     },
   });
 
-  // 🆕 Si la connexion échoue, on arrête
   if (!loginOk) {
     console.error(`❌ Login failed for ${email}: ${loginRes.status}`);
     sleep(0.1);
     return;
   }
 
-  // ⏱️ Pause finale
   sleep(0.5);
 }
 
-// 📊 Affichage dans le terminal (optionnel mais utile)
 export function handleSummary(data) {
   return {
     stdout: textSummary(data, { indent: ' ', enableColors: true }),
