@@ -37,12 +37,12 @@ type TestServer struct {
 func NewTestServer(t *testing.T) *TestServer {
 	t.Helper()
 
-	// 🔥 CHARGEMENT ABSOLU DE .env.test
+	// 🔥 CHARGEMENT DE .env.test
 	projectRoot := getProjectRoot()
 	envFile := filepath.Join(projectRoot, ".env.test")
 
 	if err := godotenv.Load(envFile); err != nil {
-		t.Fatalf("❌ Impossible de charger %s: %v", envFile, err)
+		t.Logf("⚠️  Fichier .env.test non trouvé, utilisation des variables d'environnement")
 	}
 
 	os.Setenv("APP_ENV", "test")
@@ -109,12 +109,18 @@ func RunMigrationsFromDir(db *sql.DB, migrationDir string) error {
 	return nil
 }
 
-// truncateTables vide toutes les tables
+// truncateTables vide toutes les tables (ordre inverse des dépendances)
 func truncateTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 	tables := []string{
-		"order_items", "orders", "products",
-		"customers", "refresh_sessions", "users",
+		"order_items",
+		"orders",
+		"products",
+		"customers",
+		"shop_payment_settings", // ← NOUVEAU
+		"shops",                 // ← NOUVEAU
+		"refresh_sessions",
+		"users",
 	}
 	for _, table := range tables {
 		_, err := db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE")

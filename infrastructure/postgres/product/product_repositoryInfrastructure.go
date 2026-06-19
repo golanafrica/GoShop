@@ -1,11 +1,14 @@
 package product
 
 import (
-	"Goshop/domain/entity"
-	"Goshop/domain/repository"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+
+	"Goshop/domain/entity"
+	"Goshop/domain/repository"
+	"Goshop/domain/tenant"
 )
 
 type ProductRepositoryInfrastructure struct {
@@ -22,13 +25,10 @@ func (pr *ProductRepositoryInfrastructure) WithTX(tx repository.Tx) repository.P
 }
 
 func (pr *ProductRepositoryInfrastructure) queryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-
 	if pr.tx != nil {
 		return pr.tx.QueryRowContext(ctx, query, args...)
-
 	}
 	return pr.db.QueryRowContext(ctx, query, args...)
-
 }
 
 func (pr *ProductRepositoryInfrastructure) queryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
@@ -45,103 +45,146 @@ func (pr *ProductRepositoryInfrastructure) execContext(ctx context.Context, quer
 	return pr.db.ExecContext(ctx, query, args...)
 }
 
-func (pr *ProductRepositoryInfrastructure) Create(ctx context.Context, product *entity.Product) error {
-	query := `INSERT INTO products (name, description, price_cents, stock)
-	VALUES ($1, $2, $3, $4)
-	RETURNING id, created_at, updated_at;`
-	return pr.queryRowContext(ctx, query, product.Name, product.Description, product.PriceCents, product.Stock).Scan(&product.ID, &product.CreatedAt, &product.UpdatedAt)
-
+// getShopID extrait le shop_id du contexte (multi-tenant)
+func (pr *ProductRepositoryInfrastructure) getShopID(ctx context.Context) (string, error) {
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("multi-tenant: %w", err)
+	}
+	return shop.ID.String(), nil
 }
 
-func (pr *ProductRepositoryInfrastructure) FindByID(ctx context.Context, id string) (*entity.Product, error) {
+// Create crée un produit avec le shop_id du contexte
+func (pr *ProductRepositoryInfrastructure) Create(ctx context.Context, product *entity.Product) error {
+	shopID, err := pr.getShopID(ctx)
+	if err != nil {
+		return err
+	}
 
-	query := `SELECT id, name, description, price_cents, stock, created_at, updated_at
-	FROM products WHERE id= $1;`
-	product := &entity.Product{}
-	err := pr.queryRowContext(ctx, query, id).Scan(&product.ID, &product.Name, &product.Description, &product.PriceCents, &product.Stock, &product.CreatedAt, &product.UpdatedAt)
+	query := `INSERT INTO products (shop_id, name, description, price_cents, stock)
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING id, created_at, updated_at;`
+
+	return pr.queryRowContext(ctx, query, shopID, product.Name, product.Description, product.PriceCents, product.Stock).
+		Scan(&product.ID, &product.CreatedAt, &product.UpdatedAt)
+}
+
+// FindByID trouve un produit par ID en respectant le tenant
+func (pr *ProductRepositoryInfrastructure) FindByID(ctx context.Context, id string) (*entity.Product, error) {
+	shopID, err := pr.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	query := `SELECT id, name, description, price_cents, stock, created_at, updated_at
+	FROM products WHERE id = $1 AND shop_id = $2;`
+
+	product := &entity.Product{}
+	err = pr.queryRowContext(ctx, query, id, shopID).Scan(
+		&product.ID, &product.Name, &product.Description,
+		&product.PriceCents, &product.Stock,
+		&product.CreatedAt, &product.UpdatedAt,
+	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("product with id %s not found", id)
 	}
-
+	if err != nil {
+		return nil, err
+	}
 	return product, nil
 }
 
-// infrastructure/postgres/product/product_repository_infrastructure.go
-
+// FindAll retourne les produits du shop courant
 func (pr *ProductRepositoryInfrastructure) FindAll(ctx context.Context, limit, offset int) ([]*entity.Product, error) {
-	// ⚠️ AJOUTE CES LOGS ⚠️
-	fmt.Printf("🚨 [DEBUG] Repository.FindAll appelé avec limit=%d, offset=%d\n", limit, offset)
+	shopID, err := pr.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if limit <= 0 {
 		limit = 50
-		fmt.Printf("⚠️ [DEBUG] Repository: Limit corrigé à %d\n", limit)
 	}
 	if limit > 100 {
 		limit = 100
-		fmt.Printf("⚠️ [DEBUG] Repository: Limit limité à %d\n", limit)
 	}
 	if offset < 0 {
 		offset = 0
-		fmt.Printf("⚠️ [DEBUG] Repository: Offset corrigé à %d\n", offset)
 	}
 
 	query := `SELECT id, name, description, price_cents, stock, created_at, updated_at 
               FROM products 
+              WHERE shop_id = $1
               ORDER BY created_at DESC 
-              LIMIT $1 OFFSET $2`
+              LIMIT $2 OFFSET $3`
 
-	// ⚠️ AJOUTE CES LOGS ⚠️
-	fmt.Printf("📋 [DEBUG] Repository: Requête SQL: %s\n", query)
-	fmt.Printf("📋 [DEBUG] Repository: Paramètres SQL: limit=%d, offset=%d\n", limit, offset)
-
-	rows, err := pr.queryContext(ctx, query, limit, offset)
+	rows, err := pr.queryContext(ctx, query, shopID, limit, offset)
 	if err != nil {
-		fmt.Printf("❌ [DEBUG] Repository: Erreur queryContext: %v\n", err)
 		return nil, err
 	}
 	defer rows.Close()
 
 	var products []*entity.Product
-	count := 0
 	for rows.Next() {
-		count++
 		p := &entity.Product{}
 		err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.PriceCents,
 			&p.Stock, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
-			fmt.Printf("❌ [DEBUG] Repository: Erreur Scan ligne %d: %v\n", count, err)
 			return nil, err
 		}
 		products = append(products, p)
 	}
 
-	fmt.Printf("✅ [DEBUG] Repository: Retourne %d produits (lues %d lignes)\n", len(products), count)
-	return products, nil
+	return products, rows.Err()
 }
 
+// Update met à jour un produit en respectant le tenant
 func (pr *ProductRepositoryInfrastructure) Update(ctx context.Context, product *entity.Product) (*entity.Product, error) {
-	query := `
-	UPDATE products
-	SET name = $1, description = $2, price_cents = $3, stock = $4, updated_at = NOW()
-	WHERE id=$5
-	RETURNING id, name, description, price_cents, stock, created_at, updated_at;`
-
-	updated := &entity.Product{}
-	err := pr.queryRowContext(ctx, query, product.Name, product.Description, product.PriceCents, product.Stock, product.ID).
-		Scan(&updated.ID, &updated.Name, &updated.Description, &updated.PriceCents, &updated.Stock, &updated.CreatedAt, &updated.UpdatedAt)
-
+	shopID, err := pr.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	query := `
+	UPDATE products
+	SET name = $1, description = $2, price_cents = $3, stock = $4, updated_at = NOW()
+	WHERE id = $5 AND shop_id = $6
+	RETURNING id, name, description, price_cents, stock, created_at, updated_at;`
+
+	updated := &entity.Product{}
+	err = pr.queryRowContext(ctx, query,
+		product.Name, product.Description, product.PriceCents, product.Stock,
+		product.ID, shopID,
+	).Scan(&updated.ID, &updated.Name, &updated.Description, &updated.PriceCents,
+		&updated.Stock, &updated.CreatedAt, &updated.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, errors.New("product not found or access denied")
+	}
+	if err != nil {
+		return nil, err
+	}
 	return updated, nil
 }
 
+// Delete supprime un produit en respectant le tenant
 func (pr *ProductRepositoryInfrastructure) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM products WHERE id =$1`
-	_, err := pr.execContext(ctx, query, id)
-	return err
+	shopID, err := pr.getShopID(ctx)
+	if err != nil {
+		return err
+	}
+
+	query := `DELETE FROM products WHERE id = $1 AND shop_id = $2`
+	result, err := pr.execContext(ctx, query, id, shopID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return errors.New("product not found or access denied")
+	}
+	return nil
 }

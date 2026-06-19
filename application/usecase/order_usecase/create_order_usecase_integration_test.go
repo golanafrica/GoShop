@@ -3,6 +3,7 @@ package orderusecase_test
 import (
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/domain/entity"
+	"Goshop/domain/tenant"
 	"Goshop/infrastructure/postgres"
 	"Goshop/infrastructure/postgres/customer"
 	"Goshop/infrastructure/postgres/order"
@@ -16,13 +17,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 )
 
 var db *sql.DB
-var ctx = context.Background()
+
+// testShop est le shop utilisé pour tous les tests d'intégration
+var testShop = &entity.Shop{
+	ID:       uuid.MustParse("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+	Name:     "Test Shop",
+	Slug:     "test-shop",
+	IsActive: true,
+}
+
+// ctx est le contexte global avec le tenant pour tous les tests
+var ctx = tenant.WithTenant(context.Background(), testShop)
 
 // ✅ Initialisation de la base de test
 func setupTestDB() *sql.DB {
@@ -52,8 +64,39 @@ func setupTestDB() *sql.DB {
 // 🔧 Setup global avant tous les tests
 func TestMain(m *testing.M) {
 	db = setupTestDB()
+
+	// S'assurer que le shop de test existe en base
+	ensureTestShopExists()
+
 	defer db.Close()
 	os.Exit(m.Run())
+}
+
+// ensureTestShopExists crée le shop de test s'il n'existe pas
+func ensureTestShopExists() {
+	// Créer un utilisateur de test
+	_, _ = db.Exec(`
+		INSERT INTO users (id, email, password, created_at, updated_at)
+		VALUES ('00000000-0000-0000-0000-000000000001', 'test-integration@golanafrica.com', 'dummy', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`)
+
+	// Créer le shop de test
+	_, err := db.Exec(`
+		INSERT INTO shops (id, name, slug, owner_id, plan, is_active)
+		VALUES ($1, $2, $3, '00000000-0000-0000-0000-000000000001', 'free', true)
+		ON CONFLICT (id) DO NOTHING
+	`, testShop.ID, testShop.Name, testShop.Slug)
+	if err != nil {
+		log.Printf("⚠️  Warning creating test shop: %v", err)
+	}
+
+	// Créer les settings du shop
+	_, _ = db.Exec(`
+		INSERT INTO shop_payment_settings (shop_id)
+		VALUES ($1)
+		ON CONFLICT (shop_id) DO NOTHING
+	`, testShop.ID)
 }
 
 // 🚀 Test d'intégration complet du usecase CreateOrderUsecase
@@ -67,15 +110,13 @@ func TestCreateOrderUsecase_Integration(t *testing.T) {
 
 	// --- Initialisation du usecase ---
 	usecase := orderusecase.NewCreateOrderUsecase(
-
-		txManager, // ? au lieu de db
+		txManager,
 		productRepo,
 		customerRepo,
 		orderItemRepo,
 		orderRepo,
 	)
 
-	// --- Étape 1 : Créer un client ---
 	// --- Étape 1 : Créer un customer ---
 	customerEntity := &entity.Customer{
 		FirstName: "Integration",

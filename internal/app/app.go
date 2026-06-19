@@ -1,5 +1,4 @@
 // internal/app/app.go
-// internal/app/app.go
 package app
 
 import (
@@ -14,10 +13,12 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	shopusecase "Goshop/application/usecase/shop_usecase"
 	authrefreshrepositoryinfra "Goshop/infrastructure/postgres/auth_refresh_repository_infra"
 	"Goshop/infrastructure/postgres/customer"
 	"Goshop/infrastructure/postgres/order"
 	"Goshop/infrastructure/postgres/product"
+	"Goshop/infrastructure/postgres/shop"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 
@@ -28,6 +29,7 @@ import (
 	"Goshop/interfaces/handler/orders"
 	productHandler "Goshop/interfaces/handler/product"
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
+	shophandler "Goshop/interfaces/handler/shop_handler"
 	userhandler "Goshop/interfaces/handler/user_handler"
 	middleware "Goshop/interfaces/middl/user_middleware"
 
@@ -62,17 +64,15 @@ func NewApp(db *sql.DB, logger *setupLogging.Logger) *App {
 func (a *App) setupRouter() {
 
 	startTime := time.Now()
-	//a.Logger.Info().Msg("Configuration du router...")
-
 	r := chi.NewRouter()
 
 	// ============ 1. MIDDLEWARES GLOBAUX ============
 
-	r.Use(middl.LoggerInitMiddleware(a.Logger)) // ← 1er: initialise le logger de base
+	r.Use(middl.LoggerInitMiddleware(a.Logger))
 	r.Use(middl.RequestIDMiddleware)
-	r.Use(middl.HTTPMetricsMiddleware)   // ← 2ème: enrichit avec request_id
-	r.Use(middl.LoginAuditMiddleware)    // ← 3ème: audit login
-	r.Use(middl.RequestLoggerMiddleware) // ← 4ème: logue la requête
+	r.Use(middl.HTTPMetricsMiddleware)
+	r.Use(middl.LoginAuditMiddleware)
+	r.Use(middl.RequestLoggerMiddleware)
 	r.Use(middl.Recovery)
 	r.Use(middl.SecureHeaders)
 
@@ -91,6 +91,7 @@ func (a *App) setupRouter() {
 	postgresOrderItem := order.NewOrderItemPostgresInfra(a.DB)
 	postgresUserRepo := userpostgres.NewUserPostgres(a.DB)
 	refreshSessionRepo := authrefreshrepositoryinfra.NewRefreshSessionPostgres(a.DB)
+	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
 	// -- Usecases
 	refreshUsecase := authusecase.NewRefreshUsecase(
@@ -103,10 +104,13 @@ func (a *App) setupRouter() {
 		30*24*time.Hour,
 	)
 
+	// Shop Usecases
+	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo)
+	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
+	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
+
 	// -- Handlers
-	refreshHandler := refreshhandler.NewRefreshHandler(
-		refreshUsecase,
-	)
+	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
 	productHandler := productHandler.NewProductHandler(
 		postgreProductRepo,
@@ -132,10 +136,15 @@ func (a *App) setupRouter() {
 		a.Logger.WithComponent("user_handler"),
 	)
 
+	shopHandler := shophandler.NewShopHandler(
+		createShopUsecase,
+		listShopsUsecase,
+		updateShopUsecase,
+	)
+
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
 
-	// ✅ SUPPRIMEZ withRequestLogging() de toutes les routes !
 	r.Get("/health/live", hh.Live)
 	r.Get("/health/ready", hh.Ready)
 
@@ -150,37 +159,53 @@ func (a *App) setupRouter() {
 	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/swagger/*", httpSwagger.Handler())
 
-	// ============ 4. ROUTE PROTÉGÉE ============
+	// ============ 4. ROUTE PROTÉGÉE (user authentifié) ============
 	r.With(middleware.AuthMiddleware).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
-	// ============ 5. ROUTES API PROTÉGÉES ============
+	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
+		// Authentification obligatoire pour toutes les routes /api
 		r.Use(middleware.AuthMiddleware)
 
-		// Products
-		r.Route("/products", func(r chi.Router) {
-			r.Post("/", middl.ErrorHandler(productHandler.CreateProduct))
-			r.Get("/", middl.ErrorHandler(productHandler.GetAllProducts))
-			r.Get("/{id}", middl.ErrorHandler(productHandler.GetProductById))
-			r.Put("/{id}", middl.ErrorHandler(productHandler.UpdateProduct))
-			r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
+		// ⭐ Routes de gestion des shops (SANS TenantResolver)
+		// Ces routes ne nécessitent PAS de shop dans le contexte
+		r.Route("/shops", func(r chi.Router) {
+			r.Post("/", middl.ErrorHandler(shopHandler.CreateShop))
+			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
+			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
 		})
 
-		// Customers
-		r.Route("/customers", func(r chi.Router) {
-			r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
-			r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
-			r.Get("/{id}", middl.ErrorHandler(customerHandler.GetCustomerByIdHandler))
-			r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
-			r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
-		})
+		// ⭐ Routes multi-tenant (AVEC TenantResolver)
+		// Utilisation de Group() pour ajouter un middleware à un sous-groupe
+		r.Group(func(r chi.Router) {
+			// Multi-tenant middleware : résout le shop depuis Host ou X-Shop-Slug
+			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 
-		// Orders
-		r.Route("/orders", func(r chi.Router) {
-			r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
-			r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
-			r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
+			// Products
+			r.Route("/products", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(productHandler.CreateProduct))
+				r.Get("/", middl.ErrorHandler(productHandler.GetAllProducts))
+				r.Get("/{id}", middl.ErrorHandler(productHandler.GetProductById))
+				r.Put("/{id}", middl.ErrorHandler(productHandler.UpdateProduct))
+				r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
+			})
+
+			// Customers
+			r.Route("/customers", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
+				r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
+				r.Get("/{id}", middl.ErrorHandler(customerHandler.GetCustomerByIdHandler))
+				r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
+				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
+			})
+
+			// Orders
+			r.Route("/orders", func(r chi.Router) {
+				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
+				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
+				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
+			})
 		})
 	})
 
@@ -189,24 +214,18 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès")
+		Msg("✅ Router configuré avec succès (multi-tenant activé)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
 
-// requestLoggingMiddleware avec audit login intégré
-// requestLoggingMiddleware avec audit login intégré
-
-// maskEmail masque une partie de l'email pour la confidentialité
 func maskEmail(email string) string {
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
 		return "***@***"
 	}
-
 	localPart := parts[0]
 	domain := parts[1]
-
 	if len(localPart) <= 2 {
 		return localPart[:1] + "***@" + domain
 	} else if len(localPart) <= 4 {
@@ -215,7 +234,6 @@ func maskEmail(email string) string {
 	return localPart[:3] + "***@" + domain
 }
 
-// determineLogLevel détermine le niveau de log selon le statut et la durée
 func determineLogLevel(status int, duration time.Duration) zerolog.Level {
 	switch {
 	case status >= 500:
@@ -229,7 +247,6 @@ func determineLogLevel(status int, duration time.Duration) zerolog.Level {
 	}
 }
 
-// slowRequestWarning retourne un warning si la requête est lente
 func slowRequestWarning(duration time.Duration) string {
 	if duration > 2*time.Second {
 		return "slow_request"
@@ -237,20 +254,6 @@ func slowRequestWarning(duration time.Duration) string {
 	return ""
 }
 
-// ============ SUPPRIMEZ ou COMMMENTEZ cette fonction ============
-/*
-// withRequestLogging wrapper pour ajouter du logging aux handlers
-// ❌ CETTE FONCTION CAUSE LE DOUBLE LOGGING AVEC CHI
-func (a *App) withRequestLogging(operation string, handler http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Cette fonction cause le problème de double logging
-		// Utilisez simplement handler(w, r) directement
-		handler(w, r)
-	}
-}
-*/
-
-// responseWriter wrapper pour capturer le status et la taille
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -273,11 +276,8 @@ func (a *App) Handler() http.Handler {
 	return a.Router
 }
 
-// ============ FONCTION POUR LES TESTS (compatible) ============
-
 // NewRouter crée et retourne un router HTTP configuré (pour les tests)
 func NewRouter(db *sql.DB) http.Handler {
-	// Crée un logger minimal pour les tests
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
@@ -285,7 +285,6 @@ func NewRouter(db *sql.DB) http.Handler {
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
-
 	app := NewApp(db, logger)
 	return app.Handler()
 }
