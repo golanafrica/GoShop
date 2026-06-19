@@ -1,5 +1,4 @@
 // tests/testutils/helpers.go
-// tests/testutils/helpers.go
 package testutils
 
 import (
@@ -15,9 +14,10 @@ import (
 
 // HTTPClient est un client HTTP avec helpers pour tests
 type HTTPClient struct {
-	BaseURL string
-	Token   string
-	Client  *http.Client
+	BaseURL        string
+	Token          string
+	Client         *http.Client
+	defaultHeaders map[string]string // 🆕 Headers par défaut (ex: X-Shop-Slug)
 }
 
 // NewHTTPClient crée un nouveau client HTTP pour tests
@@ -27,12 +27,23 @@ func NewHTTPClient(baseURL string) *HTTPClient {
 		Client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		defaultHeaders: make(map[string]string), // 🆕 Initialisation
 	}
 }
 
 // SetToken définit le token d'authentification
 func (c *HTTPClient) SetToken(token string) {
 	c.Token = token
+}
+
+// SetDefaultHeader ajoute un header par défaut à toutes les requêtes
+func (c *HTTPClient) SetDefaultHeader(key, value string) {
+	c.defaultHeaders[key] = value
+}
+
+// ClearDefaultHeader supprime un header par défaut
+func (c *HTTPClient) ClearDefaultHeader(key string) {
+	delete(c.defaultHeaders, key)
 }
 
 // DoRequest envoie une requête HTTP
@@ -52,6 +63,11 @@ func (c *HTTPClient) DoRequest(method, path string, body interface{}) (*http.Res
 	req, err := http.NewRequest(method, fullURL, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	// 🆕 Ajouter les headers par défaut EN PREMIER (peuvent être écrasés)
+	for key, value := range c.defaultHeaders {
+		req.Header.Set(key, value)
 	}
 
 	if body != nil {
@@ -155,6 +171,13 @@ func ExtractID(t *testing.T, resp *http.Response) string {
 
 // DoRequestRaw envoie une requête HTTP personnalisée (utile pour les headers CORS, etc.)
 func (c *HTTPClient) DoRequestRaw(req *http.Request) (*http.Response, error) {
+	// 🆕 Ajouter les headers par défaut
+	for key, value := range c.defaultHeaders {
+		if req.Header.Get(key) == "" {
+			req.Header.Set(key, value)
+		}
+	}
+
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

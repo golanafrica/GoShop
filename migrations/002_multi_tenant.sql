@@ -6,7 +6,7 @@
 
 -- 1. Table shops (boutiques)
 -- ⚠️ owner_id est VARCHAR(36) pour être compatible avec users.id
-CREATE TABLE shops (
+CREATE TABLE IF NOT EXISTS shops (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(100) UNIQUE NOT NULL,
@@ -21,9 +21,9 @@ CREATE TABLE shops (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_shops_slug ON shops(slug);
-CREATE INDEX idx_shops_custom_domain ON shops(custom_domain);
-CREATE INDEX idx_shops_owner ON shops(owner_id);
+CREATE INDEX IF NOT EXISTS idx_shops_slug ON shops(slug);
+CREATE INDEX IF NOT EXISTS idx_shops_custom_domain ON shops(custom_domain);
+CREATE INDEX IF NOT EXISTS idx_shops_owner ON shops(owner_id);
 
 -- 2. Ajouter shop_id aux tables existantes
 ALTER TABLE products ADD COLUMN IF NOT EXISTS shop_id UUID REFERENCES shops(id) ON DELETE CASCADE;
@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_customers_shop ON customers(shop_id);
 CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id);
 
 -- 4. Table shop_payment_settings (paramètres paiement par boutique)
-CREATE TABLE shop_payment_settings (
+CREATE TABLE IF NOT EXISTS shop_payment_settings (
     shop_id UUID PRIMARY KEY REFERENCES shops(id) ON DELETE CASCADE,
     
     -- Cash à la livraison
@@ -67,11 +67,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- PostgreSQL ne supporte pas CREATE TRIGGER IF NOT EXISTS
+-- On doit donc DROP avant CREATE
+DROP TRIGGER IF EXISTS shops_updated_at ON shops;
 CREATE TRIGGER shops_updated_at
     BEFORE UPDATE ON shops
     FOR EACH ROW
     EXECUTE FUNCTION update_shops_updated_at();
 
+DROP TRIGGER IF EXISTS shop_payment_settings_updated_at ON shop_payment_settings;
 CREATE TRIGGER shop_payment_settings_updated_at
     BEFORE UPDATE ON shop_payment_settings
     FOR EACH ROW

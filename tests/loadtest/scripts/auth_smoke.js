@@ -1,6 +1,7 @@
-// tests/loadtest/scripts/smoke_test.js
+// tests/loadtest/scripts/auth_smoke.js
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
 
 // 🔧 Configuration réaliste pour un smoke test
@@ -20,7 +21,11 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 export default function () {
   const timestamp = Date.now();
   const vuId = __VU;
-  const email = `smoketest_${timestamp}_${vuId}@example.com`;
+  const iter = __ITER;
+  const uniqueId = uuidv4().slice(0, 8); // 🆕 UUID pour garantir l'unicité
+
+  // 🆕 Email unique avec UUID pour éviter les collisions entre VUs
+  const email = `smoketest_${timestamp}_${vuId}_${iter}_${uniqueId}@example.com`;
   const password = 'Password123!';
 
   // 1. Inscription
@@ -30,9 +35,16 @@ export default function () {
     { headers: { 'Content-Type': 'application/json' } }
   );
 
-  check(registerRes, {
+  const registerOk = check(registerRes, {
     '✅ register status is 201': (r) => r.status === 201,
   });
+
+  // 🆕 Si l'inscription échoue, on arrête cette itération
+  if (!registerOk) {
+    console.error(`❌ Register failed for ${email}: ${registerRes.status}`);
+    sleep(0.1);
+    return;
+  }
 
   // ⏱️ Pause courte
   sleep(0.5);
@@ -44,7 +56,7 @@ export default function () {
     { headers: { 'Content-Type': 'application/json' } }
   );
 
-  check(loginRes, {
+  const loginOk = check(loginRes, {
     '✅ login status is 200': (r) => r.status === 200,
     '✅ login returns valid token': (r) => {
       try {
@@ -55,6 +67,13 @@ export default function () {
       }
     },
   });
+
+  // 🆕 Si la connexion échoue, on arrête
+  if (!loginOk) {
+    console.error(`❌ Login failed for ${email}: ${loginRes.status}`);
+    sleep(0.1);
+    return;
+  }
 
   // ⏱️ Pause finale
   sleep(0.5);

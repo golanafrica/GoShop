@@ -1,31 +1,51 @@
 package shophandler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
 	shopdto "Goshop/application/dto/shop_dto"
-	shopusecase "Goshop/application/usecase/shop_usecase"
+	"Goshop/domain/entity"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )
 
+// ============ INTERFACES POUR LES USECASES ============
+
+// CreateShopUseCaseInterface définit le contrat pour la création de shop
+type CreateShopUseCaseInterface interface {
+	Execute(ctx context.Context, name, slug, customDomain string) (*entity.Shop, error)
+}
+
+// ListShopsUseCaseInterface définit le contrat pour la liste des shops
+type ListShopsUseCaseInterface interface {
+	Execute(ctx context.Context) ([]*entity.Shop, error)
+}
+
+// UpdateShopUseCaseInterface définit le contrat pour la mise à jour de shop
+type UpdateShopUseCaseInterface interface {
+	Execute(ctx context.Context, shopID string, name *string, customDomain *string, plan *string, isActive *bool) (*entity.Shop, error)
+}
+
+// ============ HANDLER ============
+
 // ShopHandler gère les requêtes HTTP pour les boutiques
 type ShopHandler struct {
-	createUsecase *shopusecase.CreateShopUsecase
-	listUsecase   *shopusecase.ListShopsUsecase
-	updateUsecase *shopusecase.UpdateShopUsecase
+	createUsecase CreateShopUseCaseInterface
+	listUsecase   ListShopsUseCaseInterface
+	updateUsecase UpdateShopUseCaseInterface
 }
 
 // NewShopHandler crée une nouvelle instance du handler
 func NewShopHandler(
-	createUsecase *shopusecase.CreateShopUsecase,
-	listUsecase *shopusecase.ListShopsUsecase,
-	updateUsecase *shopusecase.UpdateShopUsecase,
+	createUsecase CreateShopUseCaseInterface,
+	listUsecase ListShopsUseCaseInterface,
+	updateUsecase UpdateShopUseCaseInterface,
 ) *ShopHandler {
 	return &ShopHandler{
 		createUsecase: createUsecase,
