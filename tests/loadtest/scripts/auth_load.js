@@ -12,10 +12,10 @@ export const options = {
     { duration: '20s', target: 0 },
   ],
   thresholds: {
-    // 🆕 Seuils réalistes pour environnement local avec 10+ VUs
-    'http_req_duration': ['p(95) < 5000'],  // Augmenté de 4000 à 5000ms
-    'http_req_failed': ['rate < 0.05'],     // Augmenté de 0.02 à 0.05 (5%)
-    'checks': ['rate > 0.90'],              // Diminué de 0.95 à 0.90 (90%)
+    // ✅ Seuils réalistes pour environnement local avec 10+ VUs
+    'http_req_duration': ['p(95) < 5000'],
+    'http_req_failed': ['rate < 0.05'],     // 5% d'erreurs tolérées
+    'checks': ['rate > 0.90'],              // 90% de réussite minimum
   },
 };
 
@@ -25,9 +25,10 @@ export default function () {
   const timestamp = Date.now();
   const vuId = __VU;
   const iter = __ITER;
-  const uniqueId = uuidv4().slice(0, 8); // 🆕 UUID pour garantir l'unicité
+  // 🆕 UUID plus long (12 chars) pour éviter les collisions
+  const uniqueId = uuidv4().replace(/-/g, '').slice(0, 12);
 
-  // 🆕 Email unique avec UUID pour éviter les collisions entre VUs
+  // 🆕 Email ultra-unique avec UUID de 12 caractères
   const email = `loadtest_${timestamp}_${vuId}_${iter}_${uniqueId}@example.com`;
   const password = 'Password123!';
 
@@ -46,7 +47,7 @@ export default function () {
     '✅ register status is 201': (r) => r.status === 201,
   });
 
-  // 🆕 Si l'inscription échoue, on arrête cette itération
+  // ✅ Early return si l'inscription échoue
   if (!registerOk) {
     console.error(`❌ Register failed for ${email}: ${registerRes.status}`);
     sleep(0.1);
@@ -75,7 +76,7 @@ export default function () {
     },
   });
 
-  // 🆕 Si la connexion échoue, on arrête
+  // ✅ Early return si la connexion échoue
   if (!loginOk) {
     console.error(`❌ Login failed for ${email}: ${loginRes.status}`);
     sleep(0.1);
