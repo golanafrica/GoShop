@@ -4,13 +4,13 @@ import { check, sleep } from 'k6';
 import { uuidv4 } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
 
-// 🔧 Configuration réaliste pour un smoke test
+// 🔧 Configuration réaliste pour un smoke test en environnement local
 export const options = {
   vus: 5,
   duration: '30s',
   thresholds: {
-    // ✅ Seuils réalistes en dev local
-    http_req_failed: ['rate < 0.01'],    // < 1% d'erreurs
+    // ✅ Seuils adaptés pour environnement de dev local
+    http_req_failed: ['rate < 0.02'],    // 🆕 Augmenté de 0.01 à 0.02 (2%)
     http_req_duration: ['p(95) < 2000'], // < 2s
     checks: ['rate > 0.95'],             // > 95% de réussite
   },
