@@ -113,6 +113,12 @@ func (a *App) setupRouter() {
 		a.Logger.Error().Err(err).Msg("Failed to register Orange Money provider")
 	}
 
+	// 🆕 Mock Moov Money Provider
+	moovMoneyProvider := mock.NewMoovMoneyProvider(mock.DefaultMoovMoneyConfig())
+	if err := paymentRegistry.Register(moovMoneyProvider); err != nil {
+		a.Logger.Error().Err(err).Msg("Failed to register Moov Money provider")
+	}
+
 	// -- Usecases
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
