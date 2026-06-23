@@ -1,0 +1,466 @@
+// tests/e2e/payment_flow_e2e_test.go
+package e2e
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"Goshop/tests/testutils"
+
+	"github.com/google/uuid"
+)
+
+// ============================================================================
+// 🔐 SECRETS WEBHOOK (doivent correspondre aux providers mock)
+// ============================================================================
+const (
+	orangeMoneyWebhookSecret = "orange_money_webhook_secret_dev_only_change_in_prod"
+	moovMoneyWebhookSecret   = "moov_money_webhook_secret_dev_only_change_in_prod"
+)
+
+// generateHMACSignature génère une signature HMAC-SHA256
+func generateHMACSignature(payload []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ============================================================================
+// 🧪 TEST PRINCIPAL : Flux de paiement complet
+// ============================================================================
+
+func TestPaymentFlowE2E(t *testing.T) {
+	t.Log(strings.Repeat("=", 70))
+	t.Log("💳 E2E TEST : Flux de paiement complet (Orange Money + Moov Money)")
+	t.Log(strings.Repeat("=", 70))
+
+	// Setup : serveur de test + client HTTP
+	server := testutils.NewTestServer(t)
+	client := testutils.NewHTTPClient(server.URL)
+
+	// ========================================================================
+	// ÉTAPE 0 : Authentification
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 0 : Authentification")
+	uniqueEmail := fmt.Sprintf("test.payment.%d.%s@example.com",
+		time.Now().UnixNano(), uuid.New().String()[:6])
+
+	// Inscription
+	userData := map[string]interface{}{
+		"email":    uniqueEmail,
+		"password": "Password123!",
+	}
+	resp := client.MustDoRequest(t, "POST", "/register", userData)
+	resp.Body.Close()
+	testutils.AssertStatus(t, resp, http.StatusCreated)
+
+	// Connexion
+	loginData := map[string]interface{}{
+		"email":    uniqueEmail,
+		"password": "Password123!",
+	}
+	resp = client.MustDoRequest(t, "POST", "/login", loginData)
+	var loginResp struct {
+		Token string `json:"token"`
+	}
+	testutils.ParseJSONBody(t, resp, &loginResp)
+	resp.Body.Close()
+	client.SetToken(loginResp.Token)
+	t.Log("✅ Authentification réussie")
+
+	// ========================================================================
+	// ÉTAPE 0.5 : Création d'un shop dédié au test
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 0.5 : Création du shop de test")
+	shopSlug := fmt.Sprintf("payment-test-%d", time.Now().UnixNano())
+	shopData := map[string]interface{}{
+		"name": "Payment Test Shop",
+		"slug": shopSlug,
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/shops", shopData)
+	resp.Body.Close()
+	testutils.AssertStatus(t, resp, http.StatusCreated)
+	client.SetDefaultHeader("X-Shop-Slug", shopSlug)
+	t.Logf("✅ Shop créé: %s", shopSlug)
+
+	// ========================================================================
+	// ÉTAPE 1 : Créer les données de base (customer + produit)
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 1 : Création des données de base")
+
+	// Customer
+	customerReq := map[string]interface{}{
+		"first_name": "Payment",
+		"last_name":  "Tester",
+		"email":      fmt.Sprintf("payment.tester.%d@example.com", time.Now().UnixNano()),
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/customers", customerReq)
+	customerID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+	t.Logf("✅ Customer créé: %s", customerID)
+
+	// Produit
+	productReq := map[string]interface{}{
+		"name":        "Test Product",
+		"description": "Product for payment testing",
+		"price_cents": 25000,
+		"stock":       10,
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/products", productReq)
+	productID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+	t.Logf("✅ Produit créé: %s", productID)
+
+	// Commande
+	orderReq := map[string]interface{}{
+		"customer_id": customerID,
+		"items": []map[string]interface{}{
+			{"product_id": productID, "quantity": 2},
+		},
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/orders", orderReq)
+	orderID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+	t.Logf("✅ Commande créée: %s", orderID)
+
+	// Vérifier que la commande est PENDING
+	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
+	var order map[string]interface{}
+	testutils.ParseJSONBody(t, resp, &order)
+	resp.Body.Close()
+
+	if order["status"] != "PENDING" {
+		t.Fatalf("❌ Commande devrait être PENDING, obtenu: %v", order["status"])
+	}
+	t.Log("✅ Commande en statut PENDING")
+
+	// ========================================================================
+	// ÉTAPE 2 : Test Orange Money
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 2 : Test paiement Orange Money")
+	testPaymentFlow(t, client, orderID, "orange_money", 25000, 3)
+
+	// ========================================================================
+	// ÉTAPE 3 : Créer une nouvelle commande pour Moov Money
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 3 : Test paiement Moov Money")
+	orderReq2 := map[string]interface{}{
+		"customer_id": customerID,
+		"items": []map[string]interface{}{
+			{"product_id": productID, "quantity": 1},
+		},
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/orders", orderReq2)
+	orderID2 := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+	t.Logf("✅ Nouvelle commande créée: %s", orderID2)
+
+	testPaymentFlow(t, client, orderID2, "moov_money", 25000, 4)
+
+	// ========================================================================
+	// ÉTAPE 4 : Test webhook HMAC
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 4 : Test validation HMAC webhook")
+	testWebhookHMAC(t, client)
+
+	// ========================================================================
+	// ÉTAPE 5 : Test isolation multi-tenant
+	// ========================================================================
+	t.Log("\n📋 ÉTAPE 5 : Test isolation multi-tenant")
+	testMultiTenantIsolation(t, client, shopSlug, orderID)
+
+	t.Log("\n" + strings.Repeat("=", 70))
+	t.Log("🎉 TOUS LES TESTS DE PAIEMENT PASSENT !")
+	t.Log(strings.Repeat("=", 70))
+}
+
+// ============================================================================
+// 🔧 HELPER : Test d'un flux de paiement complet
+// ============================================================================
+
+func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string, provider string, amountCents int64, expectedDelaySeconds int) {
+	t.Logf("  🔸 Initiation paiement %s pour commande %s", provider, orderID)
+
+	// Initier le paiement
+	payReq := map[string]interface{}{
+		"provider":     provider,
+		"phone_number": "+22670123456",
+		"description":  fmt.Sprintf("Test %s payment", provider),
+	}
+	resp := client.MustDoRequest(t, "POST", "/api/orders/"+orderID+"/pay", payReq)
+	testutils.AssertStatus(t, resp, http.StatusCreated)
+
+	var paymentInit struct {
+		PaymentID   string `json:"payment_id"`
+		ProviderRef string `json:"provider_ref"`
+		Status      string `json:"status"`
+		USSDCode    string `json:"ussd_code"`
+		Message     string `json:"message"`
+	}
+	testutils.ParseJSONBody(t, resp, &paymentInit)
+	resp.Body.Close()
+
+	if paymentInit.Status != "processing" {
+		t.Fatalf("❌ Paiement devrait être 'processing', obtenu: %s", paymentInit.Status)
+	}
+	t.Logf("  ✅ Paiement initié: %s (ref: %s)", paymentInit.PaymentID, paymentInit.ProviderRef)
+
+	// Vérifier immédiatement le statut (doit être processing)
+	resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
+	var paymentStatus map[string]interface{}
+	testutils.ParseJSONBody(t, resp, &paymentStatus)
+	resp.Body.Close()
+
+	if paymentStatus["status"] != "processing" {
+		t.Fatalf("❌ Statut immédiat devrait être 'processing', obtenu: %v", paymentStatus["status"])
+	}
+	t.Log("  ✅ Statut immédiat: processing")
+
+	// Attendre que le mock simule le succès
+	t.Logf("  ⏱️  Attente de %d secondes (délai mock %s)...", expectedDelaySeconds, provider)
+	time.Sleep(time.Duration(expectedDelaySeconds) * time.Second)
+
+	// Vérifier le statut après attente (doit être success)
+	resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
+	testutils.ParseJSONBody(t, resp, &paymentStatus)
+	resp.Body.Close()
+
+	if paymentStatus["status"] != "success" {
+		t.Fatalf("❌ Statut après attente devrait être 'success', obtenu: %v", paymentStatus["status"])
+	}
+	t.Log("  ✅ Statut après attente: success")
+
+	// Vérifier la cohérence des timestamps UTC
+	initiatedAt, _ := paymentStatus["initiated_at"].(string)
+	completedAt, _ := paymentStatus["completed_at"].(string)
+	if initiatedAt == "" || completedAt == "" {
+		t.Fatal("❌ Timestamps manquants")
+	}
+	t.Logf("  ✅ Timestamps UTC cohérents: %s → %s", initiatedAt, completedAt)
+
+	// Vérifier que la commande est passée à PAID
+	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
+	var updatedOrder map[string]interface{}
+	testutils.ParseJSONBody(t, resp, &updatedOrder)
+	resp.Body.Close()
+
+	if updatedOrder["status"] != "PAID" {
+		t.Fatalf("❌ Commande devrait être PAID, obtenu: %v", updatedOrder["status"])
+	}
+	t.Log("  ✅ Commande passée à PAID automatiquement")
+
+	// Tester le remboursement
+	t.Log("  🔸 Test du remboursement")
+	refundReq := map[string]interface{}{
+		"reason": "Test refund for E2E",
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
+	testutils.AssertStatus(t, resp, http.StatusOK)
+
+	var refundResp map[string]interface{}
+	testutils.ParseJSONBody(t, resp, &refundResp)
+	resp.Body.Close()
+
+	if refundResp["status"] != "refunded" {
+		t.Fatalf("❌ Paiement devrait être 'refunded', obtenu: %v", refundResp["status"])
+	}
+	t.Log("  ✅ Paiement remboursé avec succès")
+
+	// Vérifier que le double remboursement est rejeté
+	t.Log("  🔸 Vérification rejet double remboursement")
+	resp = client.DoRequest("POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("❌ Double remboursement devrait être rejeté")
+	}
+	resp.Body.Close()
+	t.Logf("  ✅ Double remboursement correctement rejeté (HTTP %d)", resp.StatusCode)
+
+	t.Logf("  🎉 Flux %s complet validé", provider)
+}
+
+// ============================================================================
+// 🔧 HELPER : Test validation HMAC webhook
+// ============================================================================
+
+func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
+	// Créer un paiement pour avoir un provider_ref valide
+	payReq := map[string]interface{}{
+		"provider":     "orange_money",
+		"phone_number": "+226709999999",
+		"description":  "Webhook HMAC test",
+	}
+
+	// Créer une commande d'abord
+	customerReq := map[string]interface{}{
+		"first_name": "Webhook",
+		"last_name":  "Test",
+		"email":      fmt.Sprintf("webhook.%d@example.com", time.Now().UnixNano()),
+	}
+	resp := client.MustDoRequest(t, "POST", "/api/customers", customerReq)
+	customerID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+
+	productReq := map[string]interface{}{
+		"name":        "Webhook Product",
+		"description": "For webhook test",
+		"price_cents": 10000,
+		"stock":       5,
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/products", productReq)
+	productID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+
+	orderReq := map[string]interface{}{
+		"customer_id": customerID,
+		"items": []map[string]interface{}{
+			{"product_id": productID, "quantity": 1},
+		},
+	}
+	resp = client.MustDoRequest(t, "POST", "/api/orders", orderReq)
+	orderID := testutils.ExtractID(t, resp)
+	resp.Body.Close()
+
+	resp = client.MustDoRequest(t, "POST", "/api/orders/"+orderID+"/pay", payReq)
+	var paymentInit struct {
+		PaymentID   string `json:"payment_id"`
+		ProviderRef string `json:"provider_ref"`
+	}
+	testutils.ParseJSONBody(t, resp, &paymentInit)
+	resp.Body.Close()
+
+	// TEST 1 : Webhook avec signature valide
+	webhookPayload := map[string]interface{}{
+		"event":        "payment.success",
+		"provider_ref": paymentInit.ProviderRef,
+		"external_id":  "WH-TEST-001",
+		"amount":       10000,
+		"status":       "success",
+	}
+	payloadBytes, _ := json.Marshal(webhookPayload)
+	validSignature := generateHMACSignature(payloadBytes, orangeMoneyWebhookSecret)
+
+	req, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Signature", validSignature)
+
+	resp2, err := client.DoRequestRaw(req)
+	if err != nil {
+		t.Fatalf("❌ Erreur requête webhook: %v", err)
+	}
+	resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("❌ Webhook avec signature valide devrait être accepté (200), obtenu: %d", resp2.StatusCode)
+	}
+	t.Log("  ✅ Webhook avec signature valide accepté (200)")
+
+	// TEST 2 : Webhook avec signature invalide
+	req2, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Signature", "invalid_signature_12345")
+
+	resp3, err := client.DoRequestRaw(req2)
+	if err != nil {
+		t.Fatalf("❌ Erreur requête webhook: %v", err)
+	}
+	resp3.Body.Close()
+
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("❌ Webhook avec signature invalide devrait être rejeté (400), obtenu: %d", resp3.StatusCode)
+	}
+	t.Log("  ✅ Webhook avec signature invalide rejeté (400)")
+
+	// TEST 3 : Webhook sans signature
+	req3, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req3.Header.Set("Content-Type", "application/json")
+
+	resp4, err := client.DoRequestRaw(req3)
+	if err != nil {
+		t.Fatalf("❌ Erreur requête webhook: %v", err)
+	}
+	resp4.Body.Close()
+
+	if resp4.StatusCode != http.StatusBadRequest {
+		t.Fatalf("❌ Webhook sans signature devrait être rejeté (400), obtenu: %d", resp4.StatusCode)
+	}
+	t.Log("  ✅ Webhook sans signature rejeté (400)")
+
+	// TEST 4 : Payload modifié (tampering)
+	originalPayload := `{"event":"payment.success","provider_ref":"OM-123","amount":10000,"status":"success"}`
+	originalSignature := generateHMACSignature([]byte(originalPayload), orangeMoneyWebhookSecret)
+	tamperedPayload := `{"event":"payment.success","provider_ref":"OM-123","amount":999999,"status":"success"}`
+
+	req4, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(tamperedPayload))
+	req4.Header.Set("Content-Type", "application/json")
+	req4.Header.Set("X-Signature", originalSignature)
+
+	resp5, err := client.DoRequestRaw(req4)
+	if err != nil {
+		t.Fatalf("❌ Erreur requête webhook: %v", err)
+	}
+	resp5.Body.Close()
+
+	if resp5.StatusCode != http.StatusBadRequest {
+		t.Fatalf("❌ Webhook avec payload modifié devrait être rejeté (400), obtenu: %d", resp5.StatusCode)
+	}
+	t.Log("  ✅ Payload tampering détecté et rejeté (400)")
+}
+
+// ============================================================================
+// 🔧 HELPER : Test isolation multi-tenant
+// ============================================================================
+
+func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, originalShopSlug string, orderID string) {
+	// Créer un 2ème shop
+	shop2Slug := fmt.Sprintf("payment-test-2-%d", time.Now().UnixNano())
+	shop2Data := map[string]interface{}{
+		"name": "Payment Test Shop 2",
+		"slug": shop2Slug,
+	}
+	resp := client.MustDoRequest(t, "POST", "/api/shops", shop2Data)
+	resp.Body.Close()
+	testutils.AssertStatus(t, resp, http.StatusCreated)
+
+	// Changer le header pour utiliser le 2ème shop
+	client.SetDefaultHeader("X-Shop-Slug", shop2Slug)
+
+	// Tenter de lire la commande du 1er shop
+	resp = client.DoRequest("GET", "/api/orders/"+orderID, nil)
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("❌ VULNÉRABILITÉ : Commande d'un autre shop accessible !")
+	}
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("❌ Attendu 404, obtenu: %d", resp.StatusCode)
+	}
+	t.Log("  ✅ Isolation multi-tenant respectée (404 sur autre shop)")
+
+	// Tenter de lister les paiements du 1er shop
+	resp = client.DoRequest("GET", "/api/payments", nil)
+	var payments []interface{}
+	testutils.ParseJSONBody(t, resp, &payments)
+	resp.Body.Close()
+
+	if len(payments) > 0 {
+		t.Fatalf("❌ VULNÉRABILITÉ : %d paiements visibles depuis l'autre shop", len(payments))
+	}
+	t.Log("  ✅ Aucun paiement du 1er shop visible depuis le 2ème")
+
+	// Revenir au shop original
+	client.SetDefaultHeader("X-Shop-Slug", originalShopSlug)
+
+	// Vérifier qu'on peut toujours accéder à la commande originale
+	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
+	resp.Body.Close()
+	testutils.AssertStatus(t, resp, http.StatusOK)
+	t.Log("  ✅ Retour au shop original : accès restauré")
+}
