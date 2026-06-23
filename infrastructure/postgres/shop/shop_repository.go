@@ -11,8 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-//go:generate mockgen -destination=../../../mocks/repository/mock_shop_repository.go -package=repository . ShopRepository
-
 type ShopRepositoryInfrastructure struct {
 	db *sql.DB
 	tx repository.Tx

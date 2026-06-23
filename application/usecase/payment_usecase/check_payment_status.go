@@ -3,6 +3,7 @@ package paymentusecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
@@ -17,16 +18,19 @@ import (
 // CheckPaymentStatusUsecase vérifie le statut d'un paiement
 type CheckPaymentStatusUsecase struct {
 	paymentRepo repository.PaymentRepository
+	orderRepo   repository.OrderRepository
 	registry    *payment.Registry
 }
 
 // NewCheckPaymentStatusUsecase crée une nouvelle instance
 func NewCheckPaymentStatusUsecase(
 	paymentRepo repository.PaymentRepository,
+	orderRepo repository.OrderRepository,
 	registry *payment.Registry,
 ) *CheckPaymentStatusUsecase {
 	return &CheckPaymentStatusUsecase{
 		paymentRepo: paymentRepo,
+		orderRepo:   orderRepo,
 		registry:    registry,
 	}
 }
@@ -63,6 +67,18 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 				case entity.PaymentStatusSuccess:
 					if err := paymentEntity.MarkSuccess(*paymentEntity.ProviderRef); err == nil {
 						_ = uc.paymentRepo.Update(ctx, paymentEntity)
+
+						// Mettre à jour le statut de la commande vers PAID
+						if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, "PAID"); err != nil {
+							logger.Error().Err(err).
+								Str("order_id", paymentEntity.OrderID.String()).
+								Msg("Failed to update order status to PAID")
+						} else {
+							logger.Info().
+								Str("order_id", paymentEntity.OrderID.String()).
+								Str("payment_id", paymentID).
+								Msg("Order status updated to PAID")
+						}
 					}
 				case entity.PaymentStatusFailed:
 					if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
@@ -82,6 +98,11 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 	return mapPaymentToResponse(paymentEntity), nil
 }
 
+// formatTimeUTC formate un time.Time en UTC
+func formatTimeUTC(t time.Time) string {
+	return t.UTC().Format("2006-01-02 15:04:05")
+}
+
 func mapPaymentToResponse(p *entity.Payment) *paymentdto.PaymentResponse {
 	resp := &paymentdto.PaymentResponse{
 		ID:          p.ID.String(),
@@ -90,7 +111,7 @@ func mapPaymentToResponse(p *entity.Payment) *paymentdto.PaymentResponse {
 		AmountCents: p.AmountCents,
 		Currency:    p.Currency,
 		Status:      p.Status,
-		CreatedAt:   p.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:   formatTimeUTC(p.CreatedAt), // ✅ UTC explicite
 	}
 
 	if p.ProviderRef != nil {
@@ -103,10 +124,10 @@ func mapPaymentToResponse(p *entity.Payment) *paymentdto.PaymentResponse {
 		resp.Description = *p.Description
 	}
 	if p.InitiatedAt != nil {
-		resp.InitiatedAt = p.InitiatedAt.Format("2006-01-02 15:04:05")
+		resp.InitiatedAt = formatTimeUTC(*p.InitiatedAt) // ✅ UTC explicite
 	}
 	if p.CompletedAt != nil {
-		resp.CompletedAt = p.CompletedAt.Format("2006-01-02 15:04:05")
+		resp.CompletedAt = formatTimeUTC(*p.CompletedAt) // ✅ UTC explicite
 	}
 
 	return resp

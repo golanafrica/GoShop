@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type OrderPostgresInfra struct {
@@ -428,4 +430,25 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 	}
 
 	return orders, nil
+}
+
+// UpdateStatus met à jour le statut d'une commande
+func (r *OrderPostgresInfra) UpdateStatus(ctx context.Context, orderID uuid.UUID, status string) error {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return err
+	}
+
+	query := `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 AND shop_id = $3`
+	result, err := r.execContext(ctx, query, status, orderID.String(), shopID)
+	if err != nil {
+		return fmt.Errorf("update order status: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("order not found")
+	}
+
+	return nil
 }

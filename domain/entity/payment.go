@@ -91,7 +91,7 @@ func NewPayment(shopID, orderID uuid.UUID, provider PaymentProvider, amountCents
 		return nil, errors.New("payment amount must be positive")
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()                // ✅ UTC explicite
 	expiresAt := now.Add(30 * time.Minute) // Expiration par défaut : 30 min
 
 	return &Payment{
@@ -114,7 +114,7 @@ func (p *Payment) MarkProcessing() error {
 	if !p.IsValidStatusTransition(PaymentStatusProcessing) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusProcessing
 	p.InitiatedAt = &now
 	p.UpdatedAt = now
@@ -126,7 +126,7 @@ func (p *Payment) MarkSuccess(providerRef string) error {
 	if !p.IsValidStatusTransition(PaymentStatusSuccess) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusSuccess
 	p.ProviderRef = &providerRef
 	p.CompletedAt = &now
@@ -139,7 +139,7 @@ func (p *Payment) MarkFailed(reason string) error {
 	if !p.IsValidStatusTransition(PaymentStatusFailed) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusFailed
 	p.UpdatedAt = now
 	if p.Metadata == nil {
@@ -154,7 +154,7 @@ func (p *Payment) MarkRefunded() error {
 	if !p.IsValidStatusTransition(PaymentStatusRefunded) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusRefunded
 	p.CompletedAt = &now
 	p.UpdatedAt = now
@@ -166,7 +166,7 @@ func (p *Payment) MarkCancelled() error {
 	if !p.IsValidStatusTransition(PaymentStatusCancelled) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusCancelled
 	p.UpdatedAt = now
 	return nil
@@ -177,7 +177,7 @@ func (p *Payment) MarkExpired() error {
 	if !p.IsValidStatusTransition(PaymentStatusExpired) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now()
+	now := time.Now().UTC() // ✅ UTC explicite
 	p.Status = PaymentStatusExpired
 	p.UpdatedAt = now
 	return nil
@@ -199,5 +199,5 @@ func (p *Payment) IsExpired() bool {
 	if p.ExpiresAt == nil {
 		return false
 	}
-	return time.Now().After(*p.ExpiresAt) && !p.IsTerminal()
+	return time.Now().UTC().After(*p.ExpiresAt) && !p.IsTerminal() // ✅ UTC explicite
 }

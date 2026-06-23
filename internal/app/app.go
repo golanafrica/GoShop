@@ -13,7 +13,14 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
+
+	// ✅ FIX : Renommage des imports pour éviter le conflit
+	paymentinfra "Goshop/infrastructure/payment"
+	"Goshop/infrastructure/payment/mock"
+	paymentpostgres "Goshop/infrastructure/postgres/payment"
+
 	authrefreshrepositoryinfra "Goshop/infrastructure/postgres/auth_refresh_repository_infra"
 	"Goshop/infrastructure/postgres/customer"
 	"Goshop/infrastructure/postgres/order"
@@ -27,6 +34,7 @@ import (
 	handlers "Goshop/interfaces/handler"
 	customerhandler "Goshop/interfaces/handler/customer_handler"
 	"Goshop/interfaces/handler/orders"
+	paymenthandler "Goshop/interfaces/handler/payment_handler"
 	productHandler "Goshop/interfaces/handler/product"
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
 	shophandler "Goshop/interfaces/handler/shop_handler"
@@ -93,6 +101,18 @@ func (a *App) setupRouter() {
 	refreshSessionRepo := authrefreshrepositoryinfra.NewRefreshSessionPostgres(a.DB)
 	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
+	// ✅ FIX : Utilisation de l'alias paymentpostgres
+	paymentRepo := paymentpostgres.NewPaymentRepositoryPostgres(a.DB)
+
+	// ✅ FIX : Utilisation de l'alias paymentinfra
+	paymentRegistry := paymentinfra.NewRegistry()
+
+	// Mock Orange Money Provider
+	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
+	if err := paymentRegistry.Register(orangeMoneyProvider); err != nil {
+		a.Logger.Error().Err(err).Msg("Failed to register Orange Money provider")
+	}
+
 	// -- Usecases
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
@@ -108,6 +128,29 @@ func (a *App) setupRouter() {
 	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo)
 	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
 	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
+
+	// Payment Usecases
+	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecase(
+		paymentRepo,
+		postgresOrderRepo,
+		paymentRegistry,
+	)
+	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
+		paymentRepo,
+		postgresOrderRepo,
+		paymentRegistry,
+	)
+	listPaymentsUC := paymentusecase.NewListPaymentsUsecase(paymentRepo)
+	refundPaymentUC := paymentusecase.NewRefundPaymentUsecase(
+		paymentRepo,
+		paymentRegistry,
+	)
+	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
+		paymentRepo,
+		paymentRegistry,
+		a.DB,
+		shopRepo,
+	)
 
 	// -- Handlers
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -142,6 +185,15 @@ func (a *App) setupRouter() {
 		updateShopUsecase,
 	)
 
+	// Payment Handlers
+	paymentHandler := paymenthandler.NewPaymentHandler(
+		initiatePaymentUC,
+		checkPaymentStatusUC,
+		listPaymentsUC,
+		refundPaymentUC,
+	)
+	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
+
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
 
@@ -159,27 +211,26 @@ func (a *App) setupRouter() {
 	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/swagger/*", httpSwagger.Handler())
 
+	// Webhooks (public, pas d'auth requise)
+	r.Post("/webhooks/{provider}", middl.ErrorHandler(webhookHandler.HandleWebhook))
+
 	// ============ 4. ROUTE PROTÉGÉE (user authentifié) ============
 	r.With(middleware.AuthMiddleware).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
-		// Authentification obligatoire pour toutes les routes /api
 		r.Use(middleware.AuthMiddleware)
 
-		// ⭐ Routes de gestion des shops (SANS TenantResolver)
-		// Ces routes ne nécessitent PAS de shop dans le contexte
+		// Routes de gestion des shops (SANS TenantResolver)
 		r.Route("/shops", func(r chi.Router) {
 			r.Post("/", middl.ErrorHandler(shopHandler.CreateShop))
 			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
 			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
 		})
 
-		// ⭐ Routes multi-tenant (AVEC TenantResolver)
-		// Utilisation de Group() pour ajouter un middleware à un sous-groupe
+		// Routes multi-tenant (AVEC TenantResolver)
 		r.Group(func(r chi.Router) {
-			// Multi-tenant middleware : résout le shop depuis Host ou X-Shop-Slug
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 
 			// Products
@@ -205,6 +256,16 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
 				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
 				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
+
+				// Payment initiation
+				r.Post("/{id}/pay", middl.ErrorHandler(paymentHandler.InitiatePayment))
+			})
+
+			// Payments
+			r.Route("/payments", func(r chi.Router) {
+				r.Get("/", middl.ErrorHandler(paymentHandler.ListPayments))
+				r.Get("/{id}", middl.ErrorHandler(paymentHandler.GetPayment))
+				r.Post("/{id}/refund", middl.ErrorHandler(paymentHandler.RefundPayment))
 			})
 		})
 	})
@@ -214,7 +275,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (multi-tenant activé)")
+		Msg("✅ Router configuré avec succès (multi-tenant + payment activés)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

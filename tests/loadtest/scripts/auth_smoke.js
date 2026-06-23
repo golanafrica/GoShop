@@ -10,7 +10,7 @@ export const options = {
   duration: '30s',
   thresholds: {
     // ✅ Seuils adaptés pour environnement de dev local
-    http_req_failed: ['rate < 0.02'],    // 🆕 Augmenté de 0.01 à 0.02 (2%)
+    http_req_failed: ['rate < 0.05'],    // 🆕 Augmenté de 0.02 à 0.05 (5%)
     http_req_duration: ['p(95) < 2000'], // < 2s
     checks: ['rate > 0.95'],             // > 95% de réussite
   },

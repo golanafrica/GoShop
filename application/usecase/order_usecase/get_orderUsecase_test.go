@@ -21,17 +21,15 @@ import (
 // testShopAll est le shop utilisé pour ce test
 var testShopAll = &entity.Shop{
 	ID:       uuid.MustParse("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
-	Name:     "Test Shop",
-	Slug:     "test-shop",
+	Name:     "Demo Shop",
+	Slug:     "demo", // ✅ Même slug que le shop existant
 	IsActive: true,
 }
 
 func TestGetAllOrderUsecase_Integration(t *testing.T) {
-	// Setup
-	db := setupTestDB_Get()
+	db := setupTestDB()
 	defer db.Close()
 
-	// ✅ Contexte avec tenant (au lieu de context.Background())
 	ctx := tenant.WithTenant(context.Background(), testShopAll)
 
 	// --- Initialisation des repositories ---
@@ -92,18 +90,35 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	}
 
 	// --- 4. Récupérer toutes les commandes ---
-	orders, err := getAllUsecase.Execute(ctx)
+	allOrders, err := getAllUsecase.Execute(ctx)
 	assert.NoError(t, err)
-	assert.True(t, len(orders) >= 2, "on doit avoir au moins 2 commandes")
+	assert.True(t, len(allOrders) >= 2, "on doit avoir au moins 2 commandes")
 
-	// --- Vérification basique ---
-	for _, o := range orders {
+	// ✅ FIX : Filtrer uniquement les commandes créées par CE test
+	// (celles qui appartiennent au customer du test)
+	testOrders := make([]*entity.Order, 0)
+	for _, o := range allOrders {
+		if o.CustomerID == createdCustomer.ID {
+			testOrders = append(testOrders, o)
+		}
+	}
+
+	assert.Equal(t, 2, len(testOrders),
+		"on doit avoir exactement 2 commandes pour ce customer")
+
+	// --- Vérification basique sur les commandes du test uniquement ---
+	for _, o := range testOrders {
 		assert.NotEmpty(t, o.ID)
-		assert.NotEmpty(t, o.CustomerID)
-		assert.Equal(t, "PENDING", o.Status)
-		assert.True(t, o.TotalCents > 0)
+		assert.Equal(t, createdCustomer.ID, o.CustomerID,
+			"la commande doit appartenir au customer du test")
+		assert.Equal(t, "PENDING", o.Status,
+			"la commande doit être en PENDING (pas encore payée)")
+		assert.Equal(t, int64(20000), o.TotalCents,
+			"le total doit être 20000")
 		assert.True(t, len(o.Items) > 0)
 	}
 
-	fmt.Println("✅ GetAllOrderUsecase fonctionne, commandes trouvées :", len(orders))
+	fmt.Printf("✅ GetAllOrderUsecase fonctionne\n")
+	fmt.Printf("   - Total commandes dans le shop : %d\n", len(allOrders))
+	fmt.Printf("   - Commandes créées par ce test : %d\n", len(testOrders))
 }

@@ -2,8 +2,11 @@ package mock
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"sync"
@@ -13,9 +16,12 @@ import (
 	"Goshop/infrastructure/payment"
 )
 
+// MockWebhookSecret est la clé secrète pour la validation HMAC
+// En production, cette valeur vient de la configuration/env
+// ⚠️  NE JAMAIS committer la vraie clé en production
+const MockWebhookSecret = "orange_money_webhook_secret_dev_only_change_in_prod"
+
 // OrangeMoneyProvider est un mock du provider Orange Money
-// Il simule parfaitement le comportement d'un vrai provider
-// pour permettre le développement et les tests sans API réelle
 type OrangeMoneyProvider struct {
 	mu           sync.RWMutex
 	payments     map[string]*mockPayment
@@ -87,7 +93,7 @@ func (p *OrangeMoneyProvider) InitiatePayment(ctx context.Context, req *payment.
 		Amount:    req.AmountCents,
 		Phone:     req.PhoneNumber,
 		Status:    entity.PaymentStatusProcessing,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().UTC(),
 		Metadata:  req.Metadata,
 	}
 	p.mu.Unlock()
@@ -96,7 +102,7 @@ func (p *OrangeMoneyProvider) InitiatePayment(ctx context.Context, req *payment.
 		go p.simulateCompletion(ref, req.CallbackURL)
 	}
 
-	expiresAt := time.Now().Add(30 * time.Minute).Unix()
+	expiresAt := time.Now().UTC().Add(30 * time.Minute).Unix()
 
 	return &payment.PaymentResponse{
 		ProviderRef: ref,
@@ -111,8 +117,6 @@ func (p *OrangeMoneyProvider) InitiatePayment(ctx context.Context, req *payment.
 }
 
 // simulateCompletion simule la complétion d'un paiement
-// simulateCompletion simule la complétion d'un paiement
-// callbackURL est utilisé pour simuler la notification au marchand
 func (p *OrangeMoneyProvider) simulateCompletion(ref, callbackURL string) {
 	time.Sleep(p.successDelay)
 
@@ -124,21 +128,19 @@ func (p *OrangeMoneyProvider) simulateCompletion(ref, callbackURL string) {
 		return
 	}
 
-	// Simulation d'échec aléatoire selon failureRate
+	now := time.Now().UTC()
+
 	if p.failureRate > 0 && randFloat() < p.failureRate {
 		mp.Status = entity.PaymentStatusFailed
-		now := time.Now()
 		mp.CompletedAt = &now
 		mp.Metadata["failure_reason"] = "insufficient_funds"
-		mp.Metadata["callback_url"] = callbackURL // ✅ Utilisé pour debug
+		mp.Metadata["callback_url"] = callbackURL
 		return
 	}
 
-	// Succès
 	mp.Status = entity.PaymentStatusSuccess
-	now := time.Now()
 	mp.CompletedAt = &now
-	mp.Metadata["callback_url"] = callbackURL // ✅ Utilisé pour debug
+	mp.Metadata["callback_url"] = callbackURL
 }
 
 // CheckStatus vérifie le statut d'un paiement
@@ -160,9 +162,6 @@ func (p *OrangeMoneyProvider) CheckStatus(ctx context.Context, providerRef strin
 		completedAt = mp.CompletedAt.Unix()
 	}
 
-	// ✅ FIX : Utiliser le type complet payment.PaymentStatus
-	// La variable locale s'appelle maintenant "mp" (mock payment)
-	// donc "payment.PaymentStatus" fait bien référence au package
 	return &payment.PaymentStatus{
 		ProviderRef:   providerRef,
 		Status:        mp.Status,
@@ -173,24 +172,69 @@ func (p *OrangeMoneyProvider) CheckStatus(ctx context.Context, providerRef strin
 	}, nil
 }
 
-// ValidateWebhook valide un webhook (simulé)
+// ValidateWebhook valide un webhook avec HMAC-SHA256
 func (p *OrangeMoneyProvider) ValidateWebhook(ctx context.Context, payload []byte, signature string) (*payment.WebhookEvent, error) {
 	if !p.available {
 		return nil, payment.ErrProviderUnavailable
 	}
 
+	// ✅ VALIDATION HMAC-SHA256
+	if signature == "" {
+		return nil, fmt.Errorf("missing webhook signature")
+	}
+
+	// Calculer le HMAC attendu
+	mac := hmac.New(sha256.New, []byte(MockWebhookSecret))
+	mac.Write(payload)
+	expectedMAC := hex.EncodeToString(mac.Sum(nil))
+
+	// Comparaison sécurisée (timing-safe)
+	if !hmac.Equal([]byte(signature), []byte(expectedMAC)) {
+		return nil, fmt.Errorf("invalid webhook signature")
+	}
+
+	// Parser le payload JSON
+	var webhookData struct {
+		EventType   string `json:"event"`
+		ProviderRef string `json:"provider_ref"`
+		ExternalID  string `json:"external_id"`
+		Amount      int64  `json:"amount"`
+		Status      string `json:"status"`
+	}
+
+	if err := json.Unmarshal(payload, &webhookData); err != nil {
+		return nil, fmt.Errorf("invalid webhook payload: %w", err)
+	}
+
+	if webhookData.ProviderRef == "" {
+		return nil, fmt.Errorf("missing provider_ref in webhook")
+	}
+
+	status := entity.PaymentStatus(webhookData.Status)
+	if status == "" {
+		status = entity.PaymentStatusSuccess
+	}
+
 	return &payment.WebhookEvent{
 		Provider:    entity.ProviderOrangeMoney,
-		EventType:   "payment.success",
-		ProviderRef: "MOCK-REF-" + generateMockRef(""),
-		ExternalID:  "WH-" + generateMockRef(""),
+		EventType:   webhookData.EventType,
+		ProviderRef: webhookData.ProviderRef,
+		ExternalID:  webhookData.ExternalID,
 		Payload:     payload,
 		Signature:   signature,
-		Status:      entity.PaymentStatusSuccess,
+		Status:      status,
+		AmountCents: webhookData.Amount,
 		Metadata: map[string]interface{}{
 			"mock": true,
 		},
 	}, nil
+}
+
+// GenerateWebhookSignature génère une signature HMAC pour les tests
+func GenerateWebhookSignature(payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(MockWebhookSecret))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // Refund simule un remboursement
@@ -216,7 +260,7 @@ func (p *OrangeMoneyProvider) Refund(ctx context.Context, providerRef string, am
 	}
 
 	mp.Status = entity.PaymentStatusRefunded
-	now := time.Now()
+	now := time.Now().UTC()
 	mp.CompletedAt = &now
 	mp.Metadata["refund_amount"] = amountCents
 
@@ -267,8 +311,6 @@ func getStringFromMap(m map[string]interface{}, key string) string {
 	return ""
 }
 
-// randFloat retourne un float64 entre 0 et 1
-// ✅ FIX : Utilisation de crypto/rand pour générer un entier puis conversion
 func randFloat() float64 {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {

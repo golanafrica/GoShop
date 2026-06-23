@@ -16,6 +16,12 @@ func Connect(connStr string) (*sql.DB, error) {
 		return nil, fmt.Errorf("erreur ouverture de la base de donnée: %v", err)
 	}
 
+	// ✅ NOUVEAU : Forcer UTC pour tous les timestamps
+	_, err = db.Exec("SET TIME ZONE 'UTC'")
+	if err != nil {
+		return nil, fmt.Errorf("set timezone UTC: %w", err)
+	}
+
 	// ⚡ CONFIGURATION CRITIQUE DU POOL ⚡
 	db.SetMaxOpenConns(50)                 // Max connections ouvertes
 	db.SetMaxIdleConns(25)                 // 50% de MaxOpenConns
@@ -30,7 +36,7 @@ func Connect(connStr string) (*sql.DB, error) {
 	// Monitoring du pool
 	go monitorConnectionPool(db)
 
-	log.Println("✅ Connexion PostgreSQL réussie avec pool configuré")
+	log.Println("✅ Connexion PostgreSQL réussie avec pool configuré (UTC)")
 	return db, nil
 }
 
