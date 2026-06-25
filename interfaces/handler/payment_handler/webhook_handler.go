@@ -49,6 +49,7 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		entity.ProviderOrangeMoney: true,
 		entity.ProviderMoovMoney:   true,
 		entity.ProviderWave:        true,
+		entity.ProviderYengaPay:    true,
 		entity.ProviderMock:        true,
 	}
 	if !validProviders[provider] {

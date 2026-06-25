@@ -27,6 +27,7 @@ const (
 	ProviderOrangeMoney PaymentProvider = "orange_money"
 	ProviderMoovMoney   PaymentProvider = "moov_money"
 	ProviderWave        PaymentProvider = "wave"
+	ProviderYengaPay    PaymentProvider = "yenga_pay"
 	ProviderCash        PaymentProvider = "cash"
 	ProviderMock        PaymentProvider = "mock"
 )

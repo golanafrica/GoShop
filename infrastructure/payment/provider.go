@@ -83,3 +83,18 @@ type Provider interface {
 	// IsAvailable vérifie si le provider est disponible
 	IsAvailable(ctx context.Context) bool
 }
+
+// 🆕 ProviderCompletable est l'interface optionnelle pour les providers qui supportent la complétion
+// (utilisé par Yenga Pay pour le flux TWO_STEP avec OTP)
+type ProviderCompletable interface {
+	CompletePayment(ctx context.Context, paymentIntentID, operatorCode, customerMSISDN, otp string) (*CompletePaymentResponse, error)
+}
+
+// CompletePaymentResponse représente la réponse de complétion d'un paiement
+type CompletePaymentResponse struct {
+	Status        string
+	TransactionID string
+	Amount        int64
+	Fees          int64
+	TotalAmount   int64
+}

@@ -52,21 +52,18 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		Msg("Initiating payment")
 
 	// 2. Valider et convertir l'OrderID en UUID
-	// (Order.ID est une string en base, mais on a besoin du UUID pour Payment)
 	orderUUID, err := uuid.Parse(req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order_id: %w", err)
 	}
 
 	// 3. Récupérer la commande
-	// ✅ OrderRepository.FindByID attend une string
 	order, err := uc.orderRepo.FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
 	// 4. Vérifier que la commande n'a pas déjà un paiement réussi
-	// ✅ PaymentRepository.FindByOrderID attend un uuid.UUID
 	existingPayments, err := uc.paymentRepo.FindByOrderID(ctx, orderUUID)
 	if err != nil {
 		return nil, fmt.Errorf("check existing payments: %w", err)
@@ -85,7 +82,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	}
 
 	// 6. Créer l'entité Payment
-	// ✅ entity.NewPayment attend uuid.UUID pour orderID
 	newPayment, err := entity.NewPayment(shop.ID, orderUUID, req.Provider, totalCents)
 	if err != nil {
 		return nil, fmt.Errorf("create payment entity: %w", err)
@@ -111,7 +107,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	}
 
 	// 9. Initier le paiement auprès du provider
-	// ✅ order.ID est déjà une string, pas besoin de .String()
 	providerReq := &payment.PaymentRequest{
 		PaymentID:   newPayment.ID.String(),
 		AmountCents: totalCents,
@@ -121,9 +116,16 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		Description: req.Description,
 		CallbackURL: req.CallbackURL,
 		Metadata: map[string]interface{}{
-			"order_id": order.ID, // ✅ string directement
+			"order_id": order.ID,
 			"shop_id":  shop.ID.String(),
 		},
+	}
+
+	// Fusionner les metadata de la requête (pour Yenga Pay : operator, flow, etc.)
+	if req.Metadata != nil {
+		for k, v := range req.Metadata {
+			providerReq.Metadata[k] = v
+		}
 	}
 
 	providerResp, err := provider.InitiatePayment(ctx, providerReq)
@@ -139,9 +141,23 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	}
 
 	// 10. Mettre à jour le paiement avec la référence provider
-	newPayment.ProviderRef = &providerResp.ProviderRef
-	if err := newPayment.MarkProcessing(); err != nil {
-		return nil, fmt.Errorf("mark payment as processing: %w", err)
+	// 🆕 FIX : Ne sauvegarder le provider_ref que s'il n'est pas vide
+	// (évite la violation de contrainte UNIQUE pour le flux ONE_STEP sans OTP)
+	if providerResp.ProviderRef != "" {
+		newPayment.ProviderRef = &providerResp.ProviderRef
+	}
+
+	// 🆕 FIX : Ne passer en PROCESSING que si on a un provider_ref
+	// Sinon, rester en PENDING (cas du flux ONE_STEP sans OTP)
+	if providerResp.ProviderRef != "" {
+		if err := newPayment.MarkProcessing(); err != nil {
+			return nil, fmt.Errorf("mark payment as processing: %w", err)
+		}
+	}
+
+	// 🆕 SAUVEGARDER LES METADATA dans l'entité Payment (nécessaire pour TWO_STEP)
+	if providerResp.Metadata != nil {
+		newPayment.Metadata = providerResp.Metadata
 	}
 
 	if err := uc.paymentRepo.Update(ctx, newPayment); err != nil {
@@ -170,6 +186,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		RedirectURL: providerResp.RedirectURL,
 		ExpiresAt:   expiresAt,
 		Message:     getMessageFromMetadata(providerResp.Metadata),
+		Metadata:    providerResp.Metadata,
 	}, nil
 }
 

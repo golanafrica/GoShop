@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
@@ -37,6 +38,11 @@ type RefundPaymentUseCaseInterface interface {
 	Execute(ctx context.Context, req *paymentdto.RefundPaymentRequest) (*paymentdto.PaymentResponse, error)
 }
 
+// CompletePaymentUseCaseInterface définit le contrat
+type CompletePaymentUseCaseInterface interface {
+	Execute(ctx context.Context, req *paymentdto.CompletePaymentRequest) (*paymentdto.PaymentResponse, error)
+}
+
 // ============ HANDLER ============
 
 // PaymentHandler gère les requêtes HTTP pour les paiements
@@ -45,6 +51,7 @@ type PaymentHandler struct {
 	checkUC    CheckPaymentStatusUseCaseInterface
 	listUC     ListPaymentsUseCaseInterface
 	refundUC   RefundPaymentUseCaseInterface
+	completeUC CompletePaymentUseCaseInterface // 🆕 Ajouté
 }
 
 // NewPaymentHandler crée une nouvelle instance
@@ -53,12 +60,14 @@ func NewPaymentHandler(
 	checkUC CheckPaymentStatusUseCaseInterface,
 	listUC ListPaymentsUseCaseInterface,
 	refundUC RefundPaymentUseCaseInterface,
+	completeUC CompletePaymentUseCaseInterface, // 🆕 Ajouté
 ) *PaymentHandler {
 	return &PaymentHandler{
 		initiateUC: initiateUC,
 		checkUC:    checkUC,
 		listUC:     listUC,
 		refundUC:   refundUC,
+		completeUC: completeUC,
 	}
 }
 
@@ -67,7 +76,6 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Récupérer l'order_id depuis l'URL
 	orderID := chi.URLParam(r, "id")
 	if orderID == "" {
 		return utils.ErrInvalidPayload
@@ -79,7 +87,6 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 		return utils.ErrInvalidPayload
 	}
 
-	// Injecter l'order_id depuis l'URL
 	req.OrderID = orderID
 
 	if err := req.Validate(); err != nil {
@@ -142,7 +149,6 @@ func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) er
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Parser les query params
 	req := &paymentusecase.ListPaymentsRequest{
 		Limit:  50,
 		Offset: 0,
@@ -203,6 +209,51 @@ func (h *PaymentHandler) RefundPayment(w http.ResponseWriter, r *http.Request) e
 			return utils.ErrForbidden
 		default:
 			return utils.NewAppError("REFUND_FAILED", errMsg, http.StatusBadRequest)
+		}
+	}
+
+	utils.WriteJSON(w, http.StatusOK, resp)
+	return nil
+}
+
+// CompletePayment complète un paiement TWO_STEP avec OTP
+func (h *PaymentHandler) CompletePayment(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	paymentID := chi.URLParam(r, "id")
+	if paymentID == "" {
+		return utils.ErrInvalidPayload
+	}
+
+	var req paymentdto.CompletePaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error().Err(err).Msg("Invalid JSON payload")
+		return utils.ErrInvalidPayload
+	}
+
+	req.PaymentID = paymentID
+
+	if err := req.Validate(); err != nil {
+		logger.Warn().Err(err).Msg("Validation failed")
+		return utils.ErrValidationFailed
+	}
+
+	resp, err := h.completeUC.Execute(ctx, &req)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to complete payment")
+
+		errMsg := err.Error()
+		switch {
+		case errMsg == "payment not found":
+			return utils.NewAppError("PAYMENT_NOT_FOUND", errMsg, http.StatusNotFound)
+		case errMsg == "payment does not belong to current shop":
+			return utils.ErrForbidden
+		default:
+			if strings.Contains(errMsg, "does not support payment completion") {
+				return utils.NewAppError("OPERATION_NOT_SUPPORTED", errMsg, http.StatusBadRequest)
+			}
+			return utils.NewAppError("PAYMENT_COMPLETION_FAILED", errMsg, http.StatusBadRequest)
 		}
 	}
 

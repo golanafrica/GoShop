@@ -4,6 +4,7 @@ package app
 import (
 	"database/sql"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 
-	// ✅ FIX : Renommage des imports pour éviter le conflit
+	// ✅ FIX : Un seul import pour le package payment
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
@@ -119,6 +120,30 @@ func (a *App) setupRouter() {
 		a.Logger.Error().Err(err).Msg("Failed to register Moov Money provider")
 	}
 
+	// 🆕 Yenga Pay Provider (API réelle)
+	yengaPayConfig := paymentinfra.YengaPayConfig{
+		APIKey:         os.Getenv("YENGA_PAY_API_KEY"),
+		OrganizationID: os.Getenv("YENGA_PAY_ORGANIZATION_ID"),
+		ProjectID:      os.Getenv("YENGA_PAY_PROJECT_ID"),
+		WebhookSecret:  os.Getenv("YENGA_PAY_WEBHOOK_SECRET"),
+		Env:            os.Getenv("YENGA_PAY_ENV"),
+	}
+
+	if yengaPayConfig.APIKey != "" {
+		yengaPayProvider, err := paymentinfra.NewYengaPayProvider(yengaPayConfig)
+		if err != nil {
+			a.Logger.Error().Err(err).Msg("Failed to create Yenga Pay provider")
+		} else {
+			if err := paymentRegistry.Register(yengaPayProvider); err != nil {
+				a.Logger.Error().Err(err).Msg("Failed to register Yenga Pay provider")
+			} else {
+				a.Logger.Info().Msg("✅ Yenga Pay provider registered")
+			}
+		}
+	} else {
+		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured (missing YENGA_PAY_API_KEY)")
+	}
+
 	// -- Usecases
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
@@ -157,6 +182,8 @@ func (a *App) setupRouter() {
 		a.DB,
 		shopRepo,
 	)
+	// 🆕 Usecase de complétion pour le flux TWO_STEP
+	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
 
 	// -- Handlers
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -191,12 +218,13 @@ func (a *App) setupRouter() {
 		updateShopUsecase,
 	)
 
-	// Payment Handlers
+	// Payment Handlers (avec completePaymentUC)
 	paymentHandler := paymenthandler.NewPaymentHandler(
 		initiatePaymentUC,
 		checkPaymentStatusUC,
 		listPaymentsUC,
 		refundPaymentUC,
+		completePaymentUC, // 🆕 Ajouté
 	)
 	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
 
@@ -272,6 +300,7 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(paymentHandler.ListPayments))
 				r.Get("/{id}", middl.ErrorHandler(paymentHandler.GetPayment))
 				r.Post("/{id}/refund", middl.ErrorHandler(paymentHandler.RefundPayment))
+				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment)) // 🆕 AJOUTÉ
 			})
 		})
 	})
