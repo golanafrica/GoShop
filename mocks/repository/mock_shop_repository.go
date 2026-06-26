@@ -131,6 +131,36 @@ func (mr *MockShopRepositoryMockRecorder) FindBySlug(ctx, slug any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindBySlug", reflect.TypeOf((*MockShopRepository)(nil).FindBySlug), ctx, slug)
 }
 
+// GetPaymentSettings mocks base method.
+func (m *MockShopRepository) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPaymentSettings", ctx, shopID)
+	ret0, _ := ret[0].(*entity.ShopPaymentSettings)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPaymentSettings indicates an expected call of GetPaymentSettings.
+func (mr *MockShopRepositoryMockRecorder) GetPaymentSettings(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPaymentSettings", reflect.TypeOf((*MockShopRepository)(nil).GetPaymentSettings), ctx, shopID)
+}
+
+// IsOwner mocks base method.
+func (m *MockShopRepository) IsOwner(ctx context.Context, shopID, userID uuid.UUID) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsOwner", ctx, shopID, userID)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsOwner indicates an expected call of IsOwner.
+func (mr *MockShopRepositoryMockRecorder) IsOwner(ctx, shopID, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOwner", reflect.TypeOf((*MockShopRepository)(nil).IsOwner), ctx, shopID, userID)
+}
+
 // Update mocks base method.
 func (m *MockShopRepository) Update(ctx context.Context, shop *entity.Shop) error {
 	m.ctrl.T.Helper()
@@ -143,6 +173,20 @@ func (m *MockShopRepository) Update(ctx context.Context, shop *entity.Shop) erro
 func (mr *MockShopRepositoryMockRecorder) Update(ctx, shop any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockShopRepository)(nil).Update), ctx, shop)
+}
+
+// UpsertPaymentSettings mocks base method.
+func (m *MockShopRepository) UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertPaymentSettings", ctx, settings)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpsertPaymentSettings indicates an expected call of UpsertPaymentSettings.
+func (mr *MockShopRepositoryMockRecorder) UpsertPaymentSettings(ctx, settings any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertPaymentSettings", reflect.TypeOf((*MockShopRepository)(nil).UpsertPaymentSettings), ctx, settings)
 }
 
 // WithTX mocks base method.

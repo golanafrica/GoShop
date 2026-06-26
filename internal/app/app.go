@@ -16,6 +16,7 @@ import (
 	authusecase "Goshop/application/usecase/auth_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
+	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
 
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
@@ -28,6 +29,7 @@ import (
 	"Goshop/infrastructure/postgres/shop"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
+	withdrawalpostgres "Goshop/infrastructure/withdrawal"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -39,6 +41,7 @@ import (
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
 	shophandler "Goshop/interfaces/handler/shop_handler"
 	userhandler "Goshop/interfaces/handler/user_handler"
+	withdrawalhandler "Goshop/interfaces/handler/withdrawal_handler"
 	middleware "Goshop/interfaces/middl/user_middleware"
 
 	"Goshop/config/setupLogging"
@@ -102,6 +105,7 @@ func (a *App) setupRouter() {
 	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
 	paymentRepo := paymentpostgres.NewPaymentRepositoryPostgres(a.DB)
+	withdrawalRepo := withdrawalpostgres.NewWithdrawalRepositoryPostgres(a.DB) // 🆕
 	paymentRegistry := paymentinfra.NewRegistry()
 
 	// Mock Orange Money Provider
@@ -160,12 +164,11 @@ func (a *App) setupRouter() {
 	configurePaymentUC := shopusecase.NewConfigurePaymentUsecase(shopRepo, shopRepo, shopRepo)
 
 	// Payment Usecases
-	// 🆕 Utiliser NewInitiatePaymentUsecaseWithShopSettings pour support config boutique
 	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecaseWithShopSettings(
 		paymentRepo,
 		postgresOrderRepo,
 		paymentRegistry,
-		shopRepo, // shopRepo implémente ShopPaymentSettingsRepository
+		shopRepo,
 	)
 	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
 		paymentRepo,
@@ -184,6 +187,14 @@ func (a *App) setupRouter() {
 		shopRepo,
 	)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
+
+	// 🆕 Withdrawal Usecases
+	createWithdrawalUC := withdrawalusecase.NewCreateWithdrawalUsecase(
+		withdrawalRepo,
+		shopRepo,
+		paymentRegistry,
+	)
+	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 
 	// -- Handlers
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -230,6 +241,12 @@ func (a *App) setupRouter() {
 		completePaymentUC,
 	)
 	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
+
+	// 🆕 Withdrawal Handler
+	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
+		createWithdrawalUC,
+		listWithdrawalsUC,
+	)
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -309,6 +326,13 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/refund", middl.ErrorHandler(paymentHandler.RefundPayment))
 				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment))
 			})
+
+			// 🆕 Withdrawals (cash-out)
+			r.Route("/withdrawals", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(withdrawalHandler.CreateWithdrawal))
+				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
+				r.Get("/{id}", middl.ErrorHandler(withdrawalHandler.GetWithdrawal))
+			})
 		})
 	})
 
@@ -317,7 +341,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings)")
+		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings + withdrawals)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

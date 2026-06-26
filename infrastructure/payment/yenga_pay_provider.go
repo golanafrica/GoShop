@@ -123,7 +123,6 @@ func (p *YengaPayProvider) InitiatePayment(ctx context.Context, req *PaymentRequ
 		operatorCode := mapOperatorCode(operator)
 
 		if operatorCode == "ORANGE" || operatorCode == "TELECEL" {
-			// ONE_STEP : nécessite OTP pré-généré par USSD
 			otp, ok := req.Metadata["otp"].(string)
 			if !ok || otp == "" {
 				var ussdPattern string
@@ -173,7 +172,6 @@ func (p *YengaPayProvider) InitiatePayment(ctx context.Context, req *PaymentRequ
 				"notification": message,
 			}
 		} else {
-			// TWO_STEP : MOOV, CORISM, SANKM
 			initResp, err := p.directPaymentInit(ctx, amountFCFA, operatorCode, customerEmail, req)
 			if err != nil {
 				return nil, err
@@ -220,7 +218,119 @@ func (p *YengaPayProvider) InitiatePayment(ctx context.Context, req *PaymentRequ
 	}, nil
 }
 
-// createPaymentIntent crée un payment-intent (paiement indirect)
+// ============ CASH-OUT (RETRAIT) ============
+
+// CashOutRequest représente une demande de retrait
+type CashOutRequest struct {
+	AmountCents       int64
+	PaymentMethod     string // "ORANGE_MONEY", "MOOV_MONEY", etc.
+	DestinationNumber string
+	DestinationName   string
+	DestinationEmail  string
+	Description       string
+}
+
+// CashOutResponse représente la réponse d'un retrait
+type CashOutResponse struct {
+	ProviderRef  string
+	Status       string
+	Amount       int64
+	Fees         int64
+	TotalDebited int64
+	CreatedAt    string
+}
+
+// CashOut effectue un retrait vers Mobile Money via Yenga Pay
+// Endpoint: POST /api/v1/groups/{organization_id}/cash-out
+func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*CashOutResponse, error) {
+	logger := zerolog.Ctx(ctx)
+
+	yengaReq := map[string]interface{}{
+		"cashoutMethod": req.PaymentMethod,
+		"amount":        req.AmountCents / 100, // Yenga Pay attend des FCFA
+		"destNumber":    req.DestinationNumber,
+		"groupId":       p.organizationID,
+		"projectId":     p.projectID,
+	}
+
+	if req.Description != "" {
+		yengaReq["description"] = req.Description
+	}
+
+	reqBody, err := json.Marshal(yengaReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/groups/%s/cash-out", p.baseURL, p.organizationID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+
+	logger.Info().
+		Str("url", url).
+		Int64("amount_cents", req.AmountCents).
+		Str("payment_method", req.PaymentMethod).
+		Msg("Calling Yenga Pay cash-out API")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		// OK
+	default:
+		return nil, fmt.Errorf("Yenga Pay cash-out error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var yengaResp struct {
+		ID              string  `json:"id"`
+		Amount          int64   `json:"amount"`
+		Fees            int64   `json:"fees"`
+		TotalDebited    int64   `json:"totalDebited"`
+		Status          string  `json:"status"`
+		CreatedAt       string  `json:"createdAt"`
+		DestNumber      string  `json:"destNumber"`
+		CashoutMethod   string  `json:"cashoutMethod"`
+		ErrorMessage    *string `json:"errorMessage"`
+		OperatorTransID *string `json:"operatorTransId"`
+	}
+
+	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	logger.Info().
+		Str("provider_ref", yengaResp.ID).
+		Str("status", yengaResp.Status).
+		Int64("fees", yengaResp.Fees).
+		Msg("Cash-out successful")
+
+	return &CashOutResponse{
+		ProviderRef:  yengaResp.ID,
+		Status:       yengaResp.Status,
+		Amount:       yengaResp.Amount,
+		Fees:         yengaResp.Fees,
+		TotalDebited: yengaResp.TotalDebited,
+		CreatedAt:    yengaResp.CreatedAt,
+	}, nil
+}
+
+// ============ AUTRES MÉTHODES (inchangées) ============
+
 func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA int64, req *PaymentRequest) (*yengaPaymentIntentResponse, error) {
 	articles := []map[string]interface{}{
 		{
@@ -264,7 +374,6 @@ func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA i
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -280,7 +389,6 @@ func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA i
 	return &yengaResp, nil
 }
 
-// directPaymentInit initie un paiement direct
 func (p *YengaPayProvider) directPaymentInit(ctx context.Context, amountFCFA int64, _ string, customerEmail string, req *PaymentRequest) (*yengaDirectInitResponse, error) {
 	articles := []map[string]interface{}{
 		{
@@ -328,7 +436,6 @@ func (p *YengaPayProvider) directPaymentInit(ctx context.Context, amountFCFA int
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -341,7 +448,6 @@ func (p *YengaPayProvider) directPaymentInit(ctx context.Context, amountFCFA int
 	return &yengaResp, nil
 }
 
-// directPaymentSendOTP envoie un OTP pour les paiements TWO_STEP
 func (p *YengaPayProvider) directPaymentSendOTP(ctx context.Context, paymentIntentID, operatorCode, customerMSISDN string) (*yengaSendOTPResponse, error) {
 	phone := customerMSISDN
 	if len(phone) > 0 && phone[0] == '+' {
@@ -381,10 +487,8 @@ func (p *YengaPayProvider) directPaymentSendOTP(ctx context.Context, paymentInte
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// ✅ FIX : Accepter 200 ET 201 (Yenga retourne 201 pour send-otp)
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -397,7 +501,6 @@ func (p *YengaPayProvider) directPaymentSendOTP(ctx context.Context, paymentInte
 	return &yengaResp, nil
 }
 
-// directPaymentInitAndPay initie et paie directement (ONE_STEP)
 func (p *YengaPayProvider) directPaymentInitAndPay(ctx context.Context, amountFCFA int64, operatorCode, customerMSISDN, otp, customerEmail string, req *PaymentRequest) (*yengaDirectPayResponse, error) {
 	articles := []map[string]interface{}{
 		{
@@ -454,7 +557,6 @@ func (p *YengaPayProvider) directPaymentInitAndPay(ctx context.Context, amountFC
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -467,8 +569,6 @@ func (p *YengaPayProvider) directPaymentInitAndPay(ctx context.Context, amountFC
 	return &yengaResp, nil
 }
 
-// CompletePayment complète un paiement TWO_STEP avec OTP
-// ✅ CORRECTION : Retourne maintenant *CompletePaymentResponse (pas *yengaDirectPayResponse)
 func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID, operatorCode, customerMSISDN, otp string) (*CompletePaymentResponse, error) {
 	phone := customerMSISDN
 	if len(phone) > 0 && phone[0] == '+' {
@@ -511,7 +611,6 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -521,7 +620,6 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// ✅ Convertir vers CompletePaymentResponse
 	return &CompletePaymentResponse{
 		Status:        yengaResp.Status,
 		TransactionID: yengaResp.TransactionID,
@@ -531,7 +629,6 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 	}, nil
 }
 
-// CheckStatus vérifie le statut d'un paiement
 func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) (*PaymentStatus, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -557,7 +654,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// OK
 	case http.StatusNotFound:
 		url = fmt.Sprintf("%s/groups/%s/merchant-payment/project/%s/payment/%s", p.baseURL, p.organizationID, p.projectID, providerRef)
 
@@ -641,7 +737,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 	}, nil
 }
 
-// ValidateWebhook valide un webhook Yenga Pay avec HMAC-SHA256
 func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -722,12 +817,10 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 	}, nil
 }
 
-// Refund rembourse un paiement (non supporté via API)
 func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amountCents int64) error {
 	return fmt.Errorf("refund not supported via API, please use Yenga Pay dashboard")
 }
 
-// IsAvailable vérifie si le provider est disponible
 func (p *YengaPayProvider) IsAvailable(ctx context.Context) bool {
 	return p.apiKey != "" && p.organizationID != "" && p.projectID != ""
 }
@@ -811,7 +904,6 @@ type yengaDirectPayResponse struct {
 	Message         string `json:"message"`
 }
 
-// UpdateConfig met à jour la configuration du provider (pour multi-tenant)
 func (p *YengaPayProvider) UpdateConfig(config YengaPayConfig) {
 	if config.APIKey != "" {
 		p.apiKey = config.APIKey
@@ -830,7 +922,6 @@ func (p *YengaPayProvider) UpdateConfig(config YengaPayConfig) {
 	}
 }
 
-// GetConfig retourne la configuration actuelle (pour debug)
 func (p *YengaPayProvider) GetConfig() YengaPayConfig {
 	return YengaPayConfig{
 		APIKey:         p.apiKey,
