@@ -92,3 +92,38 @@ func (s *Shop) IsValidPlan() bool {
 		return false
 	}
 }
+
+// YengaPayShopSettings représente la configuration Yenga Pay d'une boutique
+type YengaPayShopSettings struct {
+	Enabled        bool     `json:"enabled"`
+	APIKey         string   `json:"api_key,omitempty"`         // Déchiffré
+	OrganizationID string   `json:"organization_id,omitempty"` // Déchiffré
+	ProjectID      string   `json:"project_id,omitempty"`      // Déchiffré
+	WebhookSecret  string   `json:"webhook_secret,omitempty"`  // Déchiffré
+	Operators      []string `json:"operators"`
+	Env            string   `json:"env"` // "test" ou "prod"
+}
+
+// ShopPaymentSettings représente tous les settings de paiement d'une boutique
+type ShopPaymentSettings struct {
+	ShopID      uuid.UUID            `json:"shop_id"`
+	OrangeMoney bool                 `json:"orange_money_enabled"`
+	MoovMoney   bool                 `json:"moov_money_enabled"`
+	Wave        bool                 `json:"wave_enabled"`
+	YengaPay    YengaPayShopSettings `json:"yenga_pay"`
+}
+
+// IsYengaPayEnabled vérifie si Yenga Pay est activé pour cette boutique
+func (s *ShopPaymentSettings) IsYengaPayEnabled() bool {
+	return s.YengaPay.Enabled
+}
+
+// IsOperatorEnabled vérifie si un opérateur Yenga Pay est activé
+func (s *YengaPayShopSettings) IsOperatorEnabled(operator string) bool {
+	for _, op := range s.Operators {
+		if op == operator {
+			return true
+		}
+	}
+	return false
+}

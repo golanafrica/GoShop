@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/infrastructure/crypto"
 
 	"github.com/google/uuid"
 )
@@ -238,4 +240,179 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 	}
 
 	return shop, nil
+}
+
+// ============ NOUVELLES MÉTHODES POUR CONFIG PAR BOUTIQUE ============
+
+// GetPaymentSettings récupère les settings de paiement d'une boutique
+func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
+	query := `
+		SELECT 
+			shop_id,
+			COALESCE(orange_money_enabled, false),
+			COALESCE(moov_money_enabled, false),
+			COALESCE(wave_enabled, false),
+			COALESCE(yenga_pay_enabled, false),
+			COALESCE(yenga_pay_api_key, ''),
+			COALESCE(yenga_pay_organization_id, ''),
+			COALESCE(yenga_pay_project_id, ''),
+			COALESCE(yenga_pay_webhook_secret, ''),
+			COALESCE(yenga_pay_operators, '["orange_money","moov_money","telecel","coris_money","sank_money"]'::jsonb),
+			COALESCE(yenga_pay_env, 'test')
+		FROM shop_payment_settings
+		WHERE shop_id = $1
+	`
+
+	var settings entity.ShopPaymentSettings
+	var yengaAPIKey, yengaOrgID, yengaProjectID, yengaWebhookSecret string
+	var yengaOperatorsJSON []byte
+
+	err := r.db.QueryRowContext(ctx, query, shopID).Scan(
+		&settings.ShopID,
+		&settings.OrangeMoney,
+		&settings.MoovMoney,
+		&settings.Wave,
+		&settings.YengaPay.Enabled,
+		&yengaAPIKey,
+		&yengaOrgID,
+		&yengaProjectID,
+		&yengaWebhookSecret,
+		&yengaOperatorsJSON,
+		&settings.YengaPay.Env,
+	)
+
+	if err == sql.ErrNoRows {
+		// Retourner des settings par défaut
+		return &entity.ShopPaymentSettings{
+			ShopID: shopID,
+			YengaPay: entity.YengaPayShopSettings{
+				Enabled:   false,
+				Operators: []string{"orange_money", "moov_money", "telecel", "coris_money", "sank_money"},
+				Env:       "test",
+			},
+		}, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("query payment settings: %w", err)
+	}
+
+	// Déchiffrer les clés API
+	if yengaAPIKey != "" {
+		settings.YengaPay.APIKey, err = crypto.DecryptOrEmpty(yengaAPIKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt yenga api key: %w", err)
+		}
+	}
+	if yengaOrgID != "" {
+		settings.YengaPay.OrganizationID, err = crypto.DecryptOrEmpty(yengaOrgID)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt yenga org id: %w", err)
+		}
+	}
+	if yengaProjectID != "" {
+		settings.YengaPay.ProjectID, err = crypto.DecryptOrEmpty(yengaProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt yenga project id: %w", err)
+		}
+	}
+	if yengaWebhookSecret != "" {
+		settings.YengaPay.WebhookSecret, err = crypto.DecryptOrEmpty(yengaWebhookSecret)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt yenga webhook secret: %w", err)
+		}
+	}
+
+	// Parser les opérateurs JSON
+	if len(yengaOperatorsJSON) > 0 {
+		if err := json.Unmarshal(yengaOperatorsJSON, &settings.YengaPay.Operators); err != nil {
+			return nil, fmt.Errorf("parse yenga operators: %w", err)
+		}
+	}
+
+	return &settings, nil
+}
+
+// UpsertPaymentSettings crée ou met à jour les settings de paiement
+func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error {
+	// Chiffrer les clés API
+	yengaAPIKey, err := crypto.EncryptOrEmpty(settings.YengaPay.APIKey)
+	if err != nil {
+		return fmt.Errorf("encrypt yenga api key: %w", err)
+	}
+	yengaOrgID, err := crypto.EncryptOrEmpty(settings.YengaPay.OrganizationID)
+	if err != nil {
+		return fmt.Errorf("encrypt yenga org id: %w", err)
+	}
+	yengaProjectID, err := crypto.EncryptOrEmpty(settings.YengaPay.ProjectID)
+	if err != nil {
+		return fmt.Errorf("encrypt yenga project id: %w", err)
+	}
+	yengaWebhookSecret, err := crypto.EncryptOrEmpty(settings.YengaPay.WebhookSecret)
+	if err != nil {
+		return fmt.Errorf("encrypt yenga webhook secret: %w", err)
+	}
+
+	// Sérialiser les opérateurs en JSON
+	operatorsJSON, err := json.Marshal(settings.YengaPay.Operators)
+	if err != nil {
+		return fmt.Errorf("serialize yenga operators: %w", err)
+	}
+
+	query := `
+		INSERT INTO shop_payment_settings (
+			shop_id,
+			orange_money_enabled, moov_money_enabled, wave_enabled,
+			yenga_pay_enabled, yenga_pay_api_key, yenga_pay_organization_id,
+			yenga_pay_project_id, yenga_pay_webhook_secret, yenga_pay_operators, yenga_pay_env
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (shop_id) DO UPDATE SET
+			orange_money_enabled = EXCLUDED.orange_money_enabled,
+			moov_money_enabled = EXCLUDED.moov_money_enabled,
+			wave_enabled = EXCLUDED.wave_enabled,
+			yenga_pay_enabled = EXCLUDED.yenga_pay_enabled,
+			yenga_pay_api_key = EXCLUDED.yenga_pay_api_key,
+			yenga_pay_organization_id = EXCLUDED.yenga_pay_organization_id,
+			yenga_pay_project_id = EXCLUDED.yenga_pay_project_id,
+			yenga_pay_webhook_secret = EXCLUDED.yenga_pay_webhook_secret,
+			yenga_pay_operators = EXCLUDED.yenga_pay_operators,
+			yenga_pay_env = EXCLUDED.yenga_pay_env,
+			updated_at = NOW()
+	`
+
+	_, err = r.db.ExecContext(ctx, query,
+		settings.ShopID,
+		settings.OrangeMoney,
+		settings.MoovMoney,
+		settings.Wave,
+		settings.YengaPay.Enabled,
+		yengaAPIKey,
+		yengaOrgID,
+		yengaProjectID,
+		yengaWebhookSecret,
+		operatorsJSON,
+		settings.YengaPay.Env,
+	)
+
+	if err != nil {
+		return fmt.Errorf("upsert payment settings: %w", err)
+	}
+
+	return nil
+}
+
+// IsOwner vérifie qu'un utilisateur est propriétaire d'une boutique
+func (r *ShopRepositoryInfrastructure) IsOwner(ctx context.Context, shopID uuid.UUID, userID uuid.UUID) (bool, error) {
+	var ownerID uuid.UUID
+	query := `SELECT owner_id FROM shops WHERE id = $1`
+
+	err := r.db.QueryRowContext(ctx, query, shopID).Scan(&ownerID)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check ownership: %w", err)
+	}
+
+	return ownerID == userID, nil
 }

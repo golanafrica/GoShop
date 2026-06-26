@@ -17,7 +17,6 @@ import (
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 
-	// ✅ FIX : Un seul import pour le package payment
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
@@ -102,10 +101,7 @@ func (a *App) setupRouter() {
 	refreshSessionRepo := authrefreshrepositoryinfra.NewRefreshSessionPostgres(a.DB)
 	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
-	// ✅ FIX : Utilisation de l'alias paymentpostgres
 	paymentRepo := paymentpostgres.NewPaymentRepositoryPostgres(a.DB)
-
-	// ✅ FIX : Utilisation de l'alias paymentinfra
 	paymentRegistry := paymentinfra.NewRegistry()
 
 	// Mock Orange Money Provider
@@ -114,13 +110,13 @@ func (a *App) setupRouter() {
 		a.Logger.Error().Err(err).Msg("Failed to register Orange Money provider")
 	}
 
-	// 🆕 Mock Moov Money Provider
+	// Mock Moov Money Provider
 	moovMoneyProvider := mock.NewMoovMoneyProvider(mock.DefaultMoovMoneyConfig())
 	if err := paymentRegistry.Register(moovMoneyProvider); err != nil {
 		a.Logger.Error().Err(err).Msg("Failed to register Moov Money provider")
 	}
 
-	// 🆕 Yenga Pay Provider (API réelle)
+	// Yenga Pay Provider (API réelle) - config globale par défaut
 	yengaPayConfig := paymentinfra.YengaPayConfig{
 		APIKey:         os.Getenv("YENGA_PAY_API_KEY"),
 		OrganizationID: os.Getenv("YENGA_PAY_ORGANIZATION_ID"),
@@ -137,11 +133,11 @@ func (a *App) setupRouter() {
 			if err := paymentRegistry.Register(yengaPayProvider); err != nil {
 				a.Logger.Error().Err(err).Msg("Failed to register Yenga Pay provider")
 			} else {
-				a.Logger.Info().Msg("✅ Yenga Pay provider registered")
+				a.Logger.Info().Msg("✅ Yenga Pay provider registered (global config)")
 			}
 		}
 	} else {
-		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured (missing YENGA_PAY_API_KEY)")
+		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
 	}
 
 	// -- Usecases
@@ -160,11 +156,16 @@ func (a *App) setupRouter() {
 	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
 	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
 
+	// 🆕 Configure Payment Usecase (pour config par boutique)
+	configurePaymentUC := shopusecase.NewConfigurePaymentUsecase(shopRepo, shopRepo, shopRepo)
+
 	// Payment Usecases
-	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecase(
+	// 🆕 Utiliser NewInitiatePaymentUsecaseWithShopSettings pour support config boutique
+	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecaseWithShopSettings(
 		paymentRepo,
 		postgresOrderRepo,
 		paymentRegistry,
+		shopRepo, // shopRepo implémente ShopPaymentSettingsRepository
 	)
 	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
 		paymentRepo,
@@ -182,7 +183,6 @@ func (a *App) setupRouter() {
 		a.DB,
 		shopRepo,
 	)
-	// 🆕 Usecase de complétion pour le flux TWO_STEP
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
 
 	// -- Handlers
@@ -218,13 +218,16 @@ func (a *App) setupRouter() {
 		updateShopUsecase,
 	)
 
-	// Payment Handlers (avec completePaymentUC)
+	// 🆕 Payment Settings Handler
+	paymentSettingsHandler := shophandler.NewPaymentSettingsHandler(configurePaymentUC)
+
+	// Payment Handlers
 	paymentHandler := paymenthandler.NewPaymentHandler(
 		initiatePaymentUC,
 		checkPaymentStatusUC,
 		listPaymentsUC,
 		refundPaymentUC,
-		completePaymentUC, // 🆕 Ajouté
+		completePaymentUC,
 	)
 	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
 
@@ -261,6 +264,10 @@ func (a *App) setupRouter() {
 			r.Post("/", middl.ErrorHandler(shopHandler.CreateShop))
 			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
 			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
+
+			// 🆕 Routes de configuration des paiements par boutique
+			r.Get("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.GetPaymentSettings))
+			r.Put("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.UpdatePaymentSettings))
 		})
 
 		// Routes multi-tenant (AVEC TenantResolver)
@@ -300,7 +307,7 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(paymentHandler.ListPayments))
 				r.Get("/{id}", middl.ErrorHandler(paymentHandler.GetPayment))
 				r.Post("/{id}/refund", middl.ErrorHandler(paymentHandler.RefundPayment))
-				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment)) // 🆕 AJOUTÉ
+				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment))
 			})
 		})
 	})
@@ -310,7 +317,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (multi-tenant + payment activés)")
+		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

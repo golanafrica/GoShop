@@ -15,11 +15,17 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ShopPaymentSettingsRepository définit l'interface pour récupérer les settings
+type ShopPaymentSettingsRepository interface {
+	GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error)
+}
+
 // InitiatePaymentUsecase initie un paiement pour une commande
 type InitiatePaymentUsecase struct {
-	paymentRepo repository.PaymentRepository
-	orderRepo   repository.OrderRepository
-	registry    *payment.Registry
+	paymentRepo     repository.PaymentRepository
+	orderRepo       repository.OrderRepository
+	registry        *payment.Registry
+	shopPaymentRepo ShopPaymentSettingsRepository // 🆕 Pour config par boutique
 }
 
 // NewInitiatePaymentUsecase crée une nouvelle instance
@@ -32,6 +38,21 @@ func NewInitiatePaymentUsecase(
 		paymentRepo: paymentRepo,
 		orderRepo:   orderRepo,
 		registry:    registry,
+	}
+}
+
+// NewInitiatePaymentUsecaseWithShopSettings crée une instance avec support config boutique
+func NewInitiatePaymentUsecaseWithShopSettings(
+	paymentRepo repository.PaymentRepository,
+	orderRepo repository.OrderRepository,
+	registry *payment.Registry,
+	shopPaymentRepo ShopPaymentSettingsRepository,
+) *InitiatePaymentUsecase {
+	return &InitiatePaymentUsecase{
+		paymentRepo:     paymentRepo,
+		orderRepo:       orderRepo,
+		registry:        registry,
+		shopPaymentRepo: shopPaymentRepo,
 	}
 }
 
@@ -106,6 +127,35 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		return nil, fmt.Errorf("provider not available: %w", err)
 	}
 
+	// 🆕 8.5 Pour Yenga Pay : vérifier config boutique (fallback hybride)
+	if req.Provider == entity.ProviderYengaPay && uc.shopPaymentRepo != nil {
+		settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID)
+		if err != nil {
+			logger.Warn().Err(err).Msg("Failed to get shop payment settings, using global config")
+		} else if settings.YengaPay.Enabled && settings.YengaPay.APIKey != "" {
+			// 🎯 Utiliser la config boutique
+			providerConfig := payment.YengaPayConfig{
+				APIKey:         settings.YengaPay.APIKey,
+				OrganizationID: settings.YengaPay.OrganizationID,
+				ProjectID:      settings.YengaPay.ProjectID,
+				WebhookSecret:  settings.YengaPay.WebhookSecret,
+				Env:            settings.YengaPay.Env,
+			}
+
+			// Créer un provider temporaire avec la config boutique
+			shopProvider, err := payment.NewYengaPayProvider(providerConfig)
+			if err != nil {
+				return nil, fmt.Errorf("create shop-specific provider: %w", err)
+			}
+			provider = shopProvider
+			logger.Info().
+				Str("shop_id", shop.ID.String()).
+				Msg("Using shop-specific Yenga Pay configuration")
+		} else {
+			logger.Info().Msg("Using global Yenga Pay configuration")
+		}
+	}
+
 	// 9. Initier le paiement auprès du provider
 	providerReq := &payment.PaymentRequest{
 		PaymentID:   newPayment.ID.String(),
@@ -121,7 +171,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		},
 	}
 
-	// Fusionner les metadata de la requête (pour Yenga Pay : operator, flow, etc.)
+	// Fusionner les metadata de la requête
 	if req.Metadata != nil {
 		for k, v := range req.Metadata {
 			providerReq.Metadata[k] = v
@@ -130,7 +180,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 	providerResp, err := provider.InitiatePayment(ctx, providerReq)
 	if err != nil {
-		// Marquer le paiement comme échoué
 		if markErr := newPayment.MarkFailed(err.Error()); markErr != nil {
 			logger.Error().Err(markErr).Msg("Failed to mark payment as failed")
 		}
@@ -141,21 +190,16 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	}
 
 	// 10. Mettre à jour le paiement avec la référence provider
-	// 🆕 FIX : Ne sauvegarder le provider_ref que s'il n'est pas vide
-	// (évite la violation de contrainte UNIQUE pour le flux ONE_STEP sans OTP)
 	if providerResp.ProviderRef != "" {
 		newPayment.ProviderRef = &providerResp.ProviderRef
 	}
 
-	// 🆕 FIX : Ne passer en PROCESSING que si on a un provider_ref
-	// Sinon, rester en PENDING (cas du flux ONE_STEP sans OTP)
 	if providerResp.ProviderRef != "" {
 		if err := newPayment.MarkProcessing(); err != nil {
 			return nil, fmt.Errorf("mark payment as processing: %w", err)
 		}
 	}
 
-	// 🆕 SAUVEGARDER LES METADATA dans l'entité Payment (nécessaire pour TWO_STEP)
 	if providerResp.Metadata != nil {
 		newPayment.Metadata = providerResp.Metadata
 	}

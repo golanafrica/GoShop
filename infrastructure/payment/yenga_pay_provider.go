@@ -810,3 +810,33 @@ type yengaDirectPayResponse struct {
 	Flow            string `json:"flow"`
 	Message         string `json:"message"`
 }
+
+// UpdateConfig met à jour la configuration du provider (pour multi-tenant)
+func (p *YengaPayProvider) UpdateConfig(config YengaPayConfig) {
+	if config.APIKey != "" {
+		p.apiKey = config.APIKey
+	}
+	if config.OrganizationID != "" {
+		p.organizationID = config.OrganizationID
+	}
+	if config.ProjectID != "" {
+		p.projectID = config.ProjectID
+	}
+	if config.WebhookSecret != "" {
+		p.webhookSecret = config.WebhookSecret
+	}
+	if config.Env != "" {
+		p.env = config.Env
+	}
+}
+
+// GetConfig retourne la configuration actuelle (pour debug)
+func (p *YengaPayProvider) GetConfig() YengaPayConfig {
+	return YengaPayConfig{
+		APIKey:         p.apiKey,
+		OrganizationID: p.organizationID,
+		ProjectID:      p.projectID,
+		WebhookSecret:  p.webhookSecret,
+		Env:            p.env,
+	}
+}

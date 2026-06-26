@@ -20,5 +20,10 @@ type ShopRepository interface {
 	Update(ctx context.Context, shop *entity.Shop) error
 	Deactivate(ctx context.Context, id uuid.UUID) error
 
+	//  Méthodes pour configuration paiement par boutique
+	GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error)
+	UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error
+	IsOwner(ctx context.Context, shopID uuid.UUID, userID uuid.UUID) (bool, error)
+
 	WithTX(tx Tx) ShopRepository
 }
