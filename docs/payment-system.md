@@ -1,8 +1,8 @@
 # 💳 Système de paiement
 
-**Version** : v2.7.0-multi-operator  
+**Version** : v2.8.0-cash-on-delivery  
 **Date** : 2026-06-27  
-**Statut** : ✅ **PRODUCTION READY** - 6 opérateurs validés, 10 transactions réussies
+**Statut** : ✅ **PRODUCTION READY** - 6 opérateurs Mobile Money + Cash à la livraison
 
 ---
 
@@ -17,23 +17,25 @@
 | v2.3.0 | Configuration par boutique (hybride) | ✅ |
 | v2.4.0 | Chiffrement AES-256-GCM des clés API | ✅ |
 | v2.5.0 | Cash-out (retraits Mobile Money) | ✅ |
-| **v2.7.0** | **Multi-opérateur complet (ONE_STEP + TWO_STEP + Indirect)** | ✅ **VALIDÉ** |
+| v2.7.0 | Multi-opérateur complet (ONE_STEP + TWO_STEP + Indirect) | ✅ |
+| **v2.8.0** | **Cash à la livraison (workflow complet + commission)** | ✅ **VALIDÉ** |
 
 ### 🚧 À venir
 - **Wave** : Provider Mobile Money
-- **Cash à la livraison** : Workflow complet
 - **Crédit** : Paiement en tranches avec score de fiabilité
+- **SMS notifications** : Africa's Talking (remplacer le no-op actuel)
 
 ---
 
 ## 🎯 Vue d'ensemble
 
-Système modulaire supportant **4 modes de paiement** :
+Système modulaire supportant **5 modes de paiement** :
 
 1. **Yenga Pay** ✅ (Orange, Moov, Telecel, Coris, Sank, MTN) - API réelle
 2. **Orange Money** ✅ (mock) - USSD `#144*111#`
 3. **Moov Money** ✅ (mock) - USSD `#135*2#`
 4. **Cash-out** ✅ (retraits vers Mobile Money via Yenga Pay)
+5. **Cash à la livraison** ✅ (paiement espèces à la livraison avec commission GoShop)
 
 ---
 
@@ -49,6 +51,7 @@ Système modulaire supportant **4 modes de paiement** :
 | **Frais collectés** | 130 XOF |
 | **Transactions Pay In** | 10 |
 | **Retraits Cash Out** | 2 |
+| **Commandes Cash COD** | 6 (workflow complet validé) |
 | **Taux de succès** | **100%** |
 
 ### Transactions Pay In (10/10 réussies)
@@ -72,6 +75,16 @@ Système modulaire supportant **4 modes de paiement** :
 |------|----------------|-----------|---------|--------|
 | 26/06/2026 21:03 | `YPCO20260626.2103.65687.7311` | MOOV MONEY | 200 XOF | ✅ Réussi |
 | 26/06/2026 20:56 | `YPCO20260626.2056.65687.8675` | ORANGE MONEY | 500 XOF | ✅ Réussi |
+
+### Commandes Cash à la livraison (workflow complet validé)
+
+| Test | Scénario | Résultat |
+|------|----------|----------|
+| 1 | Workflow complet (create → accept → out_for_delivery → deliver) | ✅ |
+| 2 | Commission 2.50% calculée (500 XOF → 12.50 XOF commission) | ✅ |
+| 3 | Rejet marchand (stock réincrémenté) | ✅ |
+| 4 | Annulation client (stock réincrémenté) | ✅ |
+| 5 | Expiration lazy après 24h (stock réincrémenté) | ✅ |
 
 ---
 
@@ -103,6 +116,7 @@ type Provider interface {
 }
 
 Providers supportés
+
 Provider
 Code
 Type
@@ -163,6 +177,7 @@ Flux indirect (checkout page)
          │
          ▼
 8. Statut payment → SUCCESS
+
 
 Flux direct ONE_STEP (Orange, Telecel)
 
@@ -225,12 +240,11 @@ Content-Type: application/json
 
 Réponse 201 :
 
-
 {
   "payment_id": "2767e73d-d5a3-43f0-a081-74508b0b9586",
   "provider_ref": "cmqso9fgg031os601huvnzlan",
   "status": "processing",
-  "message": "Moov Money vous a envoyé un code OTP par SMS. Code OTP reçu par SMS requis pour finaliser",
+  "message": "Moov Money vous a envoyé un code OTP par SMS.",
   "metadata": {
     "flow": "direct",
     "flow_type": "TWO_STEP",
@@ -242,7 +256,6 @@ Réponse 201 :
 
 Compléter un paiement TWO_STEP
 
-
 POST /api/payments/{payment_id}/complete
 Authorization: Bearer {token}
 X-Shop-Slug: {shop_slug}
@@ -252,23 +265,10 @@ Content-Type: application/json
   "otp": "123456"
 }
 
-Réponse 200 :
-
-
-{
-  "id": "2767e73d-d5a3-43f0-a081-74508b0b9586",
-  "order_id": "3fc84aa6-4dbd-4b2d-b8d4-e07dee77c8eb",
-  "provider": "yenga_pay",
-  "provider_ref": "cmqso9fgg031os601huvnzlan",
-  "amount_cents": 50000,
-  "currency": "XOF",
-  "status": "success",
-  "customer_phone": "+22670123456"
-}
-
 Webhooks Yenga Pay
 Endpoint : POST /webhooks/yenga_pay
 Validation HMAC-SHA256 :
+go
 
 // ⚠️ IMPORTANT : Yenga Pay utilise le header "x-webhook-hash" (pas "X-Signature")
 signature := r.Header.Get("x-webhook-hash")
@@ -284,24 +284,6 @@ if !hmac.Equal([]byte(signature), []byte(expectedMAC)) {
     return fmt.Errorf("invalid webhook signature")
 }
 
-Payload :
-
-{
-  "apiEnv": "prod",
-  "paymentStatus": "DONE",
-  "transId": "YP20241021.1251.58962478",
-  "projectId": "65687",
-  "paymentIntentId": "cm0qobvl10001s6018w5ppwj8",
-  "paymentSource": "MoovMoneyAPI",
-  "customerNumber": "60606060",
-  "paymentAmount": 195,
-  "paymentFees": 5,
-  "contryOrigin": "BF",
-  "reference": "6646846426259895",
-  "currency": "XOF"
-}
-
-Header : x-webhook-hash: {hmac_signature}
 2. Configuration par boutique (Fallback hybride) ✅
 Architecture
 
@@ -314,6 +296,8 @@ Architecture
 │    → yenga_pay_project_id (chiffré)                     │
 │    → yenga_pay_webhook_secret (chiffré)                 │
 │    → yenga_pay_operators: [orange, moov]                │
+│    → cash_commission_rate: 250 (2.50%)                  │
+│    → cash_on_delivery_enabled: true                     │
 │                                                          │
 │  Shop B (utilise config globale)                        │
 │    → yenga_pay_enabled: false                           │
@@ -342,6 +326,8 @@ Réponse 200 :
   "orange_money_enabled": false,
   "moov_money_enabled": false,
   "wave_enabled": false,
+  "cash_on_delivery_enabled": true,
+  "cash_commission_rate": 250,
   "yenga_pay": {
     "enabled": true,
     "has_api_key": true,
@@ -356,6 +342,7 @@ Réponse 200 :
 
 Mettre à jour la config
 
+
 PUT /api/shops/{shop_id}/payment-settings
 Authorization: Bearer {token}
 Content-Type: application/json
@@ -369,14 +356,15 @@ Content-Type: application/json
     "webhook_secret": "c38ccab5-836d-4453-a6e0-2eb0b9df3097",
     "operators": ["orange_money", "moov_money", "telecel"],
     "env": "test"
-  }
+  },
+  "cash_on_delivery_enabled": true,
+  "cash_commission_rate": 250
 }
-
 
 Chiffrement AES-256-GCM
 Fichier : infrastructure/crypto/aes.go
+go
 
-// Encrypt chiffre une valeur avec AES-256-GCM
 func Encrypt(plaintext string) (string, error) {
     key, err := getEncryptionKey() // 32 bytes depuis ENCRYPTION_KEY
     if err != nil {
@@ -405,25 +393,8 @@ YENGA_PAY_PROJECT_ID=65687
 YENGA_PAY_WEBHOOK_SECRET=c38ccab5-836d-4453-a6e0-2eb0b9df3097
 YENGA_PAY_ENV=test
 
-Vérification en base :
-
-SELECT 
-    shop_id,
-    yenga_pay_enabled,
-    LEFT(yenga_pay_api_key, 50) AS api_key_encrypted,
-    yenga_pay_operators
-FROM shop_payment_settings
-WHERE shop_id = 'ec4ff426-db05-421a-8b97-19c8470de0fb';
-
-Résultat :
-
-shop_id              | yenga_pay_enabled | api_key_encrypted
----------------------+-------------------+----------------------------------------------
-ec4ff426-db05-...    | t                 | jMTDyJfO2G6k0kfSRLsgAJvPmlsysl4rccfsAvqXvq7y
-
 3. Cash-out (Retraits) ✅
 Architecture
-
 
 1. POST /api/withdrawals
          │
@@ -460,6 +431,7 @@ Content-Type: application/json
 
 Réponse 201 :
 
+
 {
   "id": "16fb7afb-d0cf-44d0-ad82-74a0ad08b176",
   "shop_id": "ec4ff426-db05-421a-8b97-19c8470de0fb",
@@ -477,43 +449,250 @@ Réponse 201 :
   "created_at": "2026-06-26 20:56:08"
 }
 
-Lister les retraits
+4. 🆕 Cash à la livraison (COD) ✅
+Vue d'ensemble
+Le Cash à la livraison (Cash On Delivery - COD) permet aux clients de payer en espèces à la réception de leur commande. GoShop prélève automatiquement une commission configurable (défaut : 2.50%) sur chaque transaction COD.
+Architecture
 
-GET /api/withdrawals?limit=50&offset=0
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│    Client    │      │    Système   │      │   Marchand   │
+└──────┬───────┘      └──────┬───────┘      └──────┬───────┘
+       │                     │                     │
+       │ 1. Créer commande   │                     │
+       │   (payment_method:  │                     │
+       │    cash_on_delivery)│                     │
+       │────────────────────>│                     │
+       │                     │                     │
+       │                     │ 2. Statut:          │
+       │                     │ pending_confirmation│
+       │                     │ Stock réservé (24h) │
+       │                     │                     │
+       │                     │ 3. Notification     │
+       │                     │ (no-op / SMS)       │
+       │                     │────────────────────>│
+       │                     │                     │
+       │                     │ 4. POST /accept     │
+       │                     │<────────────────────│
+       │                     │ Statut: confirmed   │
+       │                     │                     │
+       │                     │ 5. POST             │
+       │                     │ /out-for-delivery   │
+       │                     │<────────────────────│
+       │                     │ Statut:             │
+       │                     │ out_for_delivery    │
+       │                     │                     │
+       │ 6. Livraison +      │                     │
+       │    paiement espèces │                     │
+       │<─────────────────────────────────────────│
+       │                     │                     │
+       │                     │ 7. POST /deliver    │
+       │                     │    + amount_received│
+       │                     │<────────────────────│
+       │                     │                     │
+       │                     │ 8. Créer Payment    │
+       │                     │ (provider: cash)    │
+       │                     │ + Calcul commission │
+       │                     │ Statut: delivered   │
+       │                     │                     │
+
+
+Machine à états des commandes COD
+
+                        ┌─────────────────────────┐
+                        │  pending_confirmation   │
+                        │  (stock réservé 24h)    │
+                        └───────────┬─────────────┘
+                                    │
+              ┌─────────────────────┼─────────────────────┐
+              │                     │                     │
+              ▼                     ▼                     ▼
+    ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+    │   rejected   │      │   confirmed  │      │   expired    │
+    │ (stock ++ )  │      └──────┬───────┘      │ (stock ++ )  │
+    └──────────────┘             │              └──────────────┘
+                                 │
+                                 ▼
+                      ┌────────────────────┐
+                      │ out_for_delivery   │
+                      └─────────┬──────────┘
+                                │
+                                ▼
+                      ┌────────────────────┐
+                      │     delivered      │
+                      │ (Payment créé +    │
+                      │  commission GoShop)│
+                      └────────────────────┘
+
+Endpoints API
+1. Créer une commande COD
+
+POST /api/orders
+Authorization: Bearer {token}
+X-Shop-Slug: {shop_slug}
+Content-Type: application/json
+
+{
+  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
+  "payment_method": "cash_on_delivery",
+  "items": [
+    {
+      "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+      "quantity": 2
+    }
+  ]
+}
+
+
+Réponse 201 :
+
+
+{
+  "id": "49e015ae-126e-4d69-af58-169e548ee794",
+  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
+  "total_cents": 100000,
+  "status": "pending_confirmation",
+  "payment_method": "cash_on_delivery",
+  "reserved_until": "2026-06-28T19:25:35Z",
+  "created_at": "2026-06-27T19:25:35Z",
+  "items": [...]
+}
+
+2. Marchand accepte la commande
+
+POST /api/orders/{id}/accept
 Authorization: Bearer {token}
 X-Shop-Slug: {shop_slug}
 
-Récupérer un retrait
+Réponse 200 : Statut → confirmed, accepted_at défini
+3. Marchand refuse la commande
 
-GET /api/withdrawals/{withdrawal_id}
+
+POST /api/orders/{id}/reject
+Authorization: Bearer {token}
+X-Shop-Slug: {shop_slug}
+Content-Type: application/json
+
+{
+  "reason": "Produit en rupture de stock"
+}
+
+Réponse 200 : Statut → rejected, stock réincrémenté
+4. Passage en livraison
+
+POST /api/orders/{id}/out-for-delivery
 Authorization: Bearer {token}
 X-Shop-Slug: {shop_slug}
 
-Méthodes de paiement supportées
+Réponse 200 : Statut → out_for_delivery
+5. Livraison + paiement cash
 
-Méthode
-Code
-Statut
-Orange Money
-ORANGE_MONEY
-✅
-Moov Money
-MOOV_MONEY
-✅
-Telecel Money
-TELECEL_MONEY
-✅
-Coris Money
-CORIS_MONEY
-✅
-Sank Money
-SANK_MONEY
-✅
-MTN
-MTN
-✅
-4. Machine à états
-Paiements
+POST /api/orders/{id}/deliver
+Authorization: Bearer {token}
+X-Shop-Slug: {shop_slug}
+Content-Type: application/json
+
+{
+  "amount_received": 100000,
+  "notes": "Client a payé en espèces"
+}
+
+Réponse 200 :
+
+
+{
+  "id": "d9bf5252-77fa-4dc6-8ad9-cfe20a98a000",
+  "status": "delivered",
+  "delivered_at": "2026-06-27T19:04:06Z",
+  "amount_received_cents": 100000,
+  "delivery_notes": "Client a payé en espèces",
+  ...
+}
+
+Action côté serveur :
+Création d'un Payment avec provider: "cash" et status: "success"
+Calcul de la commission GoShop (défaut 2.50%)
+Notification client et marchand (no-op actuellement)
+6. Annulation par le client
+
+POST /api/orders/{id}/cancel
+Authorization: Bearer {token}
+X-Shop-Slug: {shop_slug}
+
+Réponse 200 : Statut → cancelled, stock réincrémenté (si pending_confirmation)
+Système de commission
+Configuration par boutique :
+Champ cash_commission_rate dans shop_payment_settings
+Unité : basis points (250 = 2.50%, 100 = 1.00%, 0 = pas de commission)
+Défaut : 250 (2.50%) si non configuré
+Validation : 0 ≤ rate ≤ 10000 (0% à 100%)
+Calcul :
+
+// domain/entity/order.go
+func (o *Order) CalculateCashCommission(commissionRate int) (feesCents, netAmountCents int64) {
+    if commissionRate < 0 || commissionRate > 10000 {
+        return 0, o.TotalCents
+    }
+    feesCents = (o.TotalCents * int64(commissionRate)) / 10000
+    netAmountCents = o.TotalCents - feesCents
+    return feesCents, netAmountCents
+}
+
+// domain/entity/order.go
+func (o *Order) CalculateCashCommission(commissionRate int) (feesCents, netAmountCents int64) {
+    if commissionRate < 0 || commissionRate > 10000 {
+        return 0, o.TotalCents
+    }
+    feesCents = (o.TotalCents * int64(commissionRate)) / 10000
+    netAmountCents = o.TotalCents - feesCents
+    return feesCents, netAmountCents
+}
+
+Exemple :
+Montant commande
+Commission (2.50%)
+Net marchand
+500 XOF
+12.50 XOF
+487.50 XOF
+1000 XOF
+25.00 XOF
+975.00 XOF
+5000 XOF
+125.00 XOF
+4875.00 XOF
+Réservation de stock
+Principe :
+
+À la création d'une commande COD, le stock est décrémenté immédiatement
+reserved_until est défini à now() + 24h
+Si la commande n'est pas acceptée dans les 24h :
+Expiration lazy : détectée lors de la prochaine lecture/action
+Statut passe à expired
+Stock réincrémenté automatiquement
+Avantages :
+Pas de job background (cron) nécessaire
+Pas de consommation de ressources quand le système est inactif
+Simple à implémenter et à déboguer
+Service de notification (no-op)
+Interface : domain/service/notification_service.go
+
+type NotificationService interface {
+    NotifyMerchantOrderReceived(ctx, shop, order) error
+    NotifyClientOrderConfirmed(ctx, order, phone) error
+    NotifyClientOrderRejected(ctx, order, phone, reason) error
+    NotifyClientOrderExpired(ctx, order, phone) error
+    NotifyMerchantDeliveryReady(ctx, shop, order) error
+    NotifyClientOrderDelivered(ctx, order, phone, amount) error
+    NotifyMerchantCommissionPaid(ctx, shop, order, commission) error
+    SendNotification(ctx, req) error
+}
+
+Implémentation actuelle : NoopNotificationService
+Logue toutes les notifications avec zerolog
+Ne bloque jamais le workflow
+Prêt à être remplacé par Africa's Talking SMS ou autre provider
+5. Machines à états
+Paiements (Mobile Money)
 
                     ┌─────────────┐
                     │   PENDING   │
@@ -535,7 +714,34 @@ Paiements
                   └──────────┘
 
 
-Retraits
+Commandes Cash à la livraison
+
+     ┌──────────────────────────┐
+     │  pending_confirmation    │
+     │  (stock réservé 24h)     │
+     └────────────┬─────────────┘
+                  │
+       ┌──────────┼──────────┬──────────┐
+       │          │          │          │
+       ▼          ▼          ▼          ▼
+ ┌──────────┐ ┌────────┐ ┌────────┐ ┌──────────┐
+ │ rejected │ │confirmed│ │expired │ │ cancelled│
+ │ (stock++)│ └───┬────┘ │(stock++)│ │(stock++  │
+ └──────────┘     │      └────────┘ │ si pending)│
+                  │                 └──────────┘
+                  ▼
+         ┌────────────────┐
+         │out_for_delivery│
+         └───────┬────────┘
+                 │
+                 ▼
+         ┌────────────────┐
+         │   delivered    │
+         │ (Payment cash  │
+         │  + commission) │
+         └────────────────┘
+
+Retraits (Cash-out)
 
      ┌──────────┐      ┌────────────┐      ┌──────────┐
      │ PENDING  │─────▶│ PROCESSING │─────▶│ SUCCESS  │
@@ -547,35 +753,47 @@ Retraits
                        └──────────┘
 
 
-5. Base de données
-Table payments
+ 6. Base de données
+Table orders (enrichie pour COD)
 
-CREATE TABLE payments (
-  id UUID PRIMARY KEY,
-  shop_id UUID NOT NULL REFERENCES shops(id),
-  order_id UUID NOT NULL REFERENCES orders(id),
-  provider VARCHAR(50) NOT NULL,
-  provider_ref VARCHAR(255),
-  amount_cents BIGINT NOT NULL,
-  currency VARCHAR(3) NOT NULL DEFAULT 'XOF',
-  status VARCHAR(20) NOT NULL,
-  customer_phone VARCHAR(20),
-  customer_email VARCHAR(255),
-  description TEXT,
-  metadata JSONB,
-  initiated_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  expires_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL,
+    total_cents BIGINT NOT NULL CHECK (total_cents > 0),
+    status VARCHAR(30) NOT NULL DEFAULT 'pending',
+    
+    -- 🆕 Champs Cash à la livraison
+    payment_method VARCHAR(50) NOT NULL DEFAULT 'mobile_money'
+        CHECK (payment_method IN ('mobile_money', 'cash_on_delivery')),
+    accepted_at TIMESTAMPTZ,
+    rejected_at TIMESTAMPTZ,
+    delivered_at TIMESTAMPTZ,
+    cancelled_at TIMESTAMPTZ,
+    delivery_notes TEXT,
+    amount_received_cents BIGINT,
+    reserved_until TIMESTAMPTZ,
+    
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    CONSTRAINT orders_status_check CHECK (status IN (
+        'pending', 'pending_confirmation', 'confirmed',
+        'rejected', 'expired', 'out_for_delivery',
+        'delivered', 'cancelled'
+    ))
 );
 
-CREATE INDEX idx_payments_shop_id ON payments(shop_id);
-CREATE INDEX idx_payments_order_id ON payments(order_id);
-CREATE INDEX idx_payments_status ON payments(status);
-CREATE INDEX idx_payments_provider_ref ON payments(provider, provider_ref);
+CREATE INDEX idx_orders_shop_id ON orders(shop_id);
+CREATE INDEX idx_orders_customer_id ON orders(customer_id);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_status_payment_method ON orders(status, payment_method);
+CREATE INDEX idx_orders_reserved_until ON orders(reserved_until) 
+    WHERE status = 'pending_confirmation';
 
-Table shop_payment_settings
+
+Table shop_payment_settings (enrichie)
+sql
 
 CREATE TABLE shop_payment_settings (
     shop_id UUID PRIMARY KEY REFERENCES shops(id) ON DELETE CASCADE,
@@ -589,61 +807,19 @@ CREATE TABLE shop_payment_settings (
     yenga_pay_webhook_secret TEXT,       -- chiffré
     yenga_pay_operators JSONB DEFAULT '["orange_money","moov_money","telecel","coris_money","sank_money"]'::jsonb,
     yenga_pay_env VARCHAR(10) DEFAULT 'test',
+    
+    -- 🆕 Cash à la livraison
+    cash_on_delivery_enabled BOOLEAN NOT NULL DEFAULT false,
+    cash_commission_rate INTEGER NOT NULL DEFAULT 250
+        CHECK (cash_commission_rate >= 0 AND cash_commission_rate <= 10000),
+    
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 
-Table withdrawals
-
-CREATE TABLE withdrawals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-    provider VARCHAR(50) NOT NULL DEFAULT 'yenga_pay',
-    provider_ref VARCHAR(255),
-    amount BIGINT NOT NULL CHECK (amount > 0),
-    currency VARCHAR(3) NOT NULL DEFAULT 'XOF',
-    fees BIGINT DEFAULT 0,
-    net_amount BIGINT,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' 
-        CHECK (status IN ('pending', 'processing', 'success', 'failed', 'cancelled')),
-    payment_method VARCHAR(50) NOT NULL
-        CHECK (payment_method IN (
-            'ORANGE_MONEY', 'MOOV_MONEY', 'TELECEL_MONEY', 
-            'CORIS_MONEY', 'SANK_MONEY', 'MTN'
-        )),
-    destination_number VARCHAR(20) NOT NULL,
-    destination_name VARCHAR(255),
-    destination_email VARCHAR(255),
-    description TEXT,
-    error_message TEXT,
-    operator_transaction_id VARCHAR(255),
-    processed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_withdrawals_shop_id ON withdrawals(shop_id);
-CREATE INDEX idx_withdrawals_status ON withdrawals(status);
-CREATE INDEX idx_withdrawals_provider_ref ON withdrawals(provider_ref);
-
-
-Table payment_webhooks
-
-CREATE TABLE payment_webhooks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider VARCHAR(50) NOT NULL,
-  event_type VARCHAR(50),
-  external_id VARCHAR(255),
-  payload JSONB NOT NULL,
-  signature TEXT,
-  signature_validated BOOLEAN NOT NULL,
-  processing_error TEXT,
-  processed BOOLEAN NOT NULL DEFAULT false,
-  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-
-6. Sécurité
+Tables payments, withdrawals, payment_webhooks
+(Voir sections précédentes pour le schéma complet)
+7. Sécurité
 Protection contre les attaques
 Attaque
 Protection
@@ -654,13 +830,15 @@ Détection par HMAC
 Replay attacks
 External ID unique
 Cross-tenant access
-Isolation par shop_id
+Isolation par shop_id (multi-tenant)
 Double remboursement
-Vérification d'état
+Vérification d'état (machine à états)
 Timing attacks
 hmac.Equal() (timing-safe)
 Fuite de clés API
 Chiffrement AES-256-GCM en base
+Stock fantôme
+Réservation + expiration lazy
 Règles
 ✅ Clés API chiffrées en base (AES-256-GCM)
 ✅ Validation HMAC pour tous les webhooks
@@ -669,11 +847,13 @@ Règles
 ✅ Audit trail : toutes les transactions sont loguées
 ✅ Seuls les propriétaires de boutique peuvent configurer
 ✅ Réponse API ne contient que des booléens (has_api_key, etc.)
+✅ Stock réservé avec expiration automatique (24h)
+✅ Commission calculée côté serveur (non modifiable par client)
 Conformité
 BCEAO : Respect des réglementations UEMOA
 PCI DSS : Pas de stockage de données bancaires
 RGPD : Consentement explicite pour les paiements
-7. Monitoring
+8. Monitoring
 Métriques Prometheus
 
 
@@ -684,59 +864,48 @@ payment_success_rate{provider="yenga_pay"}
 payment_duration_seconds{provider="yenga_pay"}
 withdrawals_created_total{method="ORANGE_MONEY"}
 withdrawals_success_total{method="ORANGE_MONEY"}
+cod_orders_created_total{shop_id="..."}
+cod_orders_delivered_total{shop_id="..."}
+cod_commission_total_cents{shop_id="..."}
+
 
 Alertes
 Taux d'échec > 5% sur 5 min
 Webhook non reçu après 10 min
 Provider indisponible > 1 min
 Retrait échoué > 3 tentatives
-8. Tests
+Commande COD en pending_confirmation > 24h (nombre élevé)
+9. Tests
 Tests de complétion (2026-06-27)
 
-# Test 1 : Paiement indirect (checkout page)
-$payBody = @{
-    provider = "yenga_pay"
-    phone_number = "+22670123456"
-    metadata = @{ flow = "indirect" }
-} | ConvertTo-Json -Depth 3
-# ✅ Résultat : redirect_url retournée
 
-# Test 2 : Paiement ONE_STEP (Orange Money)
-$payBody = @{
-    provider = "yenga_pay"
-    phone_number = "+22670123456"
-    metadata = @{ flow = "direct"; operator = "orange_money" }
-} | ConvertTo-Json -Depth 3
-# ✅ Résultat : USSD code *144*4*6*500#
+# Test 1 : Workflow COD complet
+$order = POST /api/orders (payment_method: cash_on_delivery)
+# ✅ Statut: pending_confirmation, reserved_until: now+24h
 
-# Test 3 : Paiement TWO_STEP (Moov Money)
-$payBody = @{
-    provider = "yenga_pay"
-    phone_number = "+22670123456"
-    metadata = @{ flow = "direct"; operator = "moov_money" }
-} | ConvertTo-Json -Depth 3
-# ✅ Résultat : OTP envoyé par SMS
+POST /api/orders/{id}/accept
+# ✅ Statut: confirmed, accepted_at défini
 
-# Test 4 : Compléter paiement TWO_STEP
-$completeBody = @{ otp = "123456" } | ConvertTo-Json
-Invoke-RestMethod -Uri "http://localhost:8081/api/payments/$paymentId/complete" ...
-# ✅ Résultat : status = success, transaction_id = YP20260627.1244.32615745
+POST /api/orders/{id}/out-for-delivery
+# ✅ Statut: out_for_delivery
 
-# Test 5 : Configuration par boutique
-Invoke-RestMethod -Uri "http://localhost:8081/api/shops/$shopId/payment-settings" ...
-# ✅ Résultat : config sauvegardée avec chiffrement
+POST /api/orders/{id}/deliver (amount_received: 50000)
+# ✅ Statut: delivered, Payment cash créé, commission 2.50% calculée
 
-# Test 6 : Cash-out
-$withdrawalBody = @{
-    amount_cents = 50000
-    payment_method = "ORANGE_MONEY"
-    destination_number = "+22670123456"
-} | ConvertTo-Json
-# ✅ Résultat : retrait créé, 500 XOF transférés
+# Test 2 : Rejet marchand
+POST /api/orders/{id}/reject (reason: "rupture")
+# ✅ Statut: rejected, stock réincrémenté
 
+# Test 3 : Annulation client
+POST /api/orders/{id}/cancel
+# ✅ Statut: cancelled, stock réincrémenté
+
+# Test 4 : Expiration lazy
+UPDATE orders SET reserved_until = NOW() - 25h WHERE id = '...';
+POST /api/orders/{id}/accept
+# ✅ Erreur: "order has expired", statut passé à expired, stock réincrémenté
 
 Résultats complets
-
 Test
 Statut
 Paiement indirect
@@ -751,15 +920,7 @@ Paiement TWO_STEP (Sank)
 ✅
 Paiement TWO_STEP (Coris)
 ✅
-Complétion OTP (Moov)
-✅
-Complétion OTP (Sank)
-✅
-Complétion OTP (Coris)
-✅
-Complétion OTP (Orange)
-✅
-Complétion OTP (Telecel)
+Complétion OTP (5 opérateurs)
 ✅
 Configuration boutique
 ✅
@@ -773,11 +934,18 @@ Cash-out Moov Money
 ✅
 Webhook HMAC validation
 ✅
-Total : 17/17 tests réussis (100%)
-Total retiré : 700 XOF
-Total reçu : 4 870 XOF
-Frais collectés : 130 XOF
-9. Dépannage
+COD workflow complet
+✅
+COD commission 2.50%
+✅
+COD rejet (stock++)
+✅
+COD annulation (stock++)
+✅
+COD expiration lazy (stock++)
+✅
+Total : 22/22 tests réussis (100%)
+10. Dépannage
 Webhook ne persiste pas
 Symptôme : Le webhook est reçu mais le paiement reste en processing.
 Cause : Problème d'injection du tenant context.
@@ -788,12 +956,11 @@ Cause : Clés API invalides dans la config boutique.
 Solution :
 Vérifier les variables d'environnement 
 
-
 $env:YENGA_PAY_API_KEY
 $env:YENGA_PAY_ORGANIZATION_ID
 $env:YENGA_PAY_PROJECT_ID
 
-Désactiver la config boutique pour utiliser la globale :
+Désactiver la config boutique pour utiliser la globale 
 
 $config = @{ yenga_pay = @{ enabled = $false } } | ConvertTo-Json
 Invoke-RestMethod -Uri "http://localhost:8081/api/shops/$shopId/payment-settings" -Method PUT -Body $config
@@ -806,6 +973,21 @@ Webhook HMAC ne matche pas
 Symptôme : Invalid webhook signature
 Cause : Yenga Pay signe le body brut (pas JSON.stringify).
 Solution : Notre implémentation Go signe les bytes bruts du body HTTP, ce qui est correct. Vérifier que le webhookSecret est correct.
+Commande COD bloquée en pending_confirmation
+Symptôme : Une commande reste en pending_confirmation indéfiniment.
+Cause : Le marchand n'a pas accepté/refusé dans les 24h.
+Solution :
+Automatique : L'expiration lazy détecte le problème lors de la prochaine action
+Manuel : Forcer l'expiration :
+sql
+
+UPDATE orders SET reserved_until = NOW() - INTERVAL '1 hour' WHERE id = '...';
+
+Puis tenter d'accepter → la commande passera à expired et le stock sera réincrémenté.
+Commission à 0 au lieu de 2.50%
+Symptôme : commission_fees: 0 dans les logs.
+Cause : La boutique n'a pas de shop_payment_settings configuré.
+Solution : Vérifier que GetCashCommissionRate() retourne bien 250 par défaut (bug corrigé en v2.8.0).
 Timestamps incohérents
 Symptôme : initiated_at et completed_at dans des fuseaux différents.
 Solution :
@@ -822,5 +1004,7 @@ Security Policy
 Voir CONTRIBUTING.md pour les détails.
 Prochains providers à implémenter :
 🚧 Wave
-🚧 Cash à la livraison
+🚧 SMS notifications (Africa's Talking)
+
+
 
