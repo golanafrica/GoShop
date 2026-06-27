@@ -1,14 +1,14 @@
 # 💳 Système de paiement
 
-**Version** : v2.5.0-withdrawals  
-**Date** : 2026-06-26  
-**Statut** : ✅ Production-ready (Yenga Pay réel + Cash-out opérationnel)
+**Version** : v2.7.0-multi-operator  
+**Date** : 2026-06-27  
+**Statut** : ✅ **PRODUCTION READY** - 6 opérateurs validés, 10 transactions réussies
 
 ---
 
 ## 📋 État actuel
 
-### ✅ Implémenté
+### ✅ Implémenté et validé
 
 | Version | Fonctionnalité | Statut |
 |---------|----------------|--------|
@@ -17,10 +17,10 @@
 | v2.3.0 | Configuration par boutique (hybride) | ✅ |
 | v2.4.0 | Chiffrement AES-256-GCM des clés API | ✅ |
 | v2.5.0 | Cash-out (retraits Mobile Money) | ✅ |
+| **v2.7.0** | **Multi-opérateur complet (ONE_STEP + TWO_STEP + Indirect)** | ✅ **VALIDÉ** |
 
 ### 🚧 À venir
 - **Wave** : Provider Mobile Money
-- **MTN MoMo** : Provider Mobile Money
 - **Cash à la livraison** : Workflow complet
 - **Crédit** : Paiement en tranches avec score de fiabilité
 
@@ -34,6 +34,44 @@ Système modulaire supportant **4 modes de paiement** :
 2. **Orange Money** ✅ (mock) - USSD `#144*111#`
 3. **Moov Money** ✅ (mock) - USSD `#135*2#`
 4. **Cash-out** ✅ (retraits vers Mobile Money via Yenga Pay)
+
+---
+
+## 📊 Résultats de production (2026-06-27)
+
+### Dashboard Yenga Pay - Statistiques
+
+| Métrique | Valeur |
+|----------|--------|
+| **Solde actuel** | 4 170 XOF |
+| **Total reçu** | 4 870 XOF |
+| **Total retiré** | 700 XOF |
+| **Frais collectés** | 130 XOF |
+| **Transactions Pay In** | 10 |
+| **Retraits Cash Out** | 2 |
+| **Taux de succès** | **100%** |
+
+### Transactions Pay In (10/10 réussies)
+
+| Date | Transaction ID | Opérateur | Montant brut | Frais | Montant net |
+|------|----------------|-----------|--------------|-------|-------------|
+| 27/06/2026 12:50 | `YP20260627.1250.75469419` | Telecel | 500 XOF | 13 XOF | 487 XOF |
+| 27/06/2026 12:50 | `YP20260627.1250.61831018` | Orange | 500 XOF | 13 XOF | 487 XOF |
+| 27/06/2026 12:50 | `YP20260627.1250.23971082` | Coris | 500 XOF | 13 XOF | 487 XOF |
+| 27/06/2026 12:50 | `YP20260627.1250.65505543` | Sank | 500 XOF | 13 XOF | 487 XOF |
+| 27/06/2026 12:44 | `YP20260627.1244.32615745` | Moov | 500 XOF | 13 XOF | 487 XOF |
+| 24/06/2026 23:13 | `YP20260624.2313.35765328` | Sank | 500 XOF | 13 XOF | 487 XOF |
+| 24/06/2026 23:13 | `YP20260624.2313.05467272` | Coris | 500 XOF | 13 XOF | 487 XOF |
+| 24/06/2026 23:12 | `YP20260624.2312.86159715` | Sank | 500 XOF | 13 XOF | 487 XOF |
+| 24/06/2026 23:12 | `YP20260624.2312.02572603` | Coris | 500 XOF | 13 XOF | 487 XOF |
+| 24/06/2026 22:55 | `YP20260624.2255.08849184` | Moov | 500 XOF | 13 XOF | 487 XOF |
+
+### Retraits Cash Out (2/2 réussis)
+
+| Date | Transaction ID | Opérateur | Montant | Statut |
+|------|----------------|-----------|---------|--------|
+| 26/06/2026 21:03 | `YPCO20260626.2103.65687.7311` | MOOV MONEY | 200 XOF | ✅ Réussi |
+| 26/06/2026 20:56 | `YPCO20260626.2056.65687.8675` | ORANGE MONEY | 500 XOF | ✅ Réussi |
 
 ---
 
@@ -61,11 +99,10 @@ type Provider interface {
     ValidateWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error)
     Refund(ctx context.Context, providerRef string, amountCents int64) error
     IsAvailable(ctx context.Context) bool
-    CashOut(ctx context.Context, req *CashOutRequest) (*CashOutResponse, error) // 🆕
+    CashOut(ctx context.Context, req *CashOutRequest) (*CashOutResponse, error)
 }
 
 Providers supportés
-
 Provider
 Code
 Type
@@ -102,8 +139,6 @@ ONE_STEP
 -
 ✅
 Flux de paiement
-
-Flux de paiement
 Flux indirect (checkout page)
 
 1. POST /api/orders/{id}/pay (flow: indirect)
@@ -124,7 +159,7 @@ Flux indirect (checkout page)
 6. Webhook Yenga Pay → /webhooks/yenga_pay
          │
          ▼
-7. Validation HMAC-SHA256
+7. Validation HMAC-SHA256 (header: x-webhook-hash)
          │
          ▼
 8. Statut payment → SUCCESS
@@ -190,6 +225,7 @@ Content-Type: application/json
 
 Réponse 201 :
 
+
 {
   "payment_id": "2767e73d-d5a3-43f0-a081-74508b0b9586",
   "provider_ref": "cmqso9fgg031os601huvnzlan",
@@ -206,6 +242,7 @@ Réponse 201 :
 
 Compléter un paiement TWO_STEP
 
+
 POST /api/payments/{payment_id}/complete
 Authorization: Bearer {token}
 X-Shop-Slug: {shop_slug}
@@ -216,6 +253,7 @@ Content-Type: application/json
 }
 
 Réponse 200 :
+
 
 {
   "id": "2767e73d-d5a3-43f0-a081-74508b0b9586",
@@ -232,6 +270,11 @@ Webhooks Yenga Pay
 Endpoint : POST /webhooks/yenga_pay
 Validation HMAC-SHA256 :
 
+// ⚠️ IMPORTANT : Yenga Pay utilise le header "x-webhook-hash" (pas "X-Signature")
+signature := r.Header.Get("x-webhook-hash")
+if signature == "" {
+    signature = r.Header.Get("X-Signature") // Fallback pour compatibilité
+}
 
 mac := hmac.New(sha256.New, []byte(webhookSecret))
 mac.Write(payload)
@@ -259,7 +302,6 @@ Payload :
 }
 
 Header : x-webhook-hash: {hmac_signature}
-
 2. Configuration par boutique (Fallback hybride) ✅
 Architecture
 
@@ -286,12 +328,12 @@ Architecture
 │  - Clés déchiffrées à la volée                          │
 └─────────────────────────────────────────────────────────┘
 
+
 Endpoints de configuration
 Récupérer la config
 
 GET /api/shops/{shop_id}/payment-settings
 Authorization: Bearer {token}
-
 
 Réponse 200 :
 
@@ -363,8 +405,7 @@ YENGA_PAY_PROJECT_ID=65687
 YENGA_PAY_WEBHOOK_SECRET=c38ccab5-836d-4453-a6e0-2eb0b9df3097
 YENGA_PAY_ENV=test
 
-
-Vérification en base
+Vérification en base :
 
 SELECT 
     shop_id,
@@ -380,9 +421,9 @@ shop_id              | yenga_pay_enabled | api_key_encrypted
 ---------------------+-------------------+----------------------------------------------
 ec4ff426-db05-...    | t                 | jMTDyJfO2G6k0kfSRLsgAJvPmlsysl4rccfsAvqXvq7y
 
-
 3. Cash-out (Retraits) ✅
 Architecture
+
 
 1. POST /api/withdrawals
          │
@@ -393,20 +434,16 @@ Architecture
 3. POST https://api.yengapay.com/api/v1/groups/{org_id}/cash-out
          │
          ▼
-4. Sauvegarde Withdrawal en DB (statut: PENDING)
+4. Si HTTP 200 + ID valide → marque SUCCESS directement
+   (Yenga Pay traite quasi-synchroniquement)
          │
          ▼
 5. Retourne le retrait avec provider_ref
-         │
-         ▼
-6. Yenga Pay traite le retrait (quelques secondes)
-         │
-         ▼
-7. Statut → SUCCESS (frais calculés)
 
-
+⚠️ Note importante : Yenga Pay ne fournit pas d'endpoint API pour vérifier le statut des cash-outs marchands. Les retraits sont marqués SUCCESS immédiatement après création si HTTP 200 + ID valide. Le statut final n'est visible que dans le dashboard Yenga Pay.
 Endpoints API
 Créer un retrait
+
 
 POST /api/withdrawals
 Authorization: Bearer {token}
@@ -421,7 +458,6 @@ Content-Type: application/json
   "description": "Retrait vers Orange Money"
 }
 
-
 Réponse 201 :
 
 {
@@ -432,8 +468,8 @@ Réponse 201 :
   "amount_cents": 50000,
   "currency": "XOF",
   "fees_cents": 0,
-  "net_amount_cents": 0,
-  "status": "processing",
+  "net_amount_cents": 50000,
+  "status": "success",
   "payment_method": "ORANGE_MONEY",
   "destination_number": "+22670123456",
   "destination_name": "Yoda Lassina",
@@ -454,7 +490,6 @@ Authorization: Bearer {token}
 X-Shop-Slug: {shop_slug}
 
 Méthodes de paiement supportées
-
 
 Méthode
 Code
@@ -477,26 +512,6 @@ SANK_MONEY
 MTN
 MTN
 ✅
-Tests réalisés
-#
-Montant
-Méthode
-Provider Ref
-Statut
-1
-500 XOF
-ORANGE_MONEY
-YPCO20260626.2056.65687.8675
-✅ Réussi
-2
-200 XOF
-MOOV_MONEY
-YPCO20260626.2103.65687.7311
-✅ Réussi
-Total retiré : 700 XOF
-Taux de succès : 100%
-
-
 4. Machine à états
 Paiements
 
@@ -518,7 +533,6 @@ Paiements
                   ┌──────────┐
                   │ REFUNDED │
                   └──────────┘
-                  
 
 
 Retraits
@@ -531,7 +545,6 @@ Retraits
                        ┌──────────┐
                        │  FAILED  │
                        └──────────┘
-
 
 
 5. Base de données
@@ -613,6 +626,7 @@ CREATE INDEX idx_withdrawals_shop_id ON withdrawals(shop_id);
 CREATE INDEX idx_withdrawals_status ON withdrawals(status);
 CREATE INDEX idx_withdrawals_provider_ref ON withdrawals(provider_ref);
 
+
 Table payment_webhooks
 
 CREATE TABLE payment_webhooks (
@@ -627,6 +641,7 @@ CREATE TABLE payment_webhooks (
   processed BOOLEAN NOT NULL DEFAULT false,
   received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
 
 6. Sécurité
 Protection contre les attaques
@@ -649,6 +664,7 @@ Chiffrement AES-256-GCM en base
 Règles
 ✅ Clés API chiffrées en base (AES-256-GCM)
 ✅ Validation HMAC pour tous les webhooks
+✅ Header webhook : x-webhook-hash (standard Yenga Pay)
 ✅ Idempotence : chaque transaction a un ID unique
 ✅ Audit trail : toutes les transactions sont loguées
 ✅ Seuls les propriétaires de boutique peuvent configurer
@@ -660,6 +676,7 @@ RGPD : Consentement explicite pour les paiements
 7. Monitoring
 Métriques Prometheus
 
+
 payments_initiated_total{provider="yenga_pay"}
 payments_success_total{provider="yenga_pay"}
 webhooks_received_total{provider="yenga_pay"}
@@ -668,14 +685,13 @@ payment_duration_seconds{provider="yenga_pay"}
 withdrawals_created_total{method="ORANGE_MONEY"}
 withdrawals_success_total{method="ORANGE_MONEY"}
 
-
 Alertes
 Taux d'échec > 5% sur 5 min
 Webhook non reçu après 10 min
 Provider indisponible > 1 min
 Retrait échoué > 3 tentatives
 8. Tests
-Tests réalisés
+Tests de complétion (2026-06-27)
 
 # Test 1 : Paiement indirect (checkout page)
 $payBody = @{
@@ -683,7 +699,6 @@ $payBody = @{
     phone_number = "+22670123456"
     metadata = @{ flow = "indirect" }
 } | ConvertTo-Json -Depth 3
-
 # ✅ Résultat : redirect_url retournée
 
 # Test 2 : Paiement ONE_STEP (Orange Money)
@@ -692,7 +707,6 @@ $payBody = @{
     phone_number = "+22670123456"
     metadata = @{ flow = "direct"; operator = "orange_money" }
 } | ConvertTo-Json -Depth 3
-
 # ✅ Résultat : USSD code *144*4*6*500#
 
 # Test 3 : Paiement TWO_STEP (Moov Money)
@@ -701,18 +715,15 @@ $payBody = @{
     phone_number = "+22670123456"
     metadata = @{ flow = "direct"; operator = "moov_money" }
 } | ConvertTo-Json -Depth 3
-
 # ✅ Résultat : OTP envoyé par SMS
 
 # Test 4 : Compléter paiement TWO_STEP
 $completeBody = @{ otp = "123456" } | ConvertTo-Json
 Invoke-RestMethod -Uri "http://localhost:8081/api/payments/$paymentId/complete" ...
-
-# ✅ Résultat : status = success
+# ✅ Résultat : status = success, transaction_id = YP20260627.1244.32615745
 
 # Test 5 : Configuration par boutique
 Invoke-RestMethod -Uri "http://localhost:8081/api/shops/$shopId/payment-settings" ...
-
 # ✅ Résultat : config sauvegardée avec chiffrement
 
 # Test 6 : Cash-out
@@ -721,19 +732,34 @@ $withdrawalBody = @{
     payment_method = "ORANGE_MONEY"
     destination_number = "+22670123456"
 } | ConvertTo-Json
-
 # ✅ Résultat : retrait créé, 500 XOF transférés
 
-Résultats
+
+Résultats complets
+
 Test
 Statut
 Paiement indirect
 ✅
 Paiement ONE_STEP (Orange)
 ✅
+Paiement ONE_STEP (Telecel)
+✅
 Paiement TWO_STEP (Moov)
 ✅
-Complétion OTP
+Paiement TWO_STEP (Sank)
+✅
+Paiement TWO_STEP (Coris)
+✅
+Complétion OTP (Moov)
+✅
+Complétion OTP (Sank)
+✅
+Complétion OTP (Coris)
+✅
+Complétion OTP (Orange)
+✅
+Complétion OTP (Telecel)
 ✅
 Configuration boutique
 ✅
@@ -745,8 +771,12 @@ Cash-out Orange Money
 ✅
 Cash-out Moov Money
 ✅
+Webhook HMAC validation
+✅
+Total : 17/17 tests réussis (100%)
 Total retiré : 700 XOF
-Taux de succès : 100%
+Total reçu : 4 870 XOF
+Frais collectés : 130 XOF
 9. Dépannage
 Webhook ne persiste pas
 Symptôme : Le webhook est reçu mais le paiement reste en processing.
@@ -758,15 +788,24 @@ Cause : Clés API invalides dans la config boutique.
 Solution :
 Vérifier les variables d'environnement 
 
+
 $env:YENGA_PAY_API_KEY
 $env:YENGA_PAY_ORGANIZATION_ID
 $env:YENGA_PAY_PROJECT_ID
 
-Désactiver la config boutique pour utiliser la globale 
+Désactiver la config boutique pour utiliser la globale :
 
 $config = @{ yenga_pay = @{ enabled = $false } } | ConvertTo-Json
 Invoke-RestMethod -Uri "http://localhost:8081/api/shops/$shopId/payment-settings" -Method PUT -Body $config
 
+Erreur 500 sur cash-out
+Symptôme : Yenga Pay cash-out error (status 500): Internal server error
+Cause : Problème temporaire côté Yenga Pay ou limite sandbox atteinte.
+Solution : Attendre quelques minutes et réessayer.
+Webhook HMAC ne matche pas
+Symptôme : Invalid webhook signature
+Cause : Yenga Pay signe le body brut (pas JSON.stringify).
+Solution : Notre implémentation Go signe les bytes bruts du body HTTP, ce qui est correct. Vérifier que le webhookSecret est correct.
 Timestamps incohérents
 Symptôme : initiated_at et completed_at dans des fuseaux différents.
 Solution :
@@ -783,6 +822,5 @@ Security Policy
 Voir CONTRIBUTING.md pour les détails.
 Prochains providers à implémenter :
 🚧 Wave
-🚧 MTN MoMo
 🚧 Cash à la livraison
 
