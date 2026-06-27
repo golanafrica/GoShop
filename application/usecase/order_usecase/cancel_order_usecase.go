@@ -76,18 +76,29 @@ func (uc *CancelOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 		return nil, fmt.Errorf("invalid status transition from %s", order.Status)
 	}
 
-	// 6. Marquer comme annulée
+	// 🆕 6. SAUVEGARDER l'état AVANT modification pour savoir si réincrémentation est nécessaire
+	originalStatus := order.Status
+	isCashOnDelivery := order.IsCashOnDelivery()
+	wasPendingConfirmation := originalStatus == string(entity.OrderStatusPendingConfirmation)
+
+	// 7. Marquer comme annulée
 	if err = order.MarkCancelled(); err != nil {
 		return nil, fmt.Errorf("failed to mark cancelled: %w", err)
 	}
 
-	// 7. Mettre à jour en base
+	// 8. Mettre à jour en base
 	if err = orderRepoTx.UpdateOrder(ctx, order); err != nil {
 		return nil, fmt.Errorf("failed to update order: %w", err)
 	}
 
-	// 8. Réincrémentation du stock (si commande cash en pending_confirmation)
-	if order.IsCashOnDelivery() && order.Status == string(entity.OrderStatusPendingConfirmation) {
+	// 🆕 9. Réincrémentation du stock si commande cash en pending_confirmation
+	// (utilisation des variables sauvegardées, pas de l'état modifié)
+	if isCashOnDelivery && wasPendingConfirmation {
+		logger.Info().
+			Str("order_id", order.ID).
+			Str("original_status", originalStatus).
+			Msg("Restoring stock for cancelled cash order")
+
 		for _, item := range order.Items {
 			product, err := productRepoTx.FindByID(ctx, item.ProductID)
 			if err != nil {
@@ -97,14 +108,22 @@ func (uc *CancelOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 			if _, err = productRepoTx.Update(ctx, product); err != nil {
 				return nil, fmt.Errorf("failed to update product %s: %w", item.ProductID, err)
 			}
-			logger.Debug().
+			logger.Info().
 				Str("product_id", item.ProductID).
 				Int("quantity_restored", item.Quantity).
-				Msg("Stock restored on cancellation")
+				Int("new_stock", product.Stock).
+				Msg("✅ Stock restored on cancellation")
 		}
+	} else {
+		logger.Debug().
+			Str("order_id", order.ID).
+			Bool("is_cash", isCashOnDelivery).
+			Bool("was_pending", wasPendingConfirmation).
+			Str("original_status", originalStatus).
+			Msg("No stock restoration needed")
 	}
 
-	// 9. Commit
+	// 10. Commit
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}

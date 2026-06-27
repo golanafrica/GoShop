@@ -78,6 +78,11 @@ func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 
 	// 6. Vérifier l'expiration lazy
 	if order.IsExpired() {
+		logger.Warn().
+			Str("order_id", order.ID).
+			Time("reserved_until", *order.ReservedUntil).
+			Msg("Order has expired, auto-expiring and restoring stock")
+
 		// Auto-expirer la commande
 		if err = order.MarkExpired(); err != nil {
 			return nil, fmt.Errorf("failed to mark expired: %w", err)
@@ -116,7 +121,6 @@ func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 	}
 
 	// 11. Notification (hors transaction)
-	// Récupérer le téléphone client depuis la table customers (optionnel)
 	customerPhone := "" // TODO: récupérer depuis customer repo
 	if err = uc.notifService.NotifyClientOrderConfirmed(ctx, order, customerPhone); err != nil {
 		logger.Warn().Err(err).Msg("failed to send notification")
@@ -132,6 +136,12 @@ func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 
 // restoreStock réincrémente le stock des produits de la commande
 func (uc *AcceptOrderUsecase) restoreStock(ctx context.Context, productRepo repository.ProductRepository, order *entity.Order) error {
+	logger := zerolog.Ctx(ctx)
+	logger.Info().
+		Str("order_id", order.ID).
+		Int("items_count", len(order.Items)).
+		Msg("Restoring stock for expired order")
+
 	for _, item := range order.Items {
 		product, err := productRepo.FindByID(ctx, item.ProductID)
 		if err != nil {
@@ -141,6 +151,11 @@ func (uc *AcceptOrderUsecase) restoreStock(ctx context.Context, productRepo repo
 		if _, err = productRepo.Update(ctx, product); err != nil {
 			return fmt.Errorf("failed to update product %s: %w", item.ProductID, err)
 		}
+		logger.Info().
+			Str("product_id", item.ProductID).
+			Int("quantity_restored", item.Quantity).
+			Int("new_stock", product.Stock).
+			Msg("✅ Stock restored on expiration")
 	}
 	return nil
 }
