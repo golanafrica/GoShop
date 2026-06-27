@@ -134,6 +134,35 @@ func (mr *MockOrderRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockOrderRepository)(nil).FindByID), ctx, id)
 }
 
+// FindCashPendingByShop mocks base method.
+func (m *MockOrderRepository) FindCashPendingByShop(ctx context.Context, shopID string) ([]*entity.Order, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindCashPendingByShop", ctx, shopID)
+	ret0, _ := ret[0].([]*entity.Order)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindCashPendingByShop indicates an expected call of FindCashPendingByShop.
+func (mr *MockOrderRepositoryMockRecorder) FindCashPendingByShop(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCashPendingByShop", reflect.TypeOf((*MockOrderRepository)(nil).FindCashPendingByShop), ctx, shopID)
+}
+
+// UpdateOrder mocks base method.
+func (m *MockOrderRepository) UpdateOrder(ctx context.Context, order *entity.Order) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateOrder", ctx, order)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateOrder indicates an expected call of UpdateOrder.
+func (mr *MockOrderRepositoryMockRecorder) UpdateOrder(ctx, order any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateOrder", reflect.TypeOf((*MockOrderRepository)(nil).UpdateOrder), ctx, order)
+}
+
 // UpdateStatus mocks base method.
 func (m *MockOrderRepository) UpdateStatus(ctx context.Context, orderID uuid.UUID, status string) error {
 	m.ctrl.T.Helper()

@@ -14,6 +14,7 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
@@ -31,11 +32,14 @@ import (
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
 
+	"Goshop/domain/service"
+	"Goshop/infrastructure/notification"
+
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	handlers "Goshop/interfaces/handler"
 	customerhandler "Goshop/interfaces/handler/customer_handler"
-	"Goshop/interfaces/handler/orders"
+	ordershandler "Goshop/interfaces/handler/orders"
 	paymenthandler "Goshop/interfaces/handler/payment_handler"
 	productHandler "Goshop/interfaces/handler/product"
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
@@ -105,7 +109,7 @@ func (a *App) setupRouter() {
 	shopRepo := shop.NewShopRepositoryInfrastructure(a.DB)
 
 	paymentRepo := paymentpostgres.NewPaymentRepositoryPostgres(a.DB)
-	withdrawalRepo := withdrawalpostgres.NewWithdrawalRepositoryPostgres(a.DB) // 🆕
+	withdrawalRepo := withdrawalpostgres.NewWithdrawalRepositoryPostgres(a.DB)
 	paymentRegistry := paymentinfra.NewRegistry()
 
 	// Mock Orange Money Provider
@@ -144,6 +148,13 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
 	}
 
+	// ============ 🆕 NOTIFICATION SERVICE ============
+	// No-op en développement (log seulement)
+	// Pour brancher un vrai provider SMS (Africa's Talking, Twilio), il suffit
+	// de remplacer cette implémentation, sans toucher aux usecases.
+	notifService := service.NotificationService(notification.NewNoopNotificationService(a.Logger.Logger))
+	a.Logger.Info().Msg("✅ Notification service initialized (no-op mode)")
+
 	// -- Usecases
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
@@ -160,7 +171,7 @@ func (a *App) setupRouter() {
 	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
 	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
 
-	// 🆕 Configure Payment Usecase (pour config par boutique)
+	// Configure Payment Usecase (pour config par boutique)
 	configurePaymentUC := shopusecase.NewConfigurePaymentUsecase(shopRepo, shopRepo, shopRepo)
 
 	// Payment Usecases
@@ -188,13 +199,50 @@ func (a *App) setupRouter() {
 	)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
 
-	// 🆕 Withdrawal Usecases
+	// Withdrawal Usecases
 	createWithdrawalUC := withdrawalusecase.NewCreateWithdrawalUsecase(
 		withdrawalRepo,
 		shopRepo,
 		paymentRegistry,
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
+
+	// ============ 🆕 CASH ORDER USECASES ============
+	acceptOrderUC := orderusecase.NewAcceptOrderUsecase(
+		postgresOrderRepo,
+		postgreProductRepo,
+		notifService,
+		txmanagerRepo,
+	)
+
+	rejectOrderUC := orderusecase.NewRejectOrderUsecase(
+		postgresOrderRepo,
+		postgreProductRepo,
+		notifService,
+		txmanagerRepo,
+	)
+
+	outForDeliveryUC := orderusecase.NewOutForDeliveryUsecase(
+		postgresOrderRepo,
+		txmanagerRepo,
+	)
+
+	deliverOrderUC := orderusecase.NewDeliverOrderUsecase(
+		postgresOrderRepo,
+		paymentRepo,
+		shopRepo,
+		notifService,
+		txmanagerRepo,
+	)
+
+	cancelOrderUC := orderusecase.NewCancelOrderUsecase(
+		postgresOrderRepo,
+		postgreProductRepo,
+		notifService,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel)")
 
 	// -- Handlers
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -209,13 +257,22 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	orderHandler := orders.NewOrderHandler(
+	orderHandler := ordershandler.NewOrderHandler(
 		a.DB,
 		txmanagerRepo,
 		postgresOrderRepo,
 		postgreProductRepo,
 		postgresCustomerRepo,
 		postgresOrderItem,
+	)
+
+	// 🆕 Cash Order Handler
+	cashOrderHandler := ordershandler.NewCashOrderHandler(
+		acceptOrderUC,
+		rejectOrderUC,
+		outForDeliveryUC,
+		deliverOrderUC,
+		cancelOrderUC,
 	)
 
 	userHandler := userhandler.NewUserHandler(
@@ -229,7 +286,7 @@ func (a *App) setupRouter() {
 		updateShopUsecase,
 	)
 
-	// 🆕 Payment Settings Handler
+	// Payment Settings Handler
 	paymentSettingsHandler := shophandler.NewPaymentSettingsHandler(configurePaymentUC)
 
 	// Payment Handlers
@@ -242,7 +299,7 @@ func (a *App) setupRouter() {
 	)
 	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
 
-	// 🆕 Withdrawal Handler
+	// Withdrawal Handler
 	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
 		createWithdrawalUC,
 		listWithdrawalsUC,
@@ -282,7 +339,7 @@ func (a *App) setupRouter() {
 			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
 			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
 
-			// 🆕 Routes de configuration des paiements par boutique
+			// Routes de configuration des paiements par boutique
 			r.Get("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.GetPaymentSettings))
 			r.Put("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.UpdatePaymentSettings))
 		})
@@ -309,14 +366,22 @@ func (a *App) setupRouter() {
 				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
 			})
 
-			// Orders
+			// Orders (existant + 🆕 cash workflow)
 			r.Route("/orders", func(r chi.Router) {
+				// Routes existantes
 				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
 				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
 				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
 
-				// Payment initiation
+				// Payment initiation (mobile money)
 				r.Post("/{id}/pay", middl.ErrorHandler(paymentHandler.InitiatePayment))
+
+				// 🆕 Cash on Delivery - Workflow complet
+				r.Post("/{id}/accept", middl.ErrorHandler(cashOrderHandler.AcceptOrder))
+				r.Post("/{id}/reject", middl.ErrorHandler(cashOrderHandler.RejectOrder))
+				r.Post("/{id}/out-for-delivery", middl.ErrorHandler(cashOrderHandler.OutForDelivery))
+				r.Post("/{id}/deliver", middl.ErrorHandler(cashOrderHandler.DeliverOrder))
+				r.Post("/{id}/cancel", middl.ErrorHandler(cashOrderHandler.CancelOrder))
 			})
 
 			// Payments
@@ -327,7 +392,7 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment))
 			})
 
-			// 🆕 Withdrawals (cash-out)
+			// Withdrawals (cash-out)
 			r.Route("/withdrawals", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(withdrawalHandler.CreateWithdrawal))
 				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
@@ -341,7 +406,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings + withdrawals)")
+		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings + withdrawals + cash workflow)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

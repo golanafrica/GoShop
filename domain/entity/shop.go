@@ -93,6 +93,8 @@ func (s *Shop) IsValidPlan() bool {
 	}
 }
 
+// ============ CONFIGURATION PAIEMENT ============
+
 // YengaPayShopSettings représente la configuration Yenga Pay d'une boutique
 type YengaPayShopSettings struct {
 	Enabled        bool     `json:"enabled"`
@@ -105,12 +107,17 @@ type YengaPayShopSettings struct {
 }
 
 // ShopPaymentSettings représente tous les settings de paiement d'une boutique
+// 🆕 Inclut maintenant la configuration cash à la livraison
 type ShopPaymentSettings struct {
 	ShopID      uuid.UUID            `json:"shop_id"`
 	OrangeMoney bool                 `json:"orange_money_enabled"`
 	MoovMoney   bool                 `json:"moov_money_enabled"`
 	Wave        bool                 `json:"wave_enabled"`
 	YengaPay    YengaPayShopSettings `json:"yenga_pay"`
+
+	// 🆕 Cash à la livraison
+	CashOnDeliveryEnabled bool `json:"cash_on_delivery_enabled"`
+	CashCommissionRate    int  `json:"cash_commission_rate"` // basis points (250 = 2.50%)
 }
 
 // IsYengaPayEnabled vérifie si Yenga Pay est activé pour cette boutique
@@ -126,4 +133,18 @@ func (s *YengaPayShopSettings) IsOperatorEnabled(operator string) bool {
 		}
 	}
 	return false
+}
+
+// IsCashOnDeliveryEnabled vérifie si le cash à la livraison est activé
+func (s *ShopPaymentSettings) IsCashOnDeliveryEnabled() bool {
+	return s.CashOnDeliveryEnabled
+}
+
+// GetCashCommissionRate retourne le taux de commission cash en basis points
+// Retourne 250 (2.50%) par défaut si la valeur est invalide
+func (s *ShopPaymentSettings) GetCashCommissionRate() int {
+	if s.CashCommissionRate <= 0 || s.CashCommissionRate > 10000 {
+		return 250 // Défaut : 2.50%
+	}
+	return s.CashCommissionRate
 }

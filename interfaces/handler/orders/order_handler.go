@@ -79,6 +79,7 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 	logger.Debug().
 		Str("customer_id", req.CustomerID).
 		Int("items_count", len(req.Items)).
+		Str("payment_method", req.PaymentMethod).
 		Msg("Order request decoded successfully")
 
 	// Validation
@@ -86,8 +87,9 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 		logger.Warn().
 			Err(err).
 			Interface("request", map[string]interface{}{
-				"customer_id": req.CustomerID,
-				"items_count": len(req.Items),
+				"customer_id":    req.CustomerID,
+				"items_count":    len(req.Items),
+				"payment_method": req.PaymentMethod,
 			}).
 			Msg("Order validation failed")
 		return utils.ErrValidationFailed
@@ -161,17 +163,25 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 		Int64("total_amount_cents", totalCents).
 		Msg("All order items enriched successfully")
 
-	// Création de l'entité commande
+	// 🆕 Création de l'entité commande avec payment_method
+	// Le statut initial (pending ou pending_confirmation) sera défini dans le usecase
+	// selon le payment_method
+	paymentMethod := req.PaymentMethod
+	if paymentMethod == "" {
+		paymentMethod = string(entity.PaymentMethodMobileMoney)
+	}
+
 	orderEntity := &entity.Order{
-		CustomerID: req.CustomerID,
-		TotalCents: totalCents,
-		Status:     "pending",
-		Items:      items,
+		CustomerID:    req.CustomerID,
+		TotalCents:    totalCents,
+		PaymentMethod: paymentMethod,
+		// Status sera défini dans le usecase selon payment_method
+		Items: items,
 	}
 
 	logger.Debug().
 		Str("customer_id", orderEntity.CustomerID).
-		Str("status", orderEntity.Status).
+		Str("payment_method", orderEntity.PaymentMethod).
 		Msg("Order entity created")
 
 	// Appel du usecase
@@ -182,10 +192,10 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 			Err(err).
 			Stack().
 			Interface("order_details", map[string]interface{}{
-				"customer_id": orderEntity.CustomerID,
-				"total_cents": orderEntity.TotalCents,
-				"items_count": len(orderEntity.Items),
-				"status":      orderEntity.Status,
+				"customer_id":    orderEntity.CustomerID,
+				"total_cents":    orderEntity.TotalCents,
+				"items_count":    len(orderEntity.Items),
+				"payment_method": orderEntity.PaymentMethod,
 			}).
 			Msg("Failed to create order")
 		return utils.ErrOrderCreateFail
@@ -194,6 +204,8 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 	logger.Info().
 		Str("order_id", createdOrder.ID).
 		Str("customer_id", createdOrder.CustomerID).
+		Str("payment_method", createdOrder.PaymentMethod).
+		Str("status", createdOrder.Status).
 		Int64("total_amount", createdOrder.TotalCents).
 		Msg("Order created successfully in usecase")
 
@@ -203,6 +215,8 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 	// Log de succès final
 	logger.Info().
 		Str("order_id", response.ID).
+		Str("status", response.Status).
+		Str("payment_method", response.PaymentMethod).
 		Dur("total_duration", time.Since(start)).
 		Int("http_status", http.StatusCreated).
 		Msg("Order creation completed successfully")

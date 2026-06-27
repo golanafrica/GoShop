@@ -241,48 +241,70 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 	return orders, nil
 }
 
-// Create crée une commande avec shop_id
+// Create crée une commande avec shop_id et tous les champs cash
 func (or *OrderPostgresInfra) Create(ctx context.Context, order *entity.Order) (*entity.Order, error) {
 	shopID, err := or.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query := `INSERT INTO orders (shop_id, customer_id, total_cents, status, created_at, updated_at) 
-	VALUES ($1, $2, $3, $4, NOW(), NOW())
-	RETURNING id, customer_id, total_cents, status, created_at, updated_at`
+	// 🆕 Payment method par défaut
+	paymentMethod := order.PaymentMethod
+	if paymentMethod == "" {
+		paymentMethod = string(entity.PaymentMethodMobileMoney)
+	}
+
+	query := `
+		INSERT INTO orders (
+			shop_id, customer_id, total_cents, status, 
+			payment_method, reserved_until,
+			created_at, updated_at
+		) 
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+		RETURNING id, customer_id, total_cents, status, 
+		          payment_method, reserved_until,
+		          created_at, updated_at
+	`
 
 	err = or.queryRowContext(ctx, query,
 		shopID,
 		order.CustomerID,
 		order.TotalCents,
 		order.Status,
+		paymentMethod,
+		order.ReservedUntil,
 	).Scan(
 		&order.ID,
 		&order.CustomerID,
 		&order.TotalCents,
 		&order.Status,
+		&order.PaymentMethod,
+		&order.ReservedUntil,
 		&order.CreatedAt,
 		&order.UpdatedAt,
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to create order %w", err)
+		return nil, fmt.Errorf("failed to create order: %w", err)
 	}
 
 	return order, nil
 }
 
-// FindByID trouve une commande par ID dans le shop courant
+// FindByID trouve une commande par ID dans le shop courant (enrichi avec champs cash)
 func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.Order, error) {
 	shopID, err := or.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query := `SELECT id, customer_id, total_cents, status, created_at, updated_at
-	FROM orders 
-	WHERE id = $1 AND shop_id = $2`
+	query := `
+		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
+		       delivery_notes, amount_received_cents, reserved_until
+		FROM orders 
+		WHERE id = $1 AND shop_id = $2
+	`
 
 	order := &entity.Order{}
 	err = or.queryRowContext(ctx, query, id, shopID).Scan(
@@ -292,6 +314,14 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 		&order.Status,
 		&order.CreatedAt,
 		&order.UpdatedAt,
+		&order.PaymentMethod,
+		&order.AcceptedAt,
+		&order.RejectedAt,
+		&order.DeliveredAt,
+		&order.CancelledAt,
+		&order.DeliveryNotes,
+		&order.AmountReceivedCents,
+		&order.ReservedUntil,
 	)
 
 	if err != nil {
@@ -303,8 +333,8 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 
 	// Récupérer les items de la commande
 	queryItem := `SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
-	FROM order_items
-	WHERE order_id = $1`
+		FROM order_items
+		WHERE order_id = $1`
 
 	rows, err := or.queryContext(ctx, queryItem, id)
 	if err != nil {
@@ -312,6 +342,7 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 	}
 	defer rows.Close()
 
+	order.Items = []*entity.OrderItem{}
 	for rows.Next() {
 		item := &entity.OrderItem{}
 		err := rows.Scan(
@@ -451,4 +482,107 @@ func (r *OrderPostgresInfra) UpdateStatus(ctx context.Context, orderID uuid.UUID
 	}
 
 	return nil
+}
+
+// UpdateOrder met à jour TOUS les champs de la commande (workflow cash)
+func (or *OrderPostgresInfra) UpdateOrder(ctx context.Context, order *entity.Order) error {
+	shopID, err := or.getShopID(ctx)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		UPDATE orders SET
+			status = $1,
+			payment_method = $2,
+			accepted_at = $3,
+			rejected_at = $4,
+			delivered_at = $5,
+			cancelled_at = $6,
+			delivery_notes = $7,
+			amount_received_cents = $8,
+			reserved_until = $9,
+			updated_at = NOW()
+		WHERE id = $10 AND shop_id = $11
+	`
+
+	result, err := or.execContext(ctx, query,
+		order.Status,
+		order.PaymentMethod,
+		order.AcceptedAt,
+		order.RejectedAt,
+		order.DeliveredAt,
+		order.CancelledAt,
+		order.DeliveryNotes,
+		order.AmountReceivedCents,
+		order.ReservedUntil,
+		order.ID,
+		shopID,
+	)
+	if err != nil {
+		return fmt.Errorf("update order: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("order %s not found", order.ID)
+	}
+
+	return nil
+}
+
+// FindCashPendingByShop retourne les commandes cash en attente de confirmation
+func (or *OrderPostgresInfra) FindCashPendingByShop(ctx context.Context, shopID string) ([]*entity.Order, error) {
+	query := `
+		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
+		       delivery_notes, amount_received_cents, reserved_until
+		FROM orders
+		WHERE shop_id = $1 
+		  AND payment_method = 'cash_on_delivery'
+		  AND status = 'pending_confirmation'
+		ORDER BY created_at ASC
+	`
+
+	rows, err := or.queryContext(ctx, query, shopID)
+	if err != nil {
+		return nil, fmt.Errorf("find cash pending orders: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []*entity.Order
+	for rows.Next() {
+		order, err := or.scanOrderWithCashFields(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+
+	return orders, rows.Err()
+}
+
+// scanOrderWithCashFields scanne une commande avec tous les champs cash
+func (or *OrderPostgresInfra) scanOrderWithCashFields(rows *sql.Rows) (*entity.Order, error) {
+	order := &entity.Order{}
+	err := rows.Scan(
+		&order.ID,
+		&order.CustomerID,
+		&order.TotalCents,
+		&order.Status,
+		&order.CreatedAt,
+		&order.UpdatedAt,
+		&order.PaymentMethod,
+		&order.AcceptedAt,
+		&order.RejectedAt,
+		&order.DeliveredAt,
+		&order.CancelledAt,
+		&order.DeliveryNotes,
+		&order.AmountReceivedCents,
+		&order.ReservedUntil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scan order with cash fields: %w", err)
+	}
+	return order, nil
 }

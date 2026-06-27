@@ -1,5 +1,4 @@
 // application/usecase/order_usecase/create_order_usecase.go
-// application/usecase/order_usecase/create_order_usecase.go
 package orderusecase
 
 import (
@@ -22,7 +21,6 @@ type CreateOrderUsecase struct {
 	customerRepo  repository.CustomerRepositoryInterface
 	orderItemRepo repository.OrderItemRepository
 	orderRepo     repository.OrderRepository
-	//logger        *setupLogging.Logger
 }
 
 func NewCreateOrderUsecase(
@@ -31,7 +29,6 @@ func NewCreateOrderUsecase(
 	customerRepo repository.CustomerRepositoryInterface,
 	orderItemRepo repository.OrderItemRepository,
 	orderRepo repository.OrderRepository,
-	//logger *setupLogging.Logger,
 ) *CreateOrderUsecase {
 	return &CreateOrderUsecase{
 		txManager:     txManager,
@@ -39,7 +36,6 @@ func NewCreateOrderUsecase(
 		customerRepo:  customerRepo,
 		orderItemRepo: orderItemRepo,
 		orderRepo:     orderRepo,
-		//	logger:        logger.WithComponent("create_order_usecase"),
 	}
 }
 
@@ -51,21 +47,12 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 		Str("operation", "execute").
 		Str("customer_id", order.CustomerID).
 		Int("items_count", len(order.Items)).
+		Str("payment_method", order.PaymentMethod).
 		Msg("Starting order creation process")
 
 	// 1. Début de la transaction
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Beginning transaction")
 	tx, err := ouc.txManager.BeginTx(ctx)
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Stack().
-			Str("operation", "execute").
-			Str("customer_id", order.CustomerID).
-			Msg("Failed to start transaction")
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
 
@@ -75,14 +62,7 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 				logger.Error().
 					Err(rollbackErr).
 					Str("original_error", err.Error()).
-					Str("operation", "execute").
-					Str("customer_id", order.CustomerID).
 					Msg("Failed to rollback transaction")
-			} else {
-				logger.Debug().
-					Str("operation", "execute").
-					Str("customer_id", order.CustomerID).
-					Msg("Transaction rolled back due to error")
 			}
 		}
 	}()
@@ -93,33 +73,16 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 	orderItemRepo := ouc.orderItemRepo.WithTX(tx)
 	orderRepo := ouc.orderRepo.WithTX(tx)
 
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Repositories attached to transaction")
-
 	// 3. Vérifier le client
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Verifying customer")
 	customer, err := customerRepo.FindByCustomerID(ctx, order.CustomerID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			logger.Warn().
-				Str("customer_id", order.CustomerID).
-				Msg("Customer not found")
 			return nil, errors.New("customer not found")
 		}
-		logger.Error().
-			Err(err).
-			Str("customer_id", order.CustomerID).
-			Msg("Failed to retrieve customer")
 		return nil, fmt.Errorf("failed to retrieve customer: %w", err)
 	}
 
 	if customer == nil {
-		logger.Warn().Str("customer_id", order.CustomerID).Msg("Customer not found")
 		return nil, errors.New("customer not found")
 	}
 
@@ -128,31 +91,20 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 		Str("customer_name", customer.FirstName+" "+customer.LastName).
 		Msg("Customer verified")
 
-	// 4. Traiter chaque item
+	// 4. Traiter chaque item (décrémentation stock - Option B)
 	var totalCents int64
-	logger.Info().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Processing order items")
-
 	for i, item := range order.Items {
 		itemLogger := logger.With().
-			Str("operation", "execute").
-			Str("customer_id", order.CustomerID).
 			Int("item_index", i).
 			Str("product_id", item.ProductID).
 			Int("quantity", item.Quantity).
 			Logger()
 
-		itemLogger.Debug().Msg("Processing order item")
-
 		product, err := productRepo.FindByID(ctx, item.ProductID)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				itemLogger.Warn().Msg("Product not found")
 				return nil, errors.New("product not found")
 			}
-			itemLogger.Error().Err(err).Msg("Failed to retrieve product")
 			return nil, fmt.Errorf("failed to retrieve product: %w", err)
 		}
 
@@ -160,7 +112,6 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 			itemLogger.Warn().
 				Int("available_stock", product.Stock).
 				Int("requested_quantity", item.Quantity).
-				Str("product_name", product.Name).
 				Msg("Insufficient stock for product")
 			return nil, errors.New("not enough stock for product")
 		}
@@ -171,110 +122,83 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 
 		product.Stock -= item.Quantity
 		if _, err := productRepo.Update(ctx, product); err != nil {
-			itemLogger.Error().
-				Err(err).
-				Str("product_name", product.Name).
-				Msg("Failed to update product stock")
 			return nil, fmt.Errorf("failed to update stock for product: %w", err)
 		}
 
 		itemLogger.Debug().
 			Str("product_name", product.Name).
-			Int64("unit_price", product.PriceCents).
 			Int64("subtotal", item.SubTotal_Cents).
 			Int("new_stock", product.Stock).
 			Msg("Order item processed successfully")
 	}
 
-	logger.Info().
-		Str("customer_id", order.CustomerID).
-		Int("items_processed", len(order.Items)).
-		Int64("total_amount", totalCents).
-		Msg("All order items processed")
-
-	// 5. Créer la commande
+	// 5. 🆕 Définir le statut initial et reserved_until selon payment_method
 	order.TotalCents = totalCents
-	order.Status = "PENDING"
-	order.CreatedAt = time.Now()
-	order.UpdatedAt = time.Now()
+	now := time.Now().UTC()
+	order.CreatedAt = now
+	order.UpdatedAt = now
 
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Creating order in repository")
+	// 🆕 Valeur par défaut pour payment_method
+	if order.PaymentMethod == "" {
+		order.PaymentMethod = string(entity.PaymentMethodMobileMoney)
+	}
+
+	// 🆕 Statut initial selon la méthode de paiement
+	switch order.PaymentMethod {
+	case string(entity.PaymentMethodCashOnDelivery):
+		order.Status = string(entity.OrderStatusPendingConfirmation)
+		// Réserver le stock pour 24h
+		reservedUntil := now.Add(24 * time.Hour)
+		order.ReservedUntil = &reservedUntil
+		logger.Info().
+			Str("payment_method", order.PaymentMethod).
+			Str("status", order.Status).
+			Time("reserved_until", reservedUntil).
+			Msg("Cash order created - waiting for merchant confirmation")
+	default:
+		order.Status = string(entity.OrderStatusPending)
+		logger.Info().
+			Str("payment_method", order.PaymentMethod).
+			Str("status", order.Status).
+			Msg("Mobile money order created - waiting for payment")
+	}
+
+	// 6. Créer la commande
 	createdOrder, err := orderRepo.Create(ctx, order)
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Stack().
-			Str("customer_id", order.CustomerID).
-			Int64("total_cents", order.TotalCents).
-			Int("items_count", len(order.Items)).
-			Str("status", order.Status).
-			Msg("Failed to create order")
 		return nil, fmt.Errorf("failed to create order: %w", err)
 	}
 
-	logger.Debug().
-		Str("order_id", createdOrder.ID).
-		Str("customer_id", createdOrder.CustomerID).
-		Msg("Order created in repository")
-
-	// 6. Créer les items de commande
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Creating order items")
+	// 7. Créer les items de commande
 	for i, item := range order.Items {
 		item.OrderID = createdOrder.ID
 		if _, err := orderItemRepo.Create(ctx, item); err != nil {
-			logger.Error().
-				Err(err).
-				Stack().
-				Str("order_id", createdOrder.ID).
-				Int("item_index", i).
-				Str("product_id", item.ProductID).
-				Msg("Failed to create order item")
 			return nil, fmt.Errorf("failed to create order item: %w", err)
 		}
+		logger.Debug().
+			Int("item_index", i).
+			Str("product_id", item.ProductID).
+			Msg("Order item created")
 	}
 
-	logger.Debug().
-		Str("order_id", createdOrder.ID).
-		Int("order_items_created", len(order.Items)).
-		Msg("All order items created successfully")
-
-	// 7. Commit de la transaction
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Committing transaction")
+	// 8. Commit de la transaction
 	if err := tx.Commit(); err != nil {
-		logger.Error().
-			Err(err).
-			Stack().
-			Str("operation", "execute").
-			Str("customer_id", order.CustomerID).
-			Msg("Failed to commit transaction")
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	logger.Debug().
-		Str("operation", "execute").
-		Str("customer_id", order.CustomerID).
-		Msg("Transaction committed successfully")
-
-	// 8. Log de succès final
+	// 9. Log de succès final
 	duration := time.Since(start)
 	logger.Info().
 		Str("order_id", createdOrder.ID).
 		Str("customer_id", createdOrder.CustomerID).
+		Str("payment_method", createdOrder.PaymentMethod).
+		Str("status", createdOrder.Status).
 		Int64("total_amount", createdOrder.TotalCents).
 		Int("total_items", len(order.Items)).
 		Dur("total_duration_ms", duration).
 		Msg("Order creation completed successfully")
 
-		// ✅ Métriques métier — uniquement après commit réussi
+	// Métriques métier
 	metrics.OrdersCreatedTotal.Inc()
 	metrics.OrdersRevenueCentsTotal.Inc()
 
