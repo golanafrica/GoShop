@@ -1,1488 +1,873 @@
-# Système de paiement par Tontine
+# 🏦 Système de Tontine GoShop
 
-## Vue d'ensemble
-
-La tontine est un système d'épargne collective profondément ancré dans la culture ouest-africaine. Elle permet à un groupe de personnes de cotiser régulièrement et de retirer des fonds pour effectuer des achats.
-
-Dans GoShop, chaque boutique peut activer une ou plusieurs tontines pour ses clients. Les clients cotisent, accumulent un solde, et peuvent utiliser ce solde pour payer leurs commandes.
+**Version** : v1.0.0  
+**Date** : 2026-06-28  
+**Statut** : 🚧 En conception — Prêt à implémenter
 
 ---
 
-## Pourquoi intégrer la tontine ?
+## 📋 Table des matières
 
-| Bénéfice | Description |
-|----------|-------------|
-| **Fidélisation** | Les clients cotisent régulièrement → ils reviennent acheter |
-| **Ventes** | Les clients ont de l'épargne disponible → ils achètent plus |
-| **Avantage concurrentiel** | Aucun concurrent local n'offre cette fonctionnalité |
-| **Culturel** | Répond à une pratique financière répandue en Afrique de l'Ouest |
-| **Confiance** | Le marchand connaît ses clients (membres de la tontine) |
-
----
-
-## Catégories de tontines
-
-Pour répondre aux besoins spécifiques des clients, chaque boutique peut créer des **tontines thématiques** dédiées à des catégories de produits.
-
-| Catégorie | Icône | Exemples de produits | Cotisation typique |
-|-----------|-------|---------------------|-------------------|
-| **Moto** | 🏍️ | Motos, casques, pièces détachées | 25 000 - 50 000 FCFA/mois |
-| **Voiture** | 🚗 | Voitures, entretien, assurance | 50 000 - 100 000 FCFA/mois |
-| **Ciment** | 🏗️ | Ciment, fer à béton, matériaux | 10 000 - 20 000 FCFA/mois |
-| **Électroménager** | 📺 | Réfrigérateurs, téléviseurs, climatiseurs | 15 000 - 30 000 FCFA/mois |
-| **Téléphonie** | 📱 | Smartphones, accessoires | 10 000 - 20 000 FCFA/mois |
-| **Mode** | 👗 | Vêtements, chaussures, bijoux | 5 000 - 15 000 FCFA/mois |
-| **Alimentation** | 🍲 | Produits alimentaires | 5 000 - 10 000 FCFA/mois |
-| **Éducation** | 📚 | Fournitures scolaires, ordinateurs | 10 000 - 20 000 FCFA/mois |
-| **Santé** | 💊 | Médicaments, consultations | 10 000 - 25 000 FCFA/mois |
-| **Générale** | 💰 | Tous les produits | 10 000 - 30 000 FCFA/mois |
+1. [Vue d'ensemble](#1-vue-densemble)
+2. [Modèle économique](#2-modèle-économique)
+3. [Acteurs et rôles](#3-acteurs-et-rôles)
+4. [Workflow KYC](#4-workflow-kyc)
+5. [Workflow Tontine](#5-workflow-tontine)
+6. [Architecture technique](#6-architecture-technique)
+7. [Modèle de données](#7-modèle-de-données)
+8. [API Endpoints](#8-api-endpoints)
+9. [Intégration YengaPay](#9-intégration-yengapay)
+10. [Sécurité et conformité](#10-sécurité-et-conformité)
+11. [Limites et décisions](#11-limites-et-décisions)
+12. [Roadmap](#12-roadmap)
 
 ---
 
-## Modèle de données
+## 1. Vue d'ensemble
 
-### Tables principales
+### 🎯 Qu'est-ce que la Tontine GoShop ?
 
-```sql
--- ============================================
--- 1. Tontine (gérée par le marchand)
--- ============================================
-CREATE TABLE tontines (
+La **Tontine GoShop** est un système de **tontine de biens physiques** qui permet à un groupe de personnes (famille, amis, collègues, commerçants) de cotiser régulièrement pour acquérir un bien de valeur (moto, congélateur, voiture, etc.) à tour de rôle.
+
+### 💡 Différence avec Taaraogo
+
+| Projet | Nature | Tontine |
+|--------|--------|---------|
+| **GoShop** 🛒 | E-commerce SaaS | Tontine de **biens physiques** (voucher pour un produit) |
+| **Taaraogo** 💰 | Fintech super-app | Tontine **financière** (redistribution d'argent) |
+
+### 🎯 Cas d'usage typique
+
+**Exemple** : 8 collègues veulent chacun une moto à 500 000 FCFA
+
+
+Semaine 1 : 8 × 62 500 F cotisés → Client A reçoit sa moto
+Semaine 2 : 8 × 62 500 F cotisés → Client B reçoit sa moto
+...
+Semaine 8 : 8 × 62 500 F cotisés → Client H reçoit sa moto
+Total collecté : 4 000 000 FCFA
+8 motos livrées au total
+Commission GoShop : 100 000 FCFA (2.50% de 4M)
+
+
+---
+
+## 2. Modèle économique
+
+### 💰 Flux d'argent
+
+
+Client A paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
+Client B paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
+Client C paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
+...
+À chaque cycle terminé :
+→ Voucher généré pour le bénéficiaire
+→ Fonds libérés au marchand
+→ Client va chercher son bien chez le marchand
+
+
+### 📊 Répartition des montants
+
+| Acteur | Montant | Commentaire |
+|--------|---------|-------------|
+| **Client** | 62 500 F / cycle | Paiement via YengaPay |
+| **Marchand** | 60 938 F / cycle | Reçoit après commission |
+| **GoShop** | 1 562 F / cycle | Commission 2.50% (configurable 0-15%) |
+
+### 🎯 Modèle de commission
+
+**Option A retenue** : Commission prélevée sur **chaque cotisation**
+
+**Avantages** :
+- ✅ Trésorerie lissée pour GoShop (revenus réguliers)
+- ✅ Acceptation psychologique pour le marchand (petites retenues vs grosse amputation)
+- ✅ Cohérent avec le modèle COD existant
+
+**Calcul** :
+```go
+goshop_part := amount_cents * tontine_commission_rate / 10000
+// Exemple : 6250000 * 250 / 10000 = 156250 centimes = 1 562 F
+
+🎲 Modèle de risque
+Niveau
+Gestion
+GoShop
+0 risque — prend juste la commission
+Marchand
+0 risque — reçoit l'argent à chaque cycle
+Participants
+Confiance sociale (famille/amis/collègues)
+Pas de caution, pas de garantie technique — le cercle social gère les défauts.
+3. Acteurs et rôles
+👥 Les 3 acteurs
+Acteur
+Rôle
+KYC
+Qui valide ?
+Marchand
+Reçoit l'argent, livre le produit
+✅ Auto via shop_id
+Système
+Client créateur
+Organise la tontine, invite
+✅ Manuel
+Marchand
+Client participant
+Paie les cotisations
+✅ Manuel
+Marchand
+🔐 Niveaux KYC
+Niveau
+Capabilities
+none
+Compte basique, ne peut PAS participer à une tontine
+pending
+Documents uploadés, en attente de validation
+verified
+Peut créer/rejoindre une tontine
+rejected
+Documents rejetés, doit re-soumettre
+📋 Matrice des permissions
+Action
+Marchand
+Client créateur
+Client participant
+Créer une boutique
+✅ Auto
+❌ N/A
+❌ N/A
+Activer tontine sur produit
+✅ Auto
+❌
+❌
+Créer un groupe tontine
+✅ Auto
+✅ verified
+❌
+Rejoindre un groupe
+❌ N/A
+✅ verified
+✅ verified
+Payer cotisation
+❌ N/A
+✅ verified
+✅ verified
+Recevoir voucher
+❌ N/A
+✅ verified
+✅ verified
+Valider voucher
+✅ Auto
+❌
+❌
+Valider KYC client
+✅ Auto
+❌
+❌
+4. Workflow KYC
+📤 Côté client
+
+
+1. Client arrive sur produit avec tontine
+   → Voit "Créer une tontine" ou "Payer cash à 450 000 F"
+   → Clique → ❌ "Votre identité doit être vérifiée"
+   → Télécharge CNI ou passeport (photo)
+   → Statut : `pending`
+
+2. Marchand reçoit notification
+   → Voit les documents dans son dashboard
+   → Vérifie l'identité (carte ID, téléphone, appel si besoin)
+   → Clique "Valider KYC" ou "Rejeter"
+   → Client passe à `verified` ou `rejected`
+
+3. Client vérifié
+   → Peut créer une tontine
+   → Peut rejoindre une tontine
+
+
+🏪 Côté marchand
+
+1. Marchand (déjà verified via shop_id)
+   → Dashboard → Produit → "Activer la tontine"
+   → Configure paramètres (type cercle, min/max participants)
+   → Crée groupe
+   → Partage code d'invitation
+
+2. Client veut rejoindre
+   → Doit être verified
+   → Marchand valide KYC si nécessaire
+   → Client rejoint avec code
+
+
+1. Marchand (déjà verified via shop_id)
+   → Dashboard → Produit → "Activer la tontine"
+   → Configure paramètres (type cercle, min/max participants)
+   → Crée groupe
+   → Partage code d'invitation
+
+2. Client veut rejoindre
+   → Doit être verified
+   → Marchand valide KYC si nécessaire
+   → Client rejoint avec code
+
+
+📁 Stockage des documents
+
+/uploads/
+  /kyc/
+    /{customer_id}/
+      cni_20260628_143022.jpg
+      passport_20260628_143025.jpg
+
+
+
+Contraintes :
+Taille max : 5 Mo par document
+Types acceptés : JPG, PNG, PDF
+Max 3 documents par client
+5. Workflow Tontine
+🔄 Machine à états
+
+
+     ┌─────────────────┐
+     │ PENDING_MEMBERS │  ← En attente de participants
+     └────────┬────────┘
+              │ groupe complet
+              ▼
+     ┌─────────────────┐
+     │     ACTIVE      │  ← Cycles en cours
+     └────────┬────────┘
+              │ tous cycles terminés
+              ▼
+     ┌─────────────────┐
+     │    COMPLETED    │  ← Terminé
+     └─────────────────┘
+
+
+📅 Cycle de paiement
+
+Cycle N démarre
+    │
+    ├─► Tous les participants reçoivent notification
+    │
+    ├─► Chaque participant paie sa cotisation via YengaPay
+    │   └─► Webhook YengaPay → GoShop enregistre paiement
+    │
+    ├─► Tous ont payé ?
+    │   ├─► OUI → Générer voucher pour bénéficiaire du cycle
+    │   │         → Libérer fonds au marchand
+    │   │         → Passer au cycle N+1
+    │   │
+    │   └─► NON → Attendre (pas de relance automatique MVP)
+    │
+    └─► Dernier cycle ?
+        └─► OUI → Statut COMPLETED
+
+
+🎟️ Voucher de livraison
+Caractéristiques :
+Code unique de 12 caractères (ex: A3F9KL2M9X4P)
+Validité : 6 mois
+Utilisation : mono-boutique uniquement (sécurité)
+Format : QR code + code alphanumérique
+Sécurité :
+
+
+// Dans RedeemVoucherUsecase
+if voucher.ShopID != current_merchant.ShopID {
+    return errors.New("ce bon de livraison appartient à une autre boutique")
+}
+
+
+6. Architecture technique
+🏗️ Vue d'ensemble
+
+┌─────────────────────────────────────────────────────────────┐
+│                     INTERFACES (HTTP)                        │
+│  merchant_handler.go  │  client_handler.go  │  kyc_handler  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   APPLICATION (USE CASES)                    │
+│  create_group  │  join_group  │  pay_cycle  │  redeem_voucher│
+│  validate_kyc  │  complete_cycle  │  process_webhook         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        DOMAIN (ENTITIES)                     │
+│  TontineGroup  │  TontineParticipant  │  TontinePayment      │
+│  TontineVoucher  │  CustomerKYCDocument                     │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    INFRASTRUCTURE                             │
+│  Postgres  │  YengaPay Provider  │  Storage (fichiers KYC)  │
+└─────────────────────────────────────────────────────────────┘
+
+
+📦 Packages créés
+
+
+domain/
+├── entity/
+│   ├── tontine.go                    ← Entités tontine
+│   └── customer_kyc.go               ← Entité KYC
+└── repository/
+    ├── tontine_repository.go         ← Interfaces tontine
+    └── customer_kyc_repository.go    ← Interface KYC
+
+application/usecase/
+├── tontine_usecase/
+│   ├── create_group.go
+│   ├── join_group.go
+│   ├── pay_cycle.go
+│   ├── complete_cycle.go
+│   ├── redeem_voucher.go
+│   └── process_webhook.go
+└── customer_usecase/
+    ├── upload_kyc.go
+    └── review_kyc.go
+
+infrastructure/
+├── postgres/tontine/                 ← Implémentations Postgres
+├── postgres/customer/                ← KYC repository
+└── storage/local_storage.go          ← Stockage fichiers KYC
+
+interfaces/handler/
+├── tontine_handler/
+│   ├── merchant_handler.go
+│   └── client_handler.go
+└── customer_handler/
+    └── kyc_handler.go
+
+
+7. Modèle de données
+🗄️ Tables principales
+product_tontine_settings
+
+
+CREATE TABLE product_tontine_settings (
+    product_id UUID PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+    shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+
+    is_tontine_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    allow_commercial_circle BOOLEAN NOT NULL DEFAULT TRUE,
+    allow_corporate_circle BOOLEAN NOT NULL DEFAULT TRUE,
+    allow_family_circle BOOLEAN NOT NULL DEFAULT TRUE,
+
+    min_participants INT NOT NULL DEFAULT 4 CHECK (min_participants >= 2),
+    max_participants INT NOT NULL DEFAULT 12 CHECK (max_participants <= 50),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+tontine_groups
+
+CREATE TABLE tontine_groups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    shop_id UUID NOT NULL REFERENCES shops(id),
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    
-    -- Catégorie thématique
-    category VARCHAR(50) NOT NULL DEFAULT 'general',
-    category_icon VARCHAR(50),
-    category_color VARCHAR(20),
-    
-    -- Objectif
-    savings_goal BIGINT, -- Objectif total en FCFA
-    target_product_id UUID REFERENCES products(id), -- Produit cible
-    
-    -- Règles
-    contribution_amount BIGINT NOT NULL,
-    contribution_frequency VARCHAR(20) NOT NULL, -- weekly, biweekly, monthly
-    contribution_day INTEGER,
-    max_members INTEGER DEFAULT 20,
-    min_members INTEGER DEFAULT 5,
-    min_savings_to_withdraw BIGINT DEFAULT 0,
-    max_withdraw_percentage INTEGER DEFAULT 80,
-    withdrawal_fee_pct DECIMAL(5,2) DEFAULT 0.00,
-    
-    -- Gestion
-    status VARCHAR(20) DEFAULT 'active', -- active, paused, closed
+    product_id UUID NOT NULL REFERENCES products(id),
+    shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+    creator_customer_id UUID REFERENCES customers(id),  -- NULL si créé par marchand
+    creator_type VARCHAR(20) NOT NULL,  -- 'merchant' ou 'customer'
+
+    circle_type VARCHAR(20) NOT NULL,  -- 'COMMERCIAL', 'CORPORATE', 'FAMILY'
+    amount_per_cycle_cents BIGINT NOT NULL CHECK (amount_per_cycle_cents > 0),
+
+    total_cycles INT NOT NULL CHECK (total_cycles >= 2),
+    current_cycle INT NOT NULL DEFAULT 1,
+
+    invite_code VARCHAR(10) UNIQUE NOT NULL,
+
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING_MEMBERS',
     started_at TIMESTAMPTZ,
-    ended_at TIMESTAMPTZ,
-    
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    completed_at TIMESTAMPTZ,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT tontine_groups_circle_check
+        CHECK (circle_type IN ('COMMERCIAL', 'CORPORATE', 'FAMILY')),
+    CONSTRAINT tontine_groups_status_check
+        CHECK (status IN ('PENDING_MEMBERS', 'ACTIVE', 'COMPLETED')),
+    CONSTRAINT tontine_groups_creator_check
+        CHECK (creator_type IN ('merchant', 'customer'))
 );
 
--- ============================================
--- 2. Membres de la tontine
--- ============================================
-CREATE TABLE tontine_members (
+
+tontine_participants
+
+CREATE TABLE tontine_participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
+    group_id UUID NOT NULL REFERENCES tontine_groups(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL REFERENCES customers(id),
+
+    payout_position INT NOT NULL CHECK (payout_position >= 1),
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    UNIQUE(group_id, customer_id),
+    UNIQUE(group_id, payout_position),
+
+    CONSTRAINT tontine_participants_status_check
+        CHECK (status IN ('active', 'suspended', 'excluded'))
+);
+
+
+tontine_payments
+
+
+CREATE TABLE tontine_payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id UUID NOT NULL REFERENCES tontine_groups(id) ON DELETE CASCADE,
+    participant_id UUID NOT NULL REFERENCES tontine_participants(id),
+    customer_id UUID NOT NULL REFERENCES customers(id),
+
+    cycle_number INT NOT NULL CHECK (cycle_number >= 1),
+    amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
+    commission_cents BIGINT NOT NULL,  -- Commission GoShop
+
+    yengapay_reference VARCHAR(255),  -- Format: TONTINE:{groupID}:{cycle}:{participantID}
+    yengapay_transaction_id VARCHAR(255),
+    payment_provider VARCHAR(50) NOT NULL DEFAULT 'yenga_pay',
+
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    due_date TIMESTAMPTZ NOT NULL,
+    paid_at TIMESTAMPTZ,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    UNIQUE(group_id, customer_id, cycle_number),
+
+    CONSTRAINT tontine_payments_status_check
+        CHECK (status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED'))
+);
+
+
+tontine_vouchers
+
+CREATE TABLE tontine_vouchers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id UUID NOT NULL REFERENCES tontine_groups(id) ON DELETE CASCADE,
+    participant_id UUID NOT NULL REFERENCES tontine_participants(id),
+    customer_id UUID NOT NULL REFERENCES customers(id),
+    product_id UUID NOT NULL REFERENCES products(id),
+    shop_id UUID NOT NULL REFERENCES shops(id),  -- 🆡 Sécurité mono-boutique
+
+    voucher_code VARCHAR(20) UNIQUE NOT NULL,
+    cycle_number INT NOT NULL,
+
+    status VARCHAR(20) NOT NULL DEFAULT 'generated',
+    expires_at TIMESTAMPTZ NOT NULL,  -- NOW() + 6 mois
+    redeemed_at TIMESTAMPTZ,
+    redeemed_by UUID,  -- user_id du marchand
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    UNIQUE(group_id, participant_id, cycle_number),
+
+    CONSTRAINT tontine_vouchers_status_check
+        CHECK (status IN ('generated', 'redeemed', 'expired', 'cancelled'))
+);
+
+
+customer_kyc_documents
+
+CREATE TABLE customer_kyc_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-    
-    role VARCHAR(20) DEFAULT 'member', -- member, treasurer, admin
-    balance BIGINT DEFAULT 0,
-    total_contributions BIGINT DEFAULT 0,
-    total_withdrawals BIGINT DEFAULT 0,
-    
-    status VARCHAR(20) DEFAULT 'active', -- active, inactive, blacklisted
-    joined_at TIMESTAMPTZ DEFAULT NOW(),
-    last_contribution_at TIMESTAMPTZ,
-    
-    UNIQUE(tontine_id, customer_id)
+    shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+
+    document_type VARCHAR(20) NOT NULL,  -- 'cni', 'passport', 'other'
+    file_path VARCHAR(500) NOT NULL,
+    file_size_bytes BIGINT NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    reviewed_by UUID,
+    reviewed_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT kyc_documents_type_check
+        CHECK (document_type IN ('cni', 'passport', 'other')),
+    CONSTRAINT kyc_documents_status_check
+        CHECK (status IN ('pending', 'approved', 'rejected'))
 );
 
--- ============================================
--- 3. Objectifs personnalisés par membre
--- ============================================
-CREATE TABLE tontine_member_goals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    member_id UUID NOT NULL REFERENCES tontine_members(id) ON DELETE CASCADE,
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
-    
-    target_amount BIGINT NOT NULL,
-    progress_percentage DECIMAL(5,2) DEFAULT 0.00,
-    target_product_id UUID REFERENCES products(id),
-    notes TEXT,
-    
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
 
--- ============================================
--- 4. Cotisations
--- ============================================
-CREATE TABLE tontine_contributions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
-    member_id UUID NOT NULL REFERENCES tontine_members(id) ON DELETE CASCADE,
-    customer_id UUID NOT NULL REFERENCES customers(id),
-    
-    amount BIGINT NOT NULL,
-    payment_method VARCHAR(50) NOT NULL, -- cash, wave, orange_money
-    payment_ref VARCHAR(255),
-    
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    
-    status VARCHAR(20) DEFAULT 'completed', -- pending, completed, failed
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+Modifications sur customers et shop_payment_settings
 
--- ============================================
--- 5. Retraits (utilisés pour payer les commandes)
--- ============================================
-CREATE TABLE tontine_withdrawals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
-    member_id UUID NOT NULL REFERENCES tontine_members(id) ON DELETE CASCADE,
-    customer_id UUID NOT NULL REFERENCES customers(id),
-    order_id UUID NOT NULL REFERENCES orders(id),
-    
-    amount BIGINT NOT NULL,
-    fee BIGINT DEFAULT 0,
-    net_amount BIGINT NOT NULL,
-    
-    status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, completed
-    approved_by UUID REFERENCES users(id),
-    notes TEXT,
-    
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    approved_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ
-);
+-- Ajout KYC sur customers
+ALTER TABLE customers
+    ADD COLUMN IF NOT EXISTS kyc_level VARCHAR(20) NOT NULL DEFAULT 'none',
+    ADD COLUMN IF NOT EXISTS kyc_validated_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS kyc_validated_by UUID;
 
--- ============================================
--- 6. Produits éligibles
--- ============================================
-CREATE TABLE tontine_product_eligibility (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
-    product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    eligible BOOLEAN DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    
-    UNIQUE(tontine_id, product_id)
-);
+ALTER TABLE customers
+    ADD CONSTRAINT customers_kyc_level_check
+    CHECK (kyc_level IN ('none', 'pending', 'verified', 'rejected'));
 
--- ============================================
--- 7. Annonces de la tontine
--- ============================================
-CREATE TABLE tontine_announcements (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tontine_id UUID NOT NULL REFERENCES tontines(id) ON DELETE CASCADE,
-    title VARCHAR(255) NOT NULL,
-    content TEXT NOT NULL,
-    
-    type VARCHAR(50) DEFAULT 'info', -- info, success, alert, promotion
-    is_pinned BOOLEAN DEFAULT false,
-    
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    expires_at TIMESTAMPTZ
-);
+-- Ajout config tontine sur shop_payment_settings
+ALTER TABLE shop_payment_settings
+    ADD COLUMN IF NOT EXISTS tontine_enabled BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS tontine_commission_rate INTEGER DEFAULT 250
+        CHECK (tontine_commission_rate >= 0 AND tontine_commission_rate <= 1500);
 
--- ============================================
--- 8. Paramètres tontine par boutique
--- ============================================
-CREATE TABLE shop_tontine_settings (
-    shop_id UUID PRIMARY KEY REFERENCES shops(id),
-    
-    enabled BOOLEAN DEFAULT false,
-    default_contribution_amount BIGINT DEFAULT 10000,
-    default_contribution_frequency VARCHAR(20) DEFAULT 'monthly',
-    default_max_members INTEGER DEFAULT 20,
-    default_min_members INTEGER DEFAULT 5,
-    default_max_withdraw_percentage INTEGER DEFAULT 80,
-    default_withdrawal_fee_pct DECIMAL(5,2) DEFAULT 0.00,
-    
-    withdrawal_requires_approval BOOLEAN DEFAULT true,
-    allow_negative_balance BOOLEAN DEFAULT false,
-    
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
 
--- ============================================
--- INDEX
--- ============================================
-CREATE INDEX idx_tontines_shop ON tontines(shop_id);
-CREATE INDEX idx_tontines_category ON tontines(category);
-CREATE INDEX idx_tontines_shop_category ON tontines(shop_id, category);
-CREATE INDEX idx_tontine_members_customer ON tontine_members(customer_id);
-CREATE INDEX idx_tontine_contributions_member ON tontine_contributions(member_id);
-CREATE INDEX idx_tontine_withdrawals_order ON tontine_withdrawals(order_id);
-CREATE INDEX idx_tontine_eligibility_product ON tontine_product_eligibility(product_id);
-CREATE INDEX idx_tontine_member_goals_member ON tontine_member_goals(member_id);
+8. API Endpoints
+🔐 Endpoints KYC
+Méthode
+Endpoint
+Acteur
+Description
+POST
+/api/customers/kyc/upload
+Client
+Upload CNI/passeport
+GET
+/api/customers/kyc/status
+Client
+Voir statut KYC
+GET
+/api/merchant/kyc/pending
+Marchand
+Liste KYC en attente
+GET
+/api/merchant/kyc/{customer_id}/documents
+Marchand
+Voir documents
+POST
+/api/merchant/kyc/{customer_id}/approve
+Marchand
+Valider KYC
+POST
+/api/merchant/kyc/{customer_id}/reject
+Marchand
+Rejeter KYC
+🏪 Endpoints Tontine (Marchand)
+Méthode
+Endpoint
+Description
+PUT
+/api/products/{id}/tontine-settings
+Activer/configurer tontine
+GET
+/api/products/{id}/tontine-settings
+Lire config tontine
+GET
+/api/tontine/groups
+Lister groupes de la boutique
+GET
+/api/tontine/groups/{id}
+Détail d'un groupe
+GET
+/api/tontine/vouchers
+Lister vouchers émis
+POST
+/api/tontine/vouchers/{code}/redeem
+Valider un voucher
+👤 Endpoints Tontine (Client)
+Méthode
+Endpoint
+Description
+GET
+/api/client/tontine/products
+Produits avec tontine dispo
+POST
+/api/client/tontine/groups
+Créer un groupe
+POST
+/api/client/tontine/groups/join
+Rejoindre par code
+GET
+/api/client/tontine/groups/{id}
+Détail du groupe
+GET
+/api/client/tontine/groups/{id}/payments
+Historique paiements
+POST
+/api/client/tontine/groups/{id}/pay
+Initier paiement cycle
+GET
+/api/client/tontine/vouchers
+Mes vouchers
+Exemple de requête
+Créer un groupe (client)
 
-Plan d'implémentation
-Étape	Priorité	Description
-1	🔴 Haute	Migrations SQL (8 tables)
-2	🔴 Haute	Domaines (domain/tontine/)
-3	🔴 Haute	Repositories (domain/repository/tontine_*.go)
-4	🔴 Haute	Use Case CreateTontine
-5	🔴 Haute	Use Case JoinTontine
-6	🔴 Haute	Use Case Contribute
-7	🔴 Haute	Use Case WithdrawFromTontine
-8	🟡 Moyenne	Use Case ListTontinesByCategory
-9	🟡 Moyenne	Use Case ApproveWithdrawal
-10	🟢 Basse	Handlers (marchand)
-11	🟢 Basse	Handlers (client)
-12	🟢 Basse	Dashboard marchand (frontend)
-13	🟢 Basse	Interface client (frontend)
-FAQ
-Q: Un client peut-il rejoindre plusieurs tontines ?
-R: Oui, un client peut être membre de plusieurs tontines dans la même boutique (ex: tontine Moto + tontine Ciment).
 
-Q: Les produits éligibles sont-ils obligatoires ?
-R: Non, si aucun produit n'est spécifié, tous les produits de la boutique sont éligibles.
+POST /api/client/tontine/groups
+Authorization: Bearer {token}
+X-Shop-Slug: boutique-moto-bobo
+Content-Type: application/json
 
-Q: Le client peut-il changer d'objectif en cours de route ?
-R: Oui, il peut modifier son objectif personnel à tout moment depuis son espace client.
-
-Q: Que se passe-t-il si le client atteint son objectif avant la fin ?
-R: Il peut utiliser son solde immédiatement pour acheter le produit cible.
-
-Q: Le marchand peut-il modifier les règles en cours de route ?
-R: Oui, mais les changements s'appliquent uniquement aux nouvelles cotisations.
-
-Q: Que devient le solde si la tontine est fermée ?
-R: Les membres peuvent retirer leur solde avant la fermeture. Les soldes non retirés sont remboursés.
-
-text
----
-
-## 📄 Document 2 : `/docs/12-tontine-api-reference.md`
-
-```markdown
-# API Reference - Tontine
-
-## Base URL
-- **Développement** : `http://localhost:8080`
-- **Production** : `https://api.golanafrica.com`
-
-## Authentification
-- **JWT** : Access token (15min), Refresh token (7j)
-- **Headers** : `Authorization: Bearer <access_token>`
-
----
-
-## Routes Marchand (Dashboard)
-
-### 1. Paramètres de la tontine
-
-#### GET `/api/dashboard/tontine/settings`
-Récupérer les paramètres de la tontine pour la boutique.
-
-**Réponse** :
-```json
 {
-    "enabled": true,
-    "default_contribution_amount": 10000,
-    "default_contribution_frequency": "monthly",
-    "default_max_members": 20,
-    "default_min_members": 5,
-    "default_max_withdraw_percentage": 80,
-    "default_withdrawal_fee_pct": 0.00,
-    "withdrawal_requires_approval": true,
-    "allow_negative_balance": false,
-    "updated_at": "2026-06-17T10:00:00Z"
+  "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "circle_type": "FAMILY",
+  "total_cycles": 8
 }
-PUT /api/dashboard/tontine/settings
-Mettre à jour les paramètres de la tontine.
 
-Requête :
 
-json
+Réponse 201 :
+
+
 {
-    "enabled": true,
-    "default_contribution_amount": 15000,
-    "default_contribution_frequency": "monthly",
-    "default_max_members": 25,
-    "default_min_members": 5,
-    "default_max_withdraw_percentage": 85,
-    "default_withdrawal_fee_pct": 0.50,
-    "withdrawal_requires_approval": false,
-    "allow_negative_balance": false
+  "id": "33fb96c3-6819-411d-9be5-d2f196977127",
+  "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "shop_id": "ec4ff426-db05-421a-8b97-19c8470de0fb",
+  "creator_customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
+  "creator_type": "customer",
+  "circle_type": "FAMILY",
+  "amount_per_cycle_cents": 6250000,
+  "total_cycles": 8,
+  "current_cycle": 1,
+  "invite_code": "A3F9KL2M",
+  "status": "PENDING_MEMBERS",
+  "created_at": "2026-06-28T14:30:22Z"
 }
-Réponse :
 
-json
+Rejoindre un groupe
+
+
+POST /api/client/tontine/groups/join
+Authorization: Bearer {token}
+X-Shop-Slug: boutique-moto-bobo
+Content-Type: application/json
+
 {
-    "status": "updated"
+  "invite_code": "A3F9KL2M"
 }
-2. Gestion des tontines
-GET /api/dashboard/tontine
-Liste des tontines de la boutique.
 
-Query params :
+Payer une cotisation
+http
 
-category (optionnel) : filtre par catégorie
+POST /api/client/tontine/groups/33fb96c3-6819-411d-9be5-d2f196977127/pay
+Authorization: Bearer {token}
+X-Shop-Slug: boutique-moto-bobo
+Content-Type: application/json
 
-status (optionnel) : active, paused, closed
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "name": "Tontine Moto",
-        "category": "moto",
-        "category_icon": "🏍️",
-        "savings_goal": 500000,
-        "target_product": {
-            "id": "uuid",
-            "name": "TVS Apache 150"
-        },
-        "contribution_amount": 25000,
-        "contribution_frequency": "monthly",
-        "max_members": 10,
-        "min_members": 3,
-        "current_members": 5,
-        "total_collected": 375000,
-        "progress_percentage": 75,
-        "status": "active",
-        "created_at": "2026-06-01T10:00:00Z"
-    }
-]
-POST /api/dashboard/tontine
-Créer une nouvelle tontine.
-
-Requête :
-
-json
 {
-    "name": "Tontine Moto",
-    "description": "Pour acheter une moto TVS Apache",
-    "category": "moto",
-    "category_icon": "🏍️",
-    "category_color": "#FF6B00",
-    "savings_goal": 500000,
-    "target_product_id": "product-uuid",
-    "contribution_amount": 25000,
-    "contribution_frequency": "monthly",
-    "contribution_day": 5,
-    "max_members": 10,
-    "min_members": 3,
-    "min_savings_to_withdraw": 50000,
-    "max_withdraw_percentage": 80,
-    "withdrawal_fee_pct": 0.00,
-    "eligible_product_ids": ["product-uuid-1", "product-uuid-2"]
+  "operator": "orange_money",
+  "phone_number": "+22670123456"
 }
-Réponse :
 
-json
+
+Réponse 201 :
+
 {
-    "id": "uuid",
-    "name": "Tontine Moto",
-    "category": "moto",
-    "savings_goal": 500000,
-    "status": "active",
-    "created_at": "2026-06-17T10:00:00Z"
+  "payment_id": "50124a01-f42c-4aee-9beb-e8d27e5cd554",
+  "amount_cents": 6250000,
+  "commission_cents": 156250,
+  "status": "PROCESSING",
+  "ussd_code": "*144*4*6*62500#",
+  "message": "Composez le code USSD pour initier le paiement"
 }
-GET /api/dashboard/tontine/{id}
-Détail d'une tontine.
 
-Réponse :
+Valider un voucher (marchand)
 
-json
+POST /api/tontine/vouchers/A3F9KL2M9X4P/redeem
+Authorization: Bearer {token}
+X-Shop-Slug: boutique-moto-bobo
+
+Réponse 200 :
+
+
 {
-    "id": "uuid",
-    "name": "Tontine Moto",
-    "description": "Pour acheter une moto TVS Apache",
-    "category": "moto",
-    "category_icon": "🏍️",
-    "savings_goal": 500000,
-    "target_product": {
-        "id": "uuid",
-        "name": "TVS Apache 150",
-        "price": 500000
-    },
-    "contribution_amount": 25000,
-    "contribution_frequency": "monthly",
-    "contribution_day": 5,
-    "max_members": 10,
-    "min_members": 3,
-    "current_members": 5,
-    "total_collected": 375000,
-    "progress_percentage": 75,
-    "status": "active",
-    "started_at": "2026-06-01T10:00:00Z",
-    "eligible_products": [
-        {
-            "id": "uuid",
-            "name": "TVS Apache 150",
-            "price": 500000
-        },
-        {
-            "id": "uuid",
-            "name": "TVS Star HLX",
-            "price": 450000
-        }
-    ],
-    "members": [
-        {
-            "customer_id": "uuid",
-            "name": "Fatouma Coulibaly",
-            "balance": 200000,
-            "progress": 80,
-            "joined_at": "2026-06-01T10:00:00Z"
-        }
-    ],
-    "announcements": [
-        {
-            "id": "uuid",
-            "title": "Nouvelle tontine !",
-            "content": "Rejoignez la tontine moto",
-            "type": "info",
-            "is_pinned": true,
-            "created_at": "2026-06-01T10:00:00Z"
-        }
-    ]
-}
-PUT /api/dashboard/tontine/{id}
-Modifier une tontine.
-
-Requête : (même structure que POST, champs optionnels)
-
-Réponse :
-
-json
-{
-    "status": "updated"
-}
-POST /api/dashboard/tontine/{id}/toggle
-Activer/désactiver une tontine.
-
-Requête :
-
-json
-{
-    "status": "paused" // ou "active", "closed"
-}
-Réponse :
-
-json
-{
-    "status": "paused"
-}
-DELETE /api/dashboard/tontine/{id}
-Supprimer une tontine (uniquement si solde = 0).
-
-Réponse :
-
-json
-{
-    "status": "deleted"
-}
-3. Gestion des membres
-GET /api/dashboard/tontine/{id}/members
-Liste des membres d'une tontine.
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "customer_id": "uuid",
-        "name": "Fatouma Coulibaly",
-        "phone": "+226 70 00 00 00",
-        "balance": 200000,
-        "total_contributions": 250000,
-        "total_withdrawals": 50000,
-        "progress": 80,
-        "role": "member",
-        "status": "active",
-        "joined_at": "2026-06-01T10:00:00Z"
-    }
-]
-POST /api/dashboard/tontine/{id}/members
-Ajouter un membre manuellement (cash).
-
-Requête :
-
-json
-{
-    "customer_id": "uuid",
-    "initial_balance": 50000,
-    "notes": "Cotisation cash enregistrée"
-}
-Réponse :
-
-json
-{
-    "member_id": "uuid",
-    "balance": 50000,
-    "joined_at": "2026-06-17T10:00:00Z"
-}
-POST /api/dashboard/tontine/members/{id}/blacklist
-Mettre un membre en liste noire.
-
-Réponse :
-
-json
-{
-    "status": "blacklisted"
-}
-4. Gestion des retraits
-GET /api/dashboard/tontine/withdrawals/pending
-Retraits en attente d'approbation.
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "customer_name": "Fatouma Coulibaly",
-        "amount": 45000,
-        "net_amount": 45000,
-        "order_id": "uuid",
-        "order_total": 120000,
-        "remaining_to_pay": 75000,
-        "created_at": "2026-06-17T10:00:00Z"
-    }
-]
-POST /api/dashboard/tontine/withdrawals/{id}/approve
-Approuver un retrait.
-
-Réponse :
-
-json
-{
-    "status": "approved",
-    "approved_at": "2026-06-17T10:00:00Z"
-}
-POST /api/dashboard/tontine/withdrawals/{id}/reject
-Refuser un retrait.
-
-Requête :
-
-json
-{
-    "reason": "Solde insuffisant"
-}
-Réponse :
-
-json
-{
-    "status": "rejected"
-}
-5. Gestion des produits éligibles
-POST /api/dashboard/tontine/{id}/eligibility
-Ajouter des produits éligibles.
-
-Requête :
-
-json
-{
-    "product_ids": ["uuid-1", "uuid-2"]
-}
-Réponse :
-
-json
-{
-    "added": 2
-}
-DELETE /api/dashboard/tontine/{id}/eligibility/{productId}
-Retirer un produit éligible.
-
-Réponse :
-
-json
-{
-    "status": "removed"
-}
-6. Annonces
-POST /api/dashboard/tontine/{id}/announcements
-Créer une annonce.
-
-Requête :
-
-json
-{
-    "title": "Nouvelle promotion !",
-    "content": "Cotisez maintenant et bénéficiez de 5% de réduction",
-    "type": "promotion",
-    "is_pinned": true,
-    "expires_at": "2026-07-01T00:00:00Z"
-}
-Réponse :
-
-json
-{
-    "id": "uuid",
-    "title": "Nouvelle promotion !",
-    "created_at": "2026-06-17T10:00:00Z"
-}
-DELETE /api/dashboard/tontine/announcements/{id}
-Supprimer une annonce.
-
-Réponse :
-
-json
-{
-    "status": "deleted"
-}
-Routes Client
-1. Découverte des tontines
-GET /api/client/tontine
-Liste des tontines disponibles pour le client.
-
-Query params :
-
-category (optionnel) : filtre par catégorie
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "name": "Tontine Moto",
-        "category": "moto",
-        "category_icon": "🏍️",
-        "description": "Pour acheter une moto TVS Apache",
-        "savings_goal": 500000,
-        "contribution_amount": 25000,
-        "contribution_frequency": "monthly",
-        "max_members": 10,
-        "current_members": 5,
-        "total_collected": 375000,
-        "progress_percentage": 75,
-        "has_joined": false,
-        "created_at": "2026-06-01T10:00:00Z"
-    }
-]
-GET /api/client/tontine/{id}
-Détail d'une tontine.
-
-Réponse : (identique à la version marchand, mais sans les données sensibles)
-
-2. Adhésion
-POST /api/client/tontine/{id}/join
-Rejoindre une tontine.
-
-Réponse :
-
-json
-{
-    "member_id": "uuid",
-    "balance": 0,
-    "joined_at": "2026-06-17T10:00:00Z"
-}
-POST /api/client/tontine/{id}/leave
-Quitter une tontine (si solde = 0).
-
-Réponse :
-
-json
-{
-    "status": "left"
-}
-3. Cotisations
-POST /api/client/tontine/{id}/contribute
-Cotiser à la tontine.
-
-Requête :
-
-json
-{
-    "amount": 25000,
-    "payment_method": "wave", // cash, wave, orange_money
-    "payment_ref": "WV-2847361"
-}
-Réponse :
-
-json
-{
-    "contribution_id": "uuid",
-    "new_balance": 25000,
-    "total_contributions": 25000,
-    "progress_percentage": 5,
-    "created_at": "2026-06-17T10:00:00Z"
-}
-GET /api/client/tontine/{id}/contributions
-Historique des cotisations.
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "amount": 25000,
-        "payment_method": "wave",
-        "period_start": "2026-06-01",
-        "period_end": "2026-07-01",
-        "status": "completed",
-        "created_at": "2026-06-01T10:00:00Z"
-    }
-]
-4. Retraits (pour payer)
-POST /api/client/tontine/{id}/withdraw
-Demander un retrait pour payer une commande.
-
-Requête :
-
-json
-{
-    "order_id": "uuid",
-    "amount": 45000,
-    "notes": "Achat Samsung A54"
-}
-Réponse (si approbation requise) :
-
-json
-{
-    "withdrawal_id": "uuid",
-    "status": "pending",
-    "balance_after": 25000,
-    "fee": 0,
-    "net_amount": 45000,
-    "requires_approval": true,
-    "created_at": "2026-06-17T10:00:00Z"
-}
-Réponse (si approbation non requise) :
-
-json
-{
-    "withdrawal_id": "uuid",
-    "status": "completed",
-    "balance_after": 25000,
-    "fee": 0,
-    "net_amount": 45000,
-    "requires_approval": false,
-    "completed_at": "2026-06-17T10:00:00Z"
-}
-GET /api/client/tontine/withdrawals
-Historique des retraits.
-
-Réponse :
-
-json
-[
-    {
-        "id": "uuid",
-        "amount": 45000,
-        "net_amount": 45000,
-        "status": "completed",
-        "order_id": "uuid",
-        "order_total": 120000,
-        "created_at": "2026-06-17T10:00:00Z",
-        "completed_at": "2026-06-17T10:30:00Z"
-    }
-]
-5. Objectifs personnels
-GET /api/client/tontine/{id}/goal
-Récupérer l'objectif personnel.
-
-Réponse :
-
-json
-{
-    "target_amount": 500000,
-    "progress_percentage": 40,
-    "target_product": {
-        "id": "uuid",
-        "name": "TVS Apache 150",
-        "price": 500000
-    },
-    "notes": "Je veux cette moto pour septembre",
-    "updated_at": "2026-06-17T10:00:00Z"
-}
-POST /api/client/tontine/{id}/goal
-Définir ou modifier l'objectif personnel.
-
-Requête :
-
-json
-{
-    "target_amount": 500000,
-    "target_product_id": "uuid",
-    "notes": "Je veux cette moto pour septembre"
-}
-Réponse :
-
-json
-{
-    "target_amount": 500000,
-    "progress_percentage": 40,
-    "updated_at": "2026-06-17T10:00:00Z"
-}
-6. Tableau de bord client
-GET /api/client/tontine/dashboard
-Vue d'ensemble des tontines du client.
-
-Réponse :
-
-json
-{
-    "total_tontines": 2,
-    "total_balance": 320000,
-    "total_contributions": 350000,
-    "total_withdrawals": 30000,
-    "tontines": [
-        {
-            "id": "uuid",
-            "name": "Tontine Moto",
-            "category": "moto",
-            "balance": 200000,
-            "progress": 80,
-            "next_contribution": {
-                "amount": 25000,
-                "due_date": "2026-07-05"
-            }
-        },
-        {
-            "id": "uuid",
-            "name": "Tontine Ciment",
-            "category": "ciment",
-            "balance": 120000,
-            "progress": 40,
-            "next_contribution": {
-                "amount": 15000,
-                "due_date": "2026-07-10"
-            }
-        }
-    ]
-}
-text
-
----
-
-## 📄 Document 3 : `/docs/13-tontine-frontend.md`
-
-```markdown
-# Frontend - Tontine
-
-## Structure des pages Next.js
-/apps/
-├── dashboard/ # Dashboard marchand
-│ └── app/
-│ └── (dashboard)/
-│ └── tontine/
-│ ├── page.tsx # Liste des tontines
-│ ├── create/
-│ │ └── page.tsx # Création d'une tontine
-│ ├── [id]/
-│ │ ├── page.tsx # Détail d'une tontine
-│ │ ├── edit/
-│ │ │ └── page.tsx # Édition
-│ │ └── members/
-│ │ └── page.tsx # Gestion des membres
-│ └── withdrawals/
-│ └── pending/
-│ └── page.tsx # Retraits en attente
-│
-└── storefront/ # Storefront client
-└── app/
-└── shop/
-└── [slug]/
-└── tontine/
-├── page.tsx # Liste des tontines
-├── [id]/
-│ ├── page.tsx # Détail
-│ └── checkout/
-│ └── page.tsx # Payer avec tontine
-└── profile/
-└── page.tsx # Mes tontines
-
-text
-
----
-
-## Composants clés
-
-### 1. Dashboard marchand - Liste des tontines
-
-```tsx
-// apps/dashboard/app/(dashboard)/tontine/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-import { useTontine } from '@/hooks/useTontine';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import Link from 'next/link';
-
-export default function TontineListPage() {
-  const { tontines, isLoading, fetchTontines } = useTontine();
-  const [category, setCategory] = useState('all');
-
-  useEffect(() => {
-    fetchTontines(category);
-  }, [category]);
-
-  if (isLoading) return <div>Chargement...</div>;
-
-  return (
-    <div className="container mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">💰 Gestion des Tontines</h1>
-        <Link href="/tontine/create">
-          <Button>➕ Créer une tontine</Button>
-        </Link>
-      </div>
-
-      <Tabs defaultValue="all" onValueChange={setCategory}>
-        <TabsList>
-          <TabsTrigger value="all">Toutes</TabsTrigger>
-          <TabsTrigger value="moto">🏍️ Moto</TabsTrigger>
-          <TabsTrigger value="voiture">🚗 Voiture</TabsTrigger>
-          <TabsTrigger value="ciment">🏗️ Ciment</TabsTrigger>
-          <TabsTrigger value="telephonie">📱 Téléphonie</TabsTrigger>
-          <TabsTrigger value="general">💰 Générale</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="all">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
-            {tontines.map((tontine) => (
-              <TontineCard key={tontine.id} tontine={tontine} />
-            ))}
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
+  "voucher_code": "A3F9KL2M9X4P",
+  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
+  "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "cycle_number": 1,
+  "status": "redeemed",
+  "redeemed_at": "2026-07-15T10:30:00Z"
 }
 
-function TontineCard({ tontine }: { tontine: any }) {
-  return (
-    <Link href={`/tontine/${tontine.id}`}>
-      <Card className="hover:shadow-lg transition-shadow cursor-pointer">
-        <CardHeader>
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-2xl mr-2">{tontine.category_icon}</span>
-              <CardTitle>{tontine.name}</CardTitle>
-            </div>
-            <StatusBadge status={tontine.status} />
-          </div>
-          <p className="text-sm text-gray-500">{tontine.description}</p>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Objectif</span>
-              <span className="font-semibold">
-                {tontine.total_collected.toLocaleString()} / {tontine.savings_goal.toLocaleString()} FCFA
-              </span>
-            </div>
-            <Progress value={tontine.progress_percentage} className="h-2" />
-            
-            <div className="flex justify-between text-sm mt-4">
-              <span>👥 {tontine.current_members}/{tontine.max_members} membres</span>
-              <span>💰 {tontine.contribution_amount.toLocaleString()} FCFA/mois</span>
-            </div>
 
-            <Button variant="outline" size="sm" className="w-full mt-2">
-              Voir les détails
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
-2. Client - Payer avec la tontine
-tsx
-// apps/storefront/app/shop/[slug]/tontine/[id]/checkout/page.tsx
-'use client';
+9. Intégration YengaPay
+🔗 Format de référence
+YengaPay ne supporte pas les métadonnées dans le webhook. On utilise le champ reference :
 
-import { useState, useEffect } from 'react';
-import { useTontine } from '@/hooks/useTontine';
-import { useCart } from '@/hooks/useCart';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Slider } from '@/components/ui/slider';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 
-export default function TontineCheckoutPage({ params }: { params: { slug: string; id: string } }) {
-  const { tontine, balance, maxWithdraw, isLoading, withdraw } = useTontine(params.id);
-  const { cart, total } = useCart();
-  const [amount, setAmount] = useState(0);
-  const [remaining, setRemaining] = useState(0);
+// Format : "TONTINE:{groupID_short}:{cycleNumber}:{participantID_short}"
+reference := fmt.Sprintf("TONTINE:%s:%d:%s",
+    groupID[:8],
+    cycleNumber,
+    participantID[:8])
+// Exemple : "TONTINE:33fb96c3:1:834183ee"
 
-  useEffect(() => {
-    if (tontine && balance) {
-      const max = Math.min(balance, total);
-      setAmount(Math.min(max, maxWithdraw));
-      setRemaining(total - amount);
-    }
-  }, [tontine, balance, total]);
 
-  const handleWithdraw = async () => {
-    const result = await withdraw({
-      order_id: orderId,
-      amount: amount,
-      notes: `Achat ${cart.length} articles`
-    });
+🔄 Webhook handler
 
-    if (result.requires_approval) {
-      router.push(`/orders/${orderId}/pending`);
-    } else {
-      router.push(`/orders/${orderId}/success`);
-    }
-  };
+// Dans ProcessWebhookUsecase.Execute()
+if strings.HasPrefix(payload.Reference, "TONTINE:") {
+    parts := strings.Split(payload.Reference, ":")
+    groupIDPrefix := parts[1]
+    cycleNumber, _ := strconv.Atoi(parts[2])
+    participantIDPrefix := parts[3]
 
-  if (isLoading) return <div>Chargement...</div>;
+    // 1. Calculer la commission
+    commissionCents := payload.PaymentAmount * tontineCommissionRate / 100
+    merchantAmount := payload.PaymentAmount - commissionCents
 
-  return (
-    <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-6">Payer avec la tontine</h1>
-
-      <Card className="mb-6">
-        <CardContent className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <span className="text-2xl mr-2">{tontine.category_icon}</span>
-              <span className="font-semibold">{tontine.name}</span>
-            </div>
-            <span className="text-sm text-gray-500">
-              Solde : {balance.toLocaleString()} FCFA
-            </span>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Montant à utiliser : {amount.toLocaleString()} FCFA
-              </label>
-              <Slider
-                value={[amount]}
-                min={0}
-                max={Math.min(balance, total)}
-                step={1000}
-                onValueChange={(value) => setAmount(value[0])}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-gray-500 mt-1">
-                <span>0 FCFA</span>
-                <span>{Math.min(balance, total).toLocaleString()} FCFA</span>
-              </div>
-            </div>
-
-            {tontine.withdrawal_fee_pct > 0 && (
-              <div className="text-sm text-gray-600">
-                Frais de retrait : {tontine.withdrawal_fee_pct}% (
-                {(amount * tontine.withdrawal_fee_pct / 100).toLocaleString()} FCFA)
-              </div>
-            )}
-
-            {remaining > 0 && (
-              <Alert>
-                <AlertDescription>
-                  Reste à payer : <strong>{remaining.toLocaleString()} FCFA</strong>
-                  <br />
-                  <span className="text-sm">
-                    Vous pourrez payer le reste avec Wave ou Cash à la livraison.
-                  </span>
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {remaining === 0 && (
-              <Alert className="bg-green-50 border-green-200">
-                <AlertDescription className="text-green-700">
-                  ✅ Vous avez suffisamment sur votre tontine pour payer cette commande !
-                </AlertDescription>
-              </Alert>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="flex gap-4">
-        <Button variant="outline" className="flex-1" onClick={() => router.back()}>
-          Retour
-        </Button>
-        <Button 
-          className="flex-1 bg-green-600 hover:bg-green-700"
-          onClick={handleWithdraw}
-          disabled={amount === 0}
-        >
-          {amount === 0 ? 'Choisissez un montant' : 'Confirmer le paiement'}
-        </Button>
-      </div>
-    </div>
-  );
-}
-3. Dashboard marchand - Approbation des retraits
-tsx
-// apps/dashboard/app/(dashboard)/tontine/withdrawals/pending/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-import { useTontine } from '@/hooks/useTontine';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { CheckCircle, XCircle, Clock } from 'lucide-react';
-
-export default function PendingWithdrawalsPage() {
-  const { pendingWithdrawals, approveWithdrawal, rejectWithdrawal } = useTontine();
-  const [selected, setSelected] = useState<any>(null);
-
-  useEffect(() => {
-    fetchPendingWithdrawals();
-  }, []);
-
-  const handleApprove = async (id: string) => {
-    await approveWithdrawal(id);
-    fetchPendingWithdrawals();
-  };
-
-  const handleReject = async (id: string) => {
-    await rejectWithdrawal(id);
-    fetchPendingWithdrawals();
-  };
-
-  return (
-    <div className="container mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">📋 Retraits en attente</h1>
-        <Badge variant="outline" className="text-sm">
-          {pendingWithdrawals.length} en attente
-        </Badge>
-      </div>
-
-      {pendingWithdrawals.length === 0 ? (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <Clock className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-500">Aucun retrait en attente d'approbation</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {pendingWithdrawals.map((withdrawal) => (
-            <Card key={withdrawal.id} className="hover:shadow-md transition-shadow">
-              <CardContent className="p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h3 className="font-semibold text-lg">{withdrawal.customer_name}</h3>
-                      <Badge variant="outline" className="text-yellow-600 border-yellow-200 bg-yellow-50">
-                        <Clock className="w-3 h-3 mr-1" />
-                        En attente
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-gray-500 mt-1">
-                      Commande #{withdrawal.order_id.slice(0, 8)}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xl font-bold text-green-600">
-                      {withdrawal.amount.toLocaleString()} FCFA
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      Solde restant : {withdrawal.balance_after.toLocaleString()} FCFA
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4 mt-4 text-sm">
-                  <div>
-                    <span className="text-gray-500">Produit</span>
-                    <p className="font-medium">{withdrawal.product_name}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Total commande</span>
-                    <p className="font-medium">{withdrawal.order_total.toLocaleString()} FCFA</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Reste à payer</span>
-                    <p className="font-medium">{withdrawal.remaining_to_pay.toLocaleString()} FCFA</p>
-                  </div>
-                </div>
-
-                {withdrawal.notes && (
-                  <p className="text-sm text-gray-500 mt-2">
-                    📝 {withdrawal.notes}
-                  </p>
-                )}
-
-                <div className="flex gap-3 mt-4 pt-4 border-t">
-                  <Button 
-                    onClick={() => handleApprove(withdrawal.id)}
-                    className="flex-1 bg-green-600 hover:bg-green-700"
-                  >
-                    <CheckCircle className="w-4 h-4 mr-2" />
-                    Approuver
-                  </Button>
-                  <Button 
-                    variant="destructive"
-                    onClick={() => setSelected(withdrawal)}
-                    className="flex-1"
-                  >
-                    <XCircle className="w-4 h-4 mr-2" />
-                    Refuser
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <AlertDialog open={!!selected} onOpenChange={() => setSelected(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Refuser le retrait</AlertDialogTitle>
-            <AlertDialogDescription>
-              Êtes-vous sûr de vouloir refuser ce retrait de {selected?.amount.toLocaleString()} FCFA ?
-              <br />
-              <span className="text-sm text-gray-500">
-                Le client sera notifié et son solde restera disponible.
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
-            <AlertDialogAction 
-              className="bg-red-600 hover:bg-red-700"
-              onClick={() => {
-                if (selected) handleReject(selected.id);
-                setSelected(null);
-              }}
-            >
-              Confirmer le refus
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-Hooks pour les tontines
-tsx
-// packages/hooks/useTontine.ts
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/api-client';
-
-export function useTontine(tontineId?: string) {
-  const queryClient = useQueryClient();
-
-  // Liste des tontines (marchand)
-  const useTontines = (category?: string) => {
-    return useQuery({
-      queryKey: ['tontines', category],
-      queryFn: () => api.tontine.list({ category }),
-    });
-  };
-
-  // Détail d'une tontine
-  const useTontineDetail = () => {
-    return useQuery({
-      queryKey: ['tontine', tontineId],
-      queryFn: () => api.tontine.get(tontineId!),
-      enabled: !!tontineId,
-    });
-  };
-
-  // Créer une tontine
-  const useCreateTontine = () => {
-    return useMutation({
-      mutationFn: (data: any) => api.tontine.create(data),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['tontines'] });
-      },
-    });
-  };
-
-  // Rejoindre une tontine (client)
-  const useJoinTontine = () => {
-    return useMutation({
-      mutationFn: (id: string) => api.tontine.join(id),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['tontine', tontineId] });
-      },
-    });
-  };
-
-  // Cotiser (client)
-  const useContribute = () => {
-    return useMutation({
-      mutationFn: (data: { amount: number; payment_method: string }) =>
-        api.tontine.contribute(tontineId!, data),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['tontine', tontineId] });
-        queryClient.invalidateQueries({ queryKey: ['tontine-balance'] });
-      },
-    });
-  };
-
-  // Retirer (client)
-  const useWithdraw = () => {
-    return useMutation({
-      mutationFn: (data: { order_id: string; amount: number; notes?: string }) =>
-        api.tontine.withdraw(tontineId!, data),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['tontine', tontineId] });
-        queryClient.invalidateQueries({ queryKey: ['tontine-balance'] });
-      },
-    });
-  };
-
-  // Approuver un retrait (marchand)
-  const useApproveWithdrawal = () => {
-    return useMutation({
-      mutationFn: (withdrawalId: string) =>
-        api.tontine.approveWithdrawal(withdrawalId),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['pending-withdrawals'] });
-      },
-    });
-  };
-
-  return {
-    useTontines,
-    useTontineDetail,
-    useCreateTontine,
-    useJoinTontine,
-    useContribute,
-    useWithdraw,
-    useApproveWithdrawal,
-  };
-}
-Client API
-ts
-// packages/api-client/src/tontine.ts
-import { apiClient } from './client';
-
-export const tontineApi = {
-  // Marchand
-  getSettings: () => apiClient.get('/api/dashboard/tontine/settings'),
-  updateSettings: (data: any) => apiClient.put('/api/dashboard/tontine/settings', data),
-  
-  list: (params?: { category?: string }) =>
-    apiClient.get('/api/dashboard/tontine', { params }),
-  
-  create: (data: any) => apiClient.post('/api/dashboard/tontine', data),
-  get: (id: string) => apiClient.get(`/api/dashboard/tontine/${id}`),
-  update: (id: string, data: any) => apiClient.put(`/api/dashboard/tontine/${id}`, data),
-  toggle: (id: string, status: string) =>
-    apiClient.post(`/api/dashboard/tontine/${id}/toggle`, { status }),
-  delete: (id: string) => apiClient.delete(`/api/dashboard/tontine/${id}`),
-  
-  // Membres
-  getMembers: (id: string) => apiClient.get(`/api/dashboard/tontine/${id}/members`),
-  addMember: (id: string, data: any) =>
-    apiClient.post(`/api/dashboard/tontine/${id}/members`, data),
-  blacklistMember: (memberId: string) =>
-    apiClient.post(`/api/dashboard/tontine/members/${memberId}/blacklist`),
-  
-  // Retraits
-  getPendingWithdrawals: () => apiClient.get('/api/dashboard/tontine/withdrawals/pending'),
-  approveWithdrawal: (id: string) =>
-    apiClient.post(`/api/dashboard/tontine/withdrawals/${id}/approve`),
-  rejectWithdrawal: (id: string, data?: { reason: string }) =>
-    apiClient.post(`/api/dashboard/tontine/withdrawals/${id}/reject`, data),
-  
-  // Éligibilité
-  addEligibleProducts: (id: string, productIds: string[]) =>
-    apiClient.post(`/api/dashboard/tontine/${id}/eligibility`, { product_ids: productIds }),
-  removeEligibleProduct: (id: string, productId: string) =>
-    apiClient.delete(`/api/dashboard/tontine/${id}/eligibility/${productId}`),
-  
-  // Annonces
-  createAnnouncement: (id: string, data: any) =>
-    apiClient.post(`/api/dashboard/tontine/${id}/announcements`, data),
-  deleteAnnouncement: (id: string) =>
-    apiClient.delete(`/api/dashboard/tontine/announcements/${id}`),
-  
-  // Client
-  listAvailable: (params?: { category?: string }) =>
-    apiClient.get('/api/client/tontine', { params }),
-  getDetail: (id: string) => apiClient.get(`/api/client/tontine/${id}`),
-  join: (id: string) => apiClient.post(`/api/client/tontine/${id}/join`),
-  leave: (id: string) => apiClient.post(`/api/client/tontine/${id}/leave`),
-  contribute: (id: string, data: { amount: number; payment_method: string; payment_ref?: string }) =>
-    apiClient.post(`/api/client/tontine/${id}/contribute`, data),
-  getContributions: (id: string) =>
-    apiClient.get(`/api/client/tontine/${id}/contributions`),
-  withdraw: (id: string, data: { order_id: string; amount: number; notes?: string }) =>
-    apiClient.post(`/api/client/tontine/${id}/withdraw`, data),
-  getWithdrawals: () => apiClient.get('/api/client/tontine/withdrawals'),
-  getGoal: (id: string) => apiClient.get(`/api/client/tontine/${id}/goal`),
-  setGoal: (id: string, data: { target_amount: number; target_product_id?: string; notes?: string }) =>
-    apiClient.post(`/api/client/tontine/${id}/goal`, data),
-  getDashboard: () => apiClient.get('/api/client/tontine/dashboard'),
-};
-text
-
----
-
-## 📄 Document 4 : Diagramme supplémentaire `/docs/diagrams/tontine-categories.puml`
-
-```plantuml
-@startuml
-title Catégories de Tontines
-
-package "Tontine Moto" {
-    [Motos]
-    [Pièces détachées]
-    [Accessoires]
-    note right: Client épargne pour\nacheter une moto
+    // 2. Enregistrer le paiement tontine
+    // 3. Vérifier si tous les participants ont payé
+    // 4. Si oui → générer voucher + passer au cycle suivant
 }
 
-package "Tontine Voiture" {
-    [Voitures]
-    [Entretien]
-    [Assurance]
-    note right: Client épargne pour\nacheter une voiture
-}
 
-package "Tontine Ciment" {
-    [Ciment]
-    [Matériaux]
-    [Construction]
-    note right: Client épargne pour\nconstruire sa maison
-}
+💸 Répartition des fonds
 
-package "Tontine Électroménager" {
-    [Réfrigérateurs]
-    [Téléviseurs]
-    [Climatiseurs]
-    note right: Client épargne pour\néquiper sa maison
-}
+Client paie 62 500 F
+    │
+    ├─► YengaPay reçoit 62 500 F
+    │
+    ├─► Webhook envoyé à GoShop
+    │
+    ├─► GoShop calcule :
+    │   ├─ Commission : 62 500 × 2.50% = 1 562 F
+    │   └─ Marchand : 62 500 - 1 562 = 60 938 F
+    │
+    └─► Transfert vers marchand : 60 938 F
 
-package "Tontine Téléphonie" {
-    [Téléphones]
-    [Accessoires]
-    [Forfaits]
-    note right: Client épargne pour\nacheter un smartphone
-}
+    10. Sécurité et conformité
+🔐 Règles de sécurité
+Règle
+Implémentation
+Multi-tenant
+Toutes les routes passent par TenantResolver
+Voucher mono-boutique
+Check shop_id dans redeem_voucher
+KYC obligatoire
+Check kyc_level avant création/rejoint
+Codes uniques
+crypto/rand pour invite_code et voucher_code
+Montants int64
+Jamais de float, toujours en centimes
+Audit trail
+Logs zerolog sur toutes les actions
+⚖️ Conformité BCEAO
+Point d'attention : Collecter de l'argent pour livraison future peut nécessiter une autorisation BCEAO.
+Recommandations :
+✅ Consulter un conseil juridique avant lancement public
+✅ Limiter le MVP à des cercles fermés (famille/amis)
+✅ Pas de publicité publique avant validation juridique
+✅ Documenter les flux financiers pour audit
+🔒 Protection des documents KYC
+Stockage local sécurisé (pas de cloud public pour MVP)
+Accès restreint au marchand de la boutique
+Suppression après validation (optionnel)
+Pas de partage avec des tiers
+11. Limites et décisions
+✅ Décisions actées
+Sujet
+Décision
+Raison
+Types montants
+BIGINT / int64 centimes
+Précision financière
+Types IDs
+UUID partout
+Cohérence avec le reste
+Accès groupe
+invite_code 8-10 chars
+Cercle fermé
+Position bénéficiaire
+Ordre d'arrivée
+Simple, transparent
+Mode distribution
+ROTATING uniquement au MVP
+LOCKED_SAVINGS reporté
+Livraison
+Voucher numérique
+Flexible, traçable
+Validité voucher
+6 mois
+Standard marché
+Utilisation voucher
+Mono-boutique
+Sécurité comptable
+Commission
+Par cotisation
+Trésorerie lissée
+Taux commission
+0-15% configurable
+Flexibilité marchand
+Création groupe
+Marchand + client
+Flexibilité
+KYC
+Obligatoire pour tous
+Sécurité
+Paiement
+Via YengaPay
+6 opérateurs BF déjà intégrés
+❌ Hors scope MVP
+Fonctionnalité
+Raison
+Mode LOCKED_SAVINGS
+Modèle économique flou
+Gestion défauts de paiement
+Confiance sociale au MVP
+Notifications SMS
+No-op au MVP, SMS plus tard
+Relances automatiques
+Pas de job scheduler
+Assurance défaut
+Complexe, reporté
+Multi-devises
+XOF uniquement au BF
+API publique
+Réservé aux clients/marchands
+12. Roadmap
+🚀 Phase 1 : MVP (2 semaines)
+Semaine
+Jours
+Livrables
+S1
+J1-J2
+Migration 010 + 011 (tontine + KYC)
+J3
+Entities + Repositories
+J4-J5
+Usecases (create, join, pay, webhook)
+S2
+J6-J7
+Usecases (redeem, validate KYC)
+J8
+Handlers HTTP + routes
+J9
+Tests E2E complets
+J10
+Documentation + tag v2.9.0
+🎯 Phase 2 : Améliorations (post-MVP)
+Notifications SMS (Africa's Talking ou YengaPay SMS)
+Dashboard marchand avancé (stats, graphiques)
+Mode LOCKED_SAVINGS (avec prix négocié)
+Liste d'attente pour groupes complets
+Statistiques publiques (anonymisées)
+🌟 Phase 3 : Scale
+Application mobile React Native
+Intégration Wave
+Marketplace publique de tontines
+API publique pour partenaires
+📚 Références
+Documentation YengaPay
+Réglementation BCEAO
+Architecture GoShop
+Système de paiement
+🤝 Contribution
+Voir CONTRIBUTING.md pour les détails.
+Prochaine étape : Implémentation de la Phase 1 (migration + entities + usecases).
+Dernière mise à jour : 2026-06-28
 
-package "Tontine Mode" {
-    [Vêtements]
-    [Chaussures]
-    [Bijoux]
-    note right: Client épargne pour\nsa garde-robe
-}
 
-package "Tontine Générale" {
-    [Tous les produits]
-    note right: Tontine polyvalente\npour tout type d'achat
-}
 
-@enduml
-✅ Récapitulatif des documents à créer
-Fichier	Description	Statut
-/docs/11-tontine-system.md	Documentation complète du système	✅ Prêt
-/docs/12-tontine-api-reference.md	Routes API détaillées	✅ Prêt
-/docs/13-tontine-frontend.md	Interface utilisateur Next.js	✅ Prêt
-/docs/diagrams/tontine-categories.puml	Diagramme des catégories	✅ Prêt
+
