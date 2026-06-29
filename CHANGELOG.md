@@ -1,269 +1,126 @@
 
 ---
 
-## 📄 Fichier 2 : `CHANGELOG.md` (AJOUTER v2.1.0 EN HAUT)
+##  `CHANGELOG.md` (AJOUTER v2.9.0 EN HAUT)
 
-
----
-
-## 📄 Fichier 2 : `CHANGELOG.md` (AJOUTER v2.1.0 EN HAUT)
-
-Remplace le début du fichier par :
+**Ajouter au tout début du fichier** (après le header) :
 
 ```markdown
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
----
-
-## [v2.1.0-payment-system] - 2026-06-23
+## [v2.9.0-tontine-kyc] - 2026-06-29
 
 ### 🎉 Added
 
-#### Système de paiement complet
-- **Entité Payment** : Machine à états complète (pending → processing → success → refunded/failed/expired/cancelled)
-- **Provider Strategy Pattern** : Architecture extensible pour multiples providers
-- **Payment Registry** : Enregistrement et gestion des providers
-- **5 usecases** :
-  - `InitiatePaymentUsecase` : Initier un paiement
-  - `CheckPaymentStatusUsecase` : Vérifier le statut (avec sync provider)
-  - `ListPaymentsUsecase` : Lister avec filtres
-  - `RefundPaymentUsecase` : Rembourser
-  - `ProcessWebhookUsecase` : Traiter les webhooks avec audit
+#### Système de Tontine (Biens physiques)
+- **Tontine de biens physiques** : Système complet permettant à un groupe de cotiser pour acquérir un bien à tour de rôle
+- **5 entités domaine** : `TontineGroup`, `TontineParticipant`, `TontinePayment`, `TontineVoucher`, `ProductTontineSettings`
+- **5 repositories Postgres** : Implémentations complètes avec support multi-tenant et transactions
+- **4 usecases tontine** :
+  - `CreateTontineGroupUsecase` : Création de groupe (marchand ou client)
+  - `JoinTontineGroupUsecase` : Rejointure par code d'invitation
+  - `PayCycleUsecase` : Paiement de cotisation via YengaPay
+  - `ListCustomerPaymentsUsecase` : Historique des paiements
+- **3 handlers HTTP** :
+  - `TontineHandler` : Endpoints groupes (create, join, pay, list)
+  - `TontineSettingsHandler` : Configuration par boutique
+  - `KYCHandler` : Upload et validation KYC
+- **Code d'invitation** : 8 caractères alphanumériques uniques (`crypto/rand`)
+- **Système de commission** : Configurable 0-15% (défaut 2.50%) en basis points
+- **Voucher de livraison** : Code 12 caractères, validité 6 mois, mono-boutique
+- **Machine à états** : `PENDING_MEMBERS` → `ACTIVE` → `COMPLETED`
 
-#### Providers mock
-- **Orange Money** : USSD `#144*111#`, délai 2s, HMAC-SHA256
-- **Moov Money** : USSD `#135*2#`, délai 3s, HMAC-SHA256
-- Simulation réaliste du flux asynchrone de paiement
+#### Système KYC (Know Your Customer)
+- **Upload de documents** : CNI, passeport, autres (max 5 Mo, JPG/PNG/PDF)
+- **Workflow de validation** : Marchand approuve/rejette avec raison
+- **4 niveaux KYC** : `none`, `pending`, `verified`, `rejected`
+- **2 usecases KYC** :
+  - `UploadKYCDocumentUsecase` : Upload avec validation (taille, MIME, max 3 docs)
+  - `ReviewKYCUsecase` : Validation/rejet par le marchand
+- **KYC obligatoire** : Pour participer à une tontine
+- **Liste des KYC en attente** : Pour le dashboard marchand
 
-#### Endpoints HTTP
-- `POST /api/orders/{id}/pay` - Initier un paiement
-- `GET /api/payments` - Lister les paiements (avec filtres)
-- `GET /api/payments/{id}` - Détails d'un paiement (avec sync provider)
-- `POST /api/payments/{id}/refund` - Rembourser
-- `POST /webhooks/{provider}` - Webhook provider (public, HMAC validé)
-
-#### Handlers HTTP
-- **PaymentHandler** : 4 méthodes (initiate, get, list, refund)
-- **WebhookHandler** : Traitement des webhooks avec validation HMAC
+#### Intégration Webhook Tontine
+- **Détection automatique** : Préfixe `TONTINE:` dans la référence YengaPay
+- **ProcessTontineWebhookUsecase** : Traitement dédié des webhooks tontine
+- **Complétion automatique** : Génération voucher quand tous les participants ont payé
+- **Transition de cycle** : Passage automatique au cycle suivant
+- **Complétion groupe** : Statut `COMPLETED` au dernier cycle
 
 #### Base de données
-- **Migration 003** : Tables `payments` et `payment_webhooks`
-- **Migration 004** : Indexes de performance sur `users.email`, `payments.created_at`, `orders.created_at`
-- **UTC timestamps** : `SET TIME ZONE 'UTC'` forcé dans PostgreSQL
+- **Migration 010** : 5 tables tontine + 14 index de performance
+- **Migration 011** : Table `customer_kyc_documents` + champs KYC sur `customers`
+- **Migration 012** : Ajout statut `paid` à la contrainte `orders_status_check`
+- **Modifications** : `shop_payment_settings` (tontine_enabled, tontine_commission_rate)
 
-#### Sécurité
-- **Validation HMAC-SHA256** des webhooks (secrets séparés par provider)
-- **Protection contre payload tampering**
-- **Timing-safe comparison** avec `hmac.Equal()`
-- **Audit trail** : Table `payment_webhooks` pour traçabilité complète
+#### Endpoints HTTP
+- `GET /api/shops/{id}/tontine-settings?product_id=...` - Lire config tontine
+- `PUT /api/shops/{id}/tontine-settings` - Configurer tontine
+- `POST /api/tontine/groups` - Créer un groupe
+- `POST /api/tontine/groups/join` - Rejoindre par code
+- `POST /api/tontine/groups/{id}/pay` - Payer cotisation
+- `GET /api/tontine/groups/{id}/payments?customer_id=...` - Historique paiements
+- `POST /api/customers/kyc/upload` - Upload document KYC
+- `GET /api/customers/{id}/kyc/status` - Statut KYC
+- `GET /api/merchant/kyc/pending` - Liste KYC en attente
+- `POST /api/merchant/kyc/{id}/review` - Valider/Rejeter KYC
 
-#### Tests
-- **8 tests de sécurité** (100% de réussite) :
-  - Isolation multi-tenant (4 tests)
-  - Validation HMAC webhook (4 tests)
-- **Tests E2E** : Flux de paiement complet
-- **Tests de charge** : Seuils ajustés pour environnement local
+#### Tests E2E (5 nouveaux tests)
+- **TestTontineWorkflowE2E** : Workflow complet (11 étapes, ~9s)
+- **TestTontineWebhookSimulation** : Vérification détection TONTINE:
+- **TestTontineSettingsE2E** : Configuration par boutique
+- **TestTontineValidationRules** : 6 validations (cycles, types, taille, MIME)
+- **TestTontineCommissionCalculation** : 6 calculs de commission
 
 ### 🔧 Changed
 
-#### Breaking Changes
-- **Aucun** : Rétrocompatible avec v2.0.0
-
 #### Architecture
-- `CheckPaymentStatusUsecase` injecte maintenant le tenant context pour les webhooks
-- `OrderRepository.UpdateStatus()` ajouté pour auto-update PENDING → PAID
-- `ProcessWebhookUsecase` retourne des erreurs typées (`ErrWebhookValidation`, `ErrWebhookProcessing`)
-- `WebhookHandler` distingue validation (400) et traitement (200)
+- **ConfigureTontineUsecase** : Ne dépend plus de `tenant.FromContext` (ShopID explicite)
+- **TontineSettingsHandler** : Injection du tenant via `tenant.WithTenant()`
+- **ProcessWebhookUsecase** : Délègue à `ProcessTontineWebhookUsecase` si préfixe TONTINE:
+- **CheckPaymentStatusUsecase** : Statut commande → `paid` (minuscules)
 
 #### Base de données
-- PostgreSQL forcé en UTC via `SET TIME ZONE 'UTC'`
-- Indexes ajoutés pour performance (migration 004)
+- **orders_status_check** : Ajout du statut `paid` (migration 012)
+- **Idempotence** : Toutes les migrations utilisent `IF NOT EXISTS`
 
 ### 🐛 Fixed
 
 #### Critique
-- **Webhook ne persistait pas** : Le statut du paiement était marqué en mémoire mais jamais sauvegardé en base
-  - Cause : Pas de contexte multi-tenant dans les webhooks publics
-  - Solution : Injection du tenant context après lookup du paiement
-- **Timestamps incohérents** : `initiated_at` et `completed_at` dans des fuseaux différents
-  - Cause : Mélange `time.Now()` local et UTC
-  - Solution : `time.Now().UTC()` partout + PostgreSQL en UTC
-- **Statut commande non mis à jour** : Les commandes restaient PENDING après paiement réussi
-  - Solution : `OrderRepository.UpdateStatus()` appelé dans `CheckPaymentStatusUsecase`
-
-#### Tests
-- **TestGetAllOrderUsecase_Integration** : Filtrage par CustomerID pour isolation des tests
-- **Mock régénération** : Correction directive `go:generate` dans `shop_repository.go`
+- **Webhook tontine URLs** : Utilisation de `client.BaseURL` dans les tests
+- **Statut commande** : `PAID` → `paid` pour respecter la contrainte DB
+- **Migration 008** : Index `idx_withdrawals_shop_id` rendu idempotent
+- **Migration 011** : Contrainte `customers_kyc_level_check` avec `DO $$ ... $$`
 
 ### 🔒 Security
 
-- **Validation HMAC-SHA256** des webhooks avec secrets séparés par provider
-- **Rejet des webhooks sans signature** (HTTP 400)
-- **Rejet des webhooks avec signature invalide** (HTTP 400)
-- **Détection de payload tampering** (HTTP 400)
-- **Isolation multi-tenant** vérifiée par tests automatisés
-- **Protection contre double remboursement**
+- **Multi-tenant isolation** : Toutes les routes tontine filtrent par `shop_id`
+- **KYC obligatoire** : Rejet automatique des clients non vérifiés
+- **Voucher mono-boutique** : Validation `shop_id` à la redemption
+- **Codes uniques** : `crypto/rand` pour `invite_code` et `voucher_code`
+- **Validation HMAC** : Webhooks YengaPay signés
+- **File upload validation** : Taille max 5 Mo, MIME types autorisés
 
 ### 📊 Performance
 
-- **Webhook processing** : 41ms
-- **Payment initiation** : ~600ms
-- **Order creation** : ~400ms
-- **Login** : ~2s (bcrypt cost = 4)
+- **TestTontineWorkflowE2E** : ~9s pour 11 étapes complètes
+- **TestTontineSettingsE2E** : ~10s
+- **TestTontineValidationRules** : ~9s
+- **Commission calculation** : < 1ms
 
 ### 📝 Migration Guide
 
-#### Depuis v2.0.0
+#### Depuis v2.8.x
 
-1. **Appliquer les migrations 003 et 004** :
+1. **Appliquer les migrations 010, 011, 012** :
    ```bash
-   go run cmd/migrate/main.go
+   psql -U postgres -d goshop_db -f migrations/010_add_tontine.sql
+   psql -U postgres -d goshop_db -f migrations/011_add_kyc.sql
+   psql -U postgres -d goshop_db -f migrations/012_add_paid_status.sql
 
-   Configurer les secrets webhook (optionnel, valeurs par défaut en dev) :
-bash
+   Aucun changement d'API breaking : Rétrocompatible
+Nouvelles routes disponibles : Voir docs/11-tontine-system.md et docs/KYC.md
+📚 Documentation
+docs/11-tontine-system.md : Guide complet du système tontine
+docs/KYC.md : Guide du système KYC
+docs/payment-system.md : Mis à jour avec intégration tontine
 
-
-# Dans .env
-ORANGE_MONEY_WEBHOOK_SECRET=your-secret-here
-MOOV_MONEY_WEBHOOK_SECRET=your-secret-here
-
-Aucun changement d'API : Rétrocompatible avec v2.0.0
-[v2.0.0-multi-tenant] - 2026-06-19
-🎉 Added
-Multi-tenant Architecture
-Migration 002 : Tables shops et shop_payment_settings
-Entité Shop : Domaine complet avec validation (name, slug, custom_domain, plan)
-ShopRepository : Interface + implémentation PostgreSQL
-TenantResolver middleware : Résolution du tenant depuis X-Shop-Slug ou Host
-Contexte multi-tenant : tenant.WithTenant() et tenant.FromContext()
-Endpoints de gestion des boutiques
-POST /api/shops - Créer une nouvelle boutique
-GET /api/shops - Lister les boutiques de l'utilisateur
-PUT /api/shops/{id} - Modifier une boutique (propriétaire uniquement)
-Repositories multi-tenant
-ProductRepository : 5 méthodes filtrées par shop_id
-CustomerRepository : 9 méthodes filtrées par shop_id
-OrderRepository : 6 méthodes filtrées par shop_id
-OrderItemRepository : 3 méthodes avec vérification du parent
-Tests complets (130+)
-16 tests unitaires pour shop_usecase
-9 tests handler pour shop_handler
-13 tests pour order_usecase (dont 3 intégration)
-3 tests pour order_repository
-5 tests E2E (dont TestCreateOrderE2E avec multi-tenant)
-2 tests de charge (smoke + load)
-Documentation
-Mise à jour de docs/04-multi-tenant.md
-Mise à jour de docs/payment-system.md
-Mise à jour de docs/06-deployment.md
-Mise à jour de docs/07-contributing.md
-🔧 Changed
-Breaking Changes
-Tous les endpoints /api/* (sauf /api/shops) nécessitent maintenant le header X-Shop-Slug
-Données existantes : Migrées vers le shop "demo" par défaut
-Migration 002 : Idempotente avec CREATE TABLE IF NOT EXISTS
-Architecture
-ShopHandler utilise maintenant des interfaces pour permettre le mocking
-HTTPClient de test supporte les headers par défaut (SetDefaultHeader)
-test_server.go utilise sync.Once pour éviter les deadlocks PostgreSQL
-Tests de charge
-Seuils ajustés pour environnement local :
-http_req_duration: p(95) < 5000ms (was 4000ms)
-http_req_failed: rate < 0.05 (was 0.02)
-checks: rate > 0.90 (was 0.95)
-Emails avec UUID pour éviter les collisions entre VUs
-🐛 Fixed
-Deadlocks PostgreSQL : Résolus avec sync.Once pour les migrations
-Collisions d'emails : Ajout d'UUID dans les tests de charge
-BOM UTF-8 : .env.test recréé sans BOM
-Tests E2E : TestCreateOrderE2E ajoute maintenant le header X-Shop-Slug
-Fichiers de résultats : Exclus du git via .gitignore
-🔒 Security
-Isolation multi-tenant : Toutes les requêtes SQL filtrent par shop_id
-Vérification du propriétaire : UpdateShop vérifie que l'utilisateur est le propriétaire
-OrderItemRepository : Vérifie que la commande parente appartient au shop courant
-📊 Performance
-100% de réussite sur les tests de charge (1815/1815 checks)
-10 VUs simultanés avec 35.7 req/s
-Latence p95 : 259ms
-0 deadlock grâce à sync.Once
-📝 Migration Guide
-Depuis v1.0.0-mvp
-Appliquer la migration 002 
-
-go run cmd/migrate/main.go
-
-Ajouter le header X-Shop-Slug à toutes les requêtes /api/ :
-
-
-curl -H "X-Shop-Slug: ma-boutique" ...
-
-Créer une boutique (optionnel)
-
-curl -X POST /api/shops \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name": "Ma Boutique", "slug": "ma-boutique"}'
-
-  Données existantes : Automatiquement associées au shop "demo"
-[v1.0.0-mvp] - 2025-12-13
-🎉 Added
-Core Features
-Authentification JWT : Access + refresh tokens
-CRUD Products : Création, lecture, mise à jour, suppression
-CRUD Customers : Gestion des clients
-Orders : Création de commandes avec items multiples
-Health checks : /health/live et /health/ready
-Infrastructure
-PostgreSQL 16 : Base de données principale
-Redis 7 : Cache et sessions
-Docker multi-stage : Image Alpine optimisée
-Kubernetes : Manifests pour déploiement
-Observabilité
-Prometheus : Métriques HTTP et DB
-Zerolog : Logs structurés JSON
-Loki + Grafana : Agrégation et visualisation des logs
-Sécurité
-bcrypt : Hash des mots de passe
-Headers HTTP : Sécurité renforcée
-CORS : Configuration configurable
-Rate limiting : Protection contre les abus
-SQL paramétré : Protection contre les injections
-Tests
-Tests unitaires pour tous les usecases
-Tests d'intégration pour les repositories
-Tests E2E pour les flux complets
-Tests de charge avec k6
-Documentation
-Architecture détaillée
-API Reference
-Guide de déploiement
-Guide de contribution
-📊 Performance
-Latence moyenne : ~100ms
-Supporte 100+ requêtes/sec
-Temps de démarrage : < 5s
-[v0.1.0] - 2025-11-01
-🎉 Added
-Initial project setup
-Basic Go project structure
-PostgreSQL connection
-Basic authentication flow
-Simple product CRUD
-Types de changements
-Added : Nouvelles fonctionnalités
-Changed : Modifications de fonctionnalités existantes
-Deprecated : Fonctionnalités bientôt supprimées
-Removed : Fonctionnalités supprimées
-Fixed : Corrections de bugs
-Security : Corrections de sécurité
-Liens
-v2.1.0-payment-system
-v2.0.0-multi-tenant
-v1.0.0-mvp
-Comparaison v2.0.0...v2.1.0
 

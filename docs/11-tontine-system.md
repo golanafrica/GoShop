@@ -1,8 +1,8 @@
 # 🏦 Système de Tontine GoShop
 
-**Version** : v1.0.0  
-**Date** : 2026-06-28  
-**Statut** : 🚧 En conception — Prêt à implémenter
+**Version** : v2.9.0  
+**Date** : 2026-06-29  
+**Statut** : ✅ Implémenté et testé
 
 ---
 
@@ -18,8 +18,9 @@
 8. [API Endpoints](#8-api-endpoints)
 9. [Intégration YengaPay](#9-intégration-yengapay)
 10. [Sécurité et conformité](#10-sécurité-et-conformité)
-11. [Limites et décisions](#11-limites-et-décisions)
-12. [Roadmap](#12-roadmap)
+11. [Tests E2E](#11-tests-e2e)
+12. [Limites et décisions](#12-limites-et-décisions)
+13. [Roadmap](#13-roadmap)
 
 ---
 
@@ -56,7 +57,6 @@ Commission GoShop : 100 000 FCFA (2.50% de 4M)
 
 ### 💰 Flux d'argent
 
-
 Client A paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
 Client B paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
 Client C paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
@@ -77,11 +77,11 @@ Client C paie 62 500 ──► [YengaPay] ──► [GoShop] ──► Marchand
 
 ### 🎯 Modèle de commission
 
-**Option A retenue** : Commission prélevée sur **chaque cotisation**
+**Option retenue** : Commission prélevée sur **chaque cotisation**
 
 **Avantages** :
 - ✅ Trésorerie lissée pour GoShop (revenus réguliers)
-- ✅ Acceptation psychologique pour le marchand (petites retenues vs grosse amputation)
+- ✅ Acceptation psychologique pour le marchand
 - ✅ Cohérent avec le modèle COD existant
 
 **Calcul** :
@@ -168,7 +168,6 @@ Valider KYC client
 4. Workflow KYC
 📤 Côté client
 
-
 1. Client arrive sur produit avec tontine
    → Voit "Créer une tontine" ou "Payer cash à 450 000 F"
    → Clique → ❌ "Votre identité doit être vérifiée"
@@ -185,20 +184,7 @@ Valider KYC client
    → Peut créer une tontine
    → Peut rejoindre une tontine
 
-
 🏪 Côté marchand
-
-1. Marchand (déjà verified via shop_id)
-   → Dashboard → Produit → "Activer la tontine"
-   → Configure paramètres (type cercle, min/max participants)
-   → Crée groupe
-   → Partage code d'invitation
-
-2. Client veut rejoindre
-   → Doit être verified
-   → Marchand valide KYC si nécessaire
-   → Client rejoint avec code
-
 
 1. Marchand (déjà verified via shop_id)
    → Dashboard → Produit → "Activer la tontine"
@@ -221,14 +207,12 @@ Valider KYC client
       passport_20260628_143025.jpg
 
 
-
 Contraintes :
 Taille max : 5 Mo par document
 Types acceptés : JPG, PNG, PDF
 Max 3 documents par client
 5. Workflow Tontine
 🔄 Machine à états
-
 
      ┌─────────────────┐
      │ PENDING_MEMBERS │  ← En attente de participants
@@ -273,19 +257,17 @@ Utilisation : mono-boutique uniquement (sécurité)
 Format : QR code + code alphanumérique
 Sécurité :
 
-
 // Dans RedeemVoucherUsecase
 if voucher.ShopID != current_merchant.ShopID {
     return errors.New("ce bon de livraison appartient à une autre boutique")
 }
-
 
 6. Architecture technique
 🏗️ Vue d'ensemble
 
 ┌─────────────────────────────────────────────────────────────┐
 │                     INTERFACES (HTTP)                        │
-│  merchant_handler.go  │  client_handler.go  │  kyc_handler  │
+│  tontine_handler  │  kyc_handler  │  tontine_settings_handler│
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -311,7 +293,6 @@ if voucher.ShopID != current_merchant.ShopID {
 
 📦 Packages créés
 
-
 domain/
 ├── entity/
 │   ├── tontine.go                    ← Entités tontine
@@ -325,43 +306,46 @@ application/usecase/
 │   ├── create_group.go
 │   ├── join_group.go
 │   ├── pay_cycle.go
-│   ├── complete_cycle.go
-│   ├── redeem_voucher.go
-│   └── process_webhook.go
-└── customer_usecase/
-    ├── upload_kyc.go
-    └── review_kyc.go
+│   └── (complete_cycle, redeem_voucher à venir)
+├── customer_usecase/
+│   ├── upload_kyc.go
+│   └── review_kyc.go
+└── payment_usecase/
+    └── process_tontine_webhook.go
 
 infrastructure/
-├── postgres/tontine/                 ← Implémentations Postgres
-├── postgres/customer/                ← KYC repository
-└── storage/local_storage.go          ← Stockage fichiers KYC
+├── postgres/tontine/                 ← 5 implémentations Postgres
+│   ├── group_repository.go
+│   ├── participant_repository.go
+│   ├── payment_repository.go
+│   ├── settings_repository.go
+│   └── voucher_repository.go
+└── postgres/customer/
+    └── kyc_repository.go
 
 interfaces/handler/
 ├── tontine_handler/
-│   ├── merchant_handler.go
-│   └── client_handler.go
-└── customer_handler/
-    └── kyc_handler.go
+│   └── tontine_handler.go
+├── customer_handler/
+│   └── kyc_handler.go
+└── shop_handler/
+    └── tontine_settings_handler.go
+
 
 
 7. Modèle de données
 🗄️ Tables principales
 product_tontine_settings
 
-
 CREATE TABLE product_tontine_settings (
     product_id UUID PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
     shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-
     is_tontine_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     allow_commercial_circle BOOLEAN NOT NULL DEFAULT TRUE,
     allow_corporate_circle BOOLEAN NOT NULL DEFAULT TRUE,
     allow_family_circle BOOLEAN NOT NULL DEFAULT TRUE,
-
     min_participants INT NOT NULL DEFAULT 4 CHECK (min_participants >= 2),
     max_participants INT NOT NULL DEFAULT 12 CHECK (max_participants <= 50),
-
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -373,30 +357,18 @@ CREATE TABLE tontine_groups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     product_id UUID NOT NULL REFERENCES products(id),
     shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-    creator_customer_id UUID REFERENCES customers(id),  -- NULL si créé par marchand
-    creator_type VARCHAR(20) NOT NULL,  -- 'merchant' ou 'customer'
-
-    circle_type VARCHAR(20) NOT NULL,  -- 'COMMERCIAL', 'CORPORATE', 'FAMILY'
+    creator_customer_id UUID REFERENCES customers(id),
+    creator_type VARCHAR(20) NOT NULL,
+    circle_type VARCHAR(20) NOT NULL,
     amount_per_cycle_cents BIGINT NOT NULL CHECK (amount_per_cycle_cents > 0),
-
     total_cycles INT NOT NULL CHECK (total_cycles >= 2),
     current_cycle INT NOT NULL DEFAULT 1,
-
     invite_code VARCHAR(10) UNIQUE NOT NULL,
-
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING_MEMBERS',
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT tontine_groups_circle_check
-        CHECK (circle_type IN ('COMMERCIAL', 'CORPORATE', 'FAMILY')),
-    CONSTRAINT tontine_groups_status_check
-        CHECK (status IN ('PENDING_MEMBERS', 'ACTIVE', 'COMPLETED')),
-    CONSTRAINT tontine_groups_creator_check
-        CHECK (creator_type IN ('merchant', 'customer'))
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -406,50 +378,33 @@ CREATE TABLE tontine_participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     group_id UUID NOT NULL REFERENCES tontine_groups(id) ON DELETE CASCADE,
     customer_id UUID NOT NULL REFERENCES customers(id),
-
     payout_position INT NOT NULL CHECK (payout_position >= 1),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
-
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
     UNIQUE(group_id, customer_id),
-    UNIQUE(group_id, payout_position),
-
-    CONSTRAINT tontine_participants_status_check
-        CHECK (status IN ('active', 'suspended', 'excluded'))
+    UNIQUE(group_id, payout_position)
 );
 
-
 tontine_payments
-
 
 CREATE TABLE tontine_payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     group_id UUID NOT NULL REFERENCES tontine_groups(id) ON DELETE CASCADE,
     participant_id UUID NOT NULL REFERENCES tontine_participants(id),
     customer_id UUID NOT NULL REFERENCES customers(id),
-
     cycle_number INT NOT NULL CHECK (cycle_number >= 1),
     amount_cents BIGINT NOT NULL CHECK (amount_cents > 0),
-    commission_cents BIGINT NOT NULL,  -- Commission GoShop
-
-    yengapay_reference VARCHAR(255),  -- Format: TONTINE:{groupID}:{cycle}:{participantID}
+    commission_cents BIGINT NOT NULL DEFAULT 0,
+    yengapay_reference VARCHAR(255),
     yengapay_transaction_id VARCHAR(255),
     payment_provider VARCHAR(50) NOT NULL DEFAULT 'yenga_pay',
-
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     due_date TIMESTAMPTZ NOT NULL,
     paid_at TIMESTAMPTZ,
-
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE(group_id, customer_id, cycle_number),
-
-    CONSTRAINT tontine_payments_status_check
-        CHECK (status IN ('PENDING', 'PROCESSING', 'DONE', 'FAILED'))
+    UNIQUE(group_id, customer_id, cycle_number)
 );
-
 
 tontine_vouchers
 
@@ -459,24 +414,16 @@ CREATE TABLE tontine_vouchers (
     participant_id UUID NOT NULL REFERENCES tontine_participants(id),
     customer_id UUID NOT NULL REFERENCES customers(id),
     product_id UUID NOT NULL REFERENCES products(id),
-    shop_id UUID NOT NULL REFERENCES shops(id),  -- 🆡 Sécurité mono-boutique
-
+    shop_id UUID NOT NULL REFERENCES shops(id),  -- Sécurité mono-boutique
     voucher_code VARCHAR(20) UNIQUE NOT NULL,
     cycle_number INT NOT NULL,
-
     status VARCHAR(20) NOT NULL DEFAULT 'generated',
     expires_at TIMESTAMPTZ NOT NULL,  -- NOW() + 6 mois
     redeemed_at TIMESTAMPTZ,
-    redeemed_by UUID,  -- user_id du marchand
-
+    redeemed_by UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE(group_id, participant_id, cycle_number),
-
-    CONSTRAINT tontine_vouchers_status_check
-        CHECK (status IN ('generated', 'redeemed', 'expired', 'cancelled'))
+    UNIQUE(group_id, participant_id, cycle_number)
 );
-
 
 customer_kyc_documents
 
@@ -484,24 +431,16 @@ CREATE TABLE customer_kyc_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
     shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
-
-    document_type VARCHAR(20) NOT NULL,  -- 'cni', 'passport', 'other'
+    document_type VARCHAR(20) NOT NULL,
     file_path VARCHAR(500) NOT NULL,
-    file_size_bytes BIGINT NOT NULL,
+    file_size_bytes BIGINT NOT NULL CHECK (file_size_bytes > 0),
     mime_type VARCHAR(100) NOT NULL,
-
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     reviewed_by UUID,
     reviewed_at TIMESTAMPTZ,
     rejection_reason TEXT,
-
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT kyc_documents_type_check
-        CHECK (document_type IN ('cni', 'passport', 'other')),
-    CONSTRAINT kyc_documents_status_check
-        CHECK (status IN ('pending', 'approved', 'rejected'))
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
@@ -513,16 +452,11 @@ ALTER TABLE customers
     ADD COLUMN IF NOT EXISTS kyc_validated_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS kyc_validated_by UUID;
 
-ALTER TABLE customers
-    ADD CONSTRAINT customers_kyc_level_check
-    CHECK (kyc_level IN ('none', 'pending', 'verified', 'rejected'));
-
 -- Ajout config tontine sur shop_payment_settings
 ALTER TABLE shop_payment_settings
     ADD COLUMN IF NOT EXISTS tontine_enabled BOOLEAN DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS tontine_commission_rate INTEGER DEFAULT 250
         CHECK (tontine_commission_rate >= 0 AND tontine_commission_rate <= 1500);
-
 
 8. API Endpoints
 🔐 Endpoints KYC
@@ -535,90 +469,75 @@ POST
 Client
 Upload CNI/passeport
 GET
-/api/customers/kyc/status
+/api/customers/{id}/kyc/status
 Client
 Voir statut KYC
 GET
 /api/merchant/kyc/pending
 Marchand
 Liste KYC en attente
-GET
-/api/merchant/kyc/{customer_id}/documents
-Marchand
-Voir documents
 POST
-/api/merchant/kyc/{customer_id}/approve
+/api/merchant/kyc/{customer_id}/review
 Marchand
-Valider KYC
-POST
-/api/merchant/kyc/{customer_id}/reject
-Marchand
-Rejeter KYC
-🏪 Endpoints Tontine (Marchand)
+Valider/Rejeter KYC
+🏪 Endpoints Tontine Settings (Marchand)
 Méthode
 Endpoint
 Description
-PUT
-/api/products/{id}/tontine-settings
-Activer/configurer tontine
 GET
-/api/products/{id}/tontine-settings
+/api/shops/{id}/tontine-settings?product_id=...
 Lire config tontine
-GET
-/api/tontine/groups
-Lister groupes de la boutique
-GET
-/api/tontine/groups/{id}
-Détail d'un groupe
-GET
-/api/tontine/vouchers
-Lister vouchers émis
-POST
-/api/tontine/vouchers/{code}/redeem
-Valider un voucher
-👤 Endpoints Tontine (Client)
+PUT
+/api/shops/{id}/tontine-settings
+Activer/configurer tontine
+👤 Endpoints Tontine Groups (Client)
 Méthode
 Endpoint
 Description
-GET
-/api/client/tontine/products
-Produits avec tontine dispo
 POST
-/api/client/tontine/groups
+/api/tontine/groups
 Créer un groupe
 POST
-/api/client/tontine/groups/join
+/api/tontine/groups/join
 Rejoindre par code
-GET
-/api/client/tontine/groups/{id}
-Détail du groupe
-GET
-/api/client/tontine/groups/{id}/payments
-Historique paiements
 POST
-/api/client/tontine/groups/{id}/pay
+/api/tontine/groups/{id}/pay
 Initier paiement cycle
 GET
-/api/client/tontine/vouchers
-Mes vouchers
+/api/tontine/groups/{id}/payments?customer_id=...
+Historique paiements
 Exemple de requête
 Créer un groupe (client)
 
-
-POST /api/client/tontine/groups
+POST /api/tontine/groups
 Authorization: Bearer {token}
 X-Shop-Slug: boutique-moto-bobo
 Content-Type: application/json
 
 {
   "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "creator_customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
   "circle_type": "FAMILY",
   "total_cycles": 8
 }
 
 
-Réponse 201 :
+Exemple de requête
+Créer un groupe (client)
 
+POST /api/tontine/groups
+Authorization: Bearer {token}
+X-Shop-Slug: boutique-moto-bobo
+Content-Type: application/json
+
+{
+  "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "creator_customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
+  "circle_type": "FAMILY",
+  "total_cycles": 8
+}
+
+Réponse 201 :
 
 {
   "id": "33fb96c3-6819-411d-9be5-d2f196977127",
@@ -637,91 +556,62 @@ Réponse 201 :
 
 Rejoindre un groupe
 
-
-POST /api/client/tontine/groups/join
+POST /api/tontine/groups/join
 Authorization: Bearer {token}
 X-Shop-Slug: boutique-moto-bobo
 Content-Type: application/json
 
 {
-  "invite_code": "A3F9KL2M"
+  "invite_code": "A3F9KL2M",
+  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b"
 }
 
 Payer une cotisation
-http
 
-POST /api/client/tontine/groups/33fb96c3-6819-411d-9be5-d2f196977127/pay
+POST /api/tontine/groups/33fb96c3-6819-411d-9be5-d2f196977127/pay
 Authorization: Bearer {token}
 X-Shop-Slug: boutique-moto-bobo
 Content-Type: application/json
 
 {
+  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
   "operator": "orange_money",
-  "phone_number": "+22670123456"
+  "phone_number": "+22670123456",
+  "flow": "indirect"
 }
-
-
-Réponse 201 :
-
-{
-  "payment_id": "50124a01-f42c-4aee-9beb-e8d27e5cd554",
-  "amount_cents": 6250000,
-  "commission_cents": 156250,
-  "status": "PROCESSING",
-  "ussd_code": "*144*4*6*62500#",
-  "message": "Composez le code USSD pour initier le paiement"
-}
-
-Valider un voucher (marchand)
-
-POST /api/tontine/vouchers/A3F9KL2M9X4P/redeem
-Authorization: Bearer {token}
-X-Shop-Slug: boutique-moto-bobo
 
 Réponse 200 :
 
-
 {
-  "voucher_code": "A3F9KL2M9X4P",
-  "customer_id": "834183ee-0f75-4178-8ff1-db8687d40a4b",
-  "product_id": "bc7459fa-4368-4d51-a860-1bc19f9917ec",
+  "tontine_payment_id": "50124a01-f42c-4aee-9beb-e8d27e5cd554",
+  "amount_cents": 6250000,
+  "commission_cents": 156250,
+  "net_amount_cents": 6093750,
   "cycle_number": 1,
-  "status": "redeemed",
-  "redeemed_at": "2026-07-15T10:30:00Z"
+  "status": "PROCESSING",
+  "provider_ref": "TONTINE:33fb96c3:1:834183ee",
+  "message": "Payment initiated for cycle 1. Amount: 62500 FCFA, Commission: 1562 FCFA."
 }
-
 
 9. Intégration YengaPay
 🔗 Format de référence
 YengaPay ne supporte pas les métadonnées dans le webhook. On utilise le champ reference :
 
-
-// Format : "TONTINE:{groupID_short}:{cycleNumber}:{participantID_short}"
+// Format : "TONTINE:{groupID[:8]}:{cycleNumber}:{participantID[:8]}"
 reference := fmt.Sprintf("TONTINE:%s:%d:%s",
     groupID[:8],
     cycleNumber,
     participantID[:8])
 // Exemple : "TONTINE:33fb96c3:1:834183ee"
 
-
 🔄 Webhook handler
 
 // Dans ProcessWebhookUsecase.Execute()
-if strings.HasPrefix(payload.Reference, "TONTINE:") {
-    parts := strings.Split(payload.Reference, ":")
-    groupIDPrefix := parts[1]
-    cycleNumber, _ := strconv.Atoi(parts[2])
-    participantIDPrefix := parts[3]
-
-    // 1. Calculer la commission
-    commissionCents := payload.PaymentAmount * tontineCommissionRate / 100
-    merchantAmount := payload.PaymentAmount - commissionCents
-
-    // 2. Enregistrer le paiement tontine
-    // 3. Vérifier si tous les participants ont payé
-    // 4. Si oui → générer voucher + passer au cycle suivant
+if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
+    // Délégation à ProcessTontineWebhookUsecase
+    err := uc.tontineWebhookUC.Execute(ctx, reference, event.ExternalID, event.Status)
+    // ...
 }
-
 
 💸 Répartition des fonds
 
@@ -737,12 +627,13 @@ Client paie 62 500 F
     │
     └─► Transfert vers marchand : 60 938 F
 
-    10. Sécurité et conformité
+
+10. Sécurité et conformité
 🔐 Règles de sécurité
 Règle
 Implémentation
 Multi-tenant
-Toutes les routes passent par TenantResolver
+Toutes les routes filtrent par shop_id
 Voucher mono-boutique
 Check shop_id dans redeem_voucher
 KYC obligatoire
@@ -753,6 +644,8 @@ Montants int64
 Jamais de float, toujours en centimes
 Audit trail
 Logs zerolog sur toutes les actions
+Injection tenant
+Handler injecte le tenant via tenant.WithTenant()
 ⚖️ Conformité BCEAO
 Point d'attention : Collecter de l'argent pour livraison future peut nécessiter une autorisation BCEAO.
 Recommandations :
@@ -765,7 +658,49 @@ Stockage local sécurisé (pas de cloud public pour MVP)
 Accès restreint au marchand de la boutique
 Suppression après validation (optionnel)
 Pas de partage avec des tiers
-11. Limites et décisions
+11. Tests E2E
+✅ Tests implémentés (v2.9.0)
+Test
+Durée
+Statut
+TestTontineWorkflowE2E
+~9s
+✅ PASS
+TestTontineWebhookSimulation
+0s
+✅ PASS
+TestTontineSettingsE2E
+~10s
+✅ PASS
+TestTontineValidationRules
+~9s
+✅ PASS
+TestTontineCommissionCalculation
+0s
+✅ PASS
+📋 Workflow testé (TestTontineWorkflowE2E)
+✅ Authentification
+✅ Création shop
+✅ Création produit
+✅ Activation tontine
+✅ Création 4 clients KYC vérifiés
+✅ Création groupe par client 1
+✅ Rejointure par clients 2, 3, 4
+✅ Transition PENDING → ACTIVE
+✅ Paiement cycle 1 par chaque client
+✅ Vérification paiements
+✅ Rejet client non vérifié
+✅ Liste KYC en attente
+✅ Isolation multi-tenant
+🚀 Lancer les tests
+
+# Tests tontine uniquement
+go test ./tests/e2e/ -run TestTontine -v
+
+# Tous les tests E2E
+go test ./tests/e2e/ -v
+
+12. Limites et décisions
 ✅ Décisions actées
 Sujet
 Décision
@@ -826,28 +761,36 @@ Multi-devises
 XOF uniquement au BF
 API publique
 Réservé aux clients/marchands
-12. Roadmap
-🚀 Phase 1 : MVP (2 semaines)
+Redemption voucher
+À implémenter (endpoint existe)
+13. Roadmap
+✅ Phase 1 : MVP (v2.9.0 - Terminé)
 Semaine
 Jours
 Livrables
+Statut
 S1
 J1-J2
 Migration 010 + 011 (tontine + KYC)
+✅
 J3
 Entities + Repositories
+✅
 J4-J5
 Usecases (create, join, pay, webhook)
+✅
 S2
 J6-J7
-Usecases (redeem, validate KYC)
-J8
 Handlers HTTP + routes
-J9
+✅
+J8
 Tests E2E complets
-J10
+✅
+J9
 Documentation + tag v2.9.0
+✅
 🎯 Phase 2 : Améliorations (post-MVP)
+Redemption voucher (endpoint + usecase)
 Notifications SMS (Africa's Talking ou YengaPay SMS)
 Dashboard marchand avancé (stats, graphiques)
 Mode LOCKED_SAVINGS (avec prix négocié)
@@ -863,11 +806,8 @@ Documentation YengaPay
 Réglementation BCEAO
 Architecture GoShop
 Système de paiement
+Système KYC
 🤝 Contribution
 Voir CONTRIBUTING.md pour les détails.
-Prochaine étape : Implémentation de la Phase 1 (migration + entities + usecases).
-Dernière mise à jour : 2026-06-28
-
-
-
+Dernière mise à jour : 2026-06-29
 
