@@ -28,12 +28,12 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index pour recherche rapide
-CREATE INDEX idx_withdrawals_shop_id ON withdrawals(shop_id);
-CREATE INDEX idx_withdrawals_status ON withdrawals(status);
-CREATE INDEX idx_withdrawals_provider_ref ON withdrawals(provider_ref);
-CREATE INDEX idx_withdrawals_created_at ON withdrawals(created_at DESC);
+-- 🆕 Tous les INDEX avec IF NOT EXISTS
+CREATE INDEX IF NOT EXISTS idx_withdrawals_shop_id ON withdrawals(shop_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_provider_ref ON withdrawals(provider_ref);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_created_at ON withdrawals(created_at);
 
-COMMENT ON TABLE withdrawals IS 'Retraits (cash-out) vers Mobile Money via Yenga Pay';
-COMMENT ON COLUMN withdrawals.provider_ref IS 'ID de retrait retourné par Yenga Pay (ex: YPCO20250924.1546.40403.2921)';
-COMMENT ON COLUMN withdrawals.operator_transaction_id IS 'ID de transaction côté opérateur mobile';
+COMMENT ON TABLE withdrawals IS 'Retraits (cash-out) vers Mobile Money';
+COMMENT ON COLUMN withdrawals.provider_ref IS 'Référence côté provider (ex: Yenga Pay cash-out ID)';
+COMMENT ON COLUMN withdrawals.status IS 'Statut du retrait : pending, processing, success, failed, cancelled';

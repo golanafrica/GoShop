@@ -22,10 +22,11 @@ var (
 
 // ProcessWebhookUsecase traite les webhooks reçus des providers
 type ProcessWebhookUsecase struct {
-	paymentRepo repository.PaymentRepository
-	registry    *payment.Registry
-	db          repository.DBExecutor
-	shopRepo    repository.ShopRepository // 🆕 Ajouté pour injecter le tenant
+	paymentRepo      repository.PaymentRepository
+	registry         *payment.Registry
+	db               repository.DBExecutor
+	shopRepo         repository.ShopRepository
+	tontineWebhookUC *ProcessTontineWebhookUsecase // 🆕 v2.9.0
 }
 
 // NewProcessWebhookUsecase crée une nouvelle instance
@@ -33,13 +34,15 @@ func NewProcessWebhookUsecase(
 	paymentRepo repository.PaymentRepository,
 	registry *payment.Registry,
 	db repository.DBExecutor,
-	shopRepo repository.ShopRepository, // 🆕 Ajouté
+	shopRepo repository.ShopRepository,
+	tontineWebhookUC *ProcessTontineWebhookUsecase, // 🆕 v2.9.0
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
-		paymentRepo: paymentRepo,
-		registry:    registry,
-		db:          db,
-		shopRepo:    shopRepo, // 🆕 Ajouté
+		paymentRepo:      paymentRepo,
+		registry:         registry,
+		db:               db,
+		shopRepo:         shopRepo,
+		tontineWebhookUC: tontineWebhookUC, // 🆕 v2.9.0
 	}
 }
 
@@ -69,7 +72,32 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	// 3. Enregistrer le webhook (signature valide)
 	uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
 
-	// 4. Trouver le paiement associé
+	// 🆕 3b. v2.9.0 : Détecter si c'est un webhook tontine
+	// La référence tontine est dans event.Metadata["reference"] (format: TONTINE:{groupID}:{cycle}:{participantID})
+	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
+		logger.Info().
+			Str("reference", reference).
+			Str("transaction_id", event.ExternalID).
+			Str("status", string(event.Status)).
+			Msg("🎯 Tontine webhook detected, delegating to ProcessTontineWebhookUsecase")
+
+		if uc.tontineWebhookUC == nil {
+			return fmt.Errorf("%w: tontine webhook handler not configured", ErrWebhookProcessing)
+		}
+
+		err := uc.tontineWebhookUC.Execute(ctx, reference, event.ExternalID, event.Status)
+		if err != nil {
+			logger.Error().Err(err).Msg("Tontine webhook processing failed")
+			return fmt.Errorf("%w: tontine webhook: %v", ErrWebhookProcessing, err)
+		}
+
+		logger.Info().
+			Str("reference", reference).
+			Msg("✅ Tontine webhook processed successfully")
+		return nil
+	}
+
+	// 4. Trouver le paiement associé (flux standard)
 	if event.ProviderRef == "" {
 		return fmt.Errorf("%w: missing provider_ref", ErrWebhookValidation)
 	}
@@ -83,9 +111,7 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
 	}
 
-	// 🆕 4b. Injecter le shop du paiement dans le contexte
-	// Les webhooks n'ont pas de contexte multi-tenant (endpoint public)
-	// On doit injecter le shop du paiement pour que les repositories fonctionnent
+	// 4b. Injecter le shop du paiement dans le contexte
 	shop, err := uc.shopRepo.FindByID(ctx, paymentEntity.ShopID)
 	if err != nil {
 		return fmt.Errorf("%w: shop not found for payment: %v", ErrWebhookProcessing, err)

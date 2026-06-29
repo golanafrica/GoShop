@@ -14,9 +14,11 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	customerusecase "Goshop/application/usecase/customer_usecase"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
+	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
 
 	paymentinfra "Goshop/infrastructure/payment"
@@ -28,6 +30,7 @@ import (
 	"Goshop/infrastructure/postgres/order"
 	"Goshop/infrastructure/postgres/product"
 	"Goshop/infrastructure/postgres/shop"
+	"Goshop/infrastructure/postgres/tontine"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
@@ -44,6 +47,7 @@ import (
 	productHandler "Goshop/interfaces/handler/product"
 	refreshhandler "Goshop/interfaces/handler/refresh_handler"
 	shophandler "Goshop/interfaces/handler/shop_handler"
+	tontinehandler "Goshop/interfaces/handler/tontine_handler"
 	userhandler "Goshop/interfaces/handler/user_handler"
 	withdrawalhandler "Goshop/interfaces/handler/withdrawal_handler"
 	middleware "Goshop/interfaces/middl/user_middleware"
@@ -98,7 +102,7 @@ func (a *App) setupRouter() {
 		Logger: a.Logger.WithComponent("health_handler"),
 	}
 
-	// -- Repositories
+	// -- Repositories (existants)
 	txmanagerRepo := txmanager.NewTxManagerPostgresInfra(a.DB)
 	postgreProductRepo := product.NewProductRepositoryInfrastructure(a.DB)
 	postgresCustomerRepo := customer.NewCustomerRepoInfrastructurePostgres(a.DB)
@@ -111,6 +115,16 @@ func (a *App) setupRouter() {
 	paymentRepo := paymentpostgres.NewPaymentRepositoryPostgres(a.DB)
 	withdrawalRepo := withdrawalpostgres.NewWithdrawalRepositoryPostgres(a.DB)
 	paymentRegistry := paymentinfra.NewRegistry()
+
+	// 🆕 v2.9.0 : Repositories Tontine
+	tontineSettingsRepo := tontine.NewProductTontineSettingsRepositoryInfrastructure(a.DB)
+	tontineGroupRepo := tontine.NewTontineGroupRepositoryInfrastructure(a.DB)
+	tontineParticipantRepo := tontine.NewTontineParticipantRepositoryInfrastructure(a.DB)
+	tontinePaymentRepo := tontine.NewTontinePaymentRepositoryInfrastructure(a.DB)
+	tontineVoucherRepo := tontine.NewTontineVoucherRepositoryInfrastructure(a.DB)
+
+	// 🆕 v2.9.0 : Repository KYC
+	kycDocRepo := customer.NewCustomerKYCRepositoryInfrastructure(a.DB)
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -149,13 +163,10 @@ func (a *App) setupRouter() {
 	}
 
 	// ============ 🆕 NOTIFICATION SERVICE ============
-	// No-op en développement (log seulement)
-	// Pour brancher un vrai provider SMS (Africa's Talking, Twilio), il suffit
-	// de remplacer cette implémentation, sans toucher aux usecases.
 	notifService := service.NotificationService(notification.NewNoopNotificationService(a.Logger.Logger))
 	a.Logger.Info().Msg("✅ Notification service initialized (no-op mode)")
 
-	// -- Usecases
+	// -- Usecases (existants)
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
 		utils.ValidateToken,
@@ -174,6 +185,9 @@ func (a *App) setupRouter() {
 	// Configure Payment Usecase (pour config par boutique)
 	configurePaymentUC := shopusecase.NewConfigurePaymentUsecase(shopRepo, shopRepo, shopRepo)
 
+	// 🆕 v2.9.0 : Configure Tontine Usecase
+	configureTontineUC := shopusecase.NewConfigureTontineUsecase(tontineSettingsRepo, postgreProductRepo)
+
 	// Payment Usecases
 	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecaseWithShopSettings(
 		paymentRepo,
@@ -191,13 +205,25 @@ func (a *App) setupRouter() {
 		paymentRepo,
 		paymentRegistry,
 	)
+	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
+
+	// 🆕 v2.9.0 : Process Tontine Webhook Usecase (doit être créé AVANT processWebhookUC)
+	processTontineWebhookUC := paymentusecase.NewProcessTontineWebhookUsecase(
+		tontinePaymentRepo,
+		tontineGroupRepo,
+		tontineParticipantRepo,
+		tontineVoucherRepo,
+		shopRepo,
+	)
+
+	// Process Webhook Usecase (modifié pour inclure tontine)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
+		processTontineWebhookUC, // 🆕 v2.9.0
 	)
-	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
 
 	// Withdrawal Usecases
 	createWithdrawalUC := withdrawalusecase.NewCreateWithdrawalUsecase(
@@ -244,7 +270,63 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel)")
 
-	// -- Handlers
+	// ============ 🆕 v2.9.0 : TONTINE USECASES ============
+	createTontineGroupUC := tontineusecase.NewCreateTontineGroupUsecase(
+		tontineGroupRepo,
+		tontineParticipantRepo,
+		tontineSettingsRepo,
+		postgreProductRepo,
+		postgresCustomerRepo,
+	)
+
+	joinTontineGroupUC := tontineusecase.NewJoinTontineGroupUsecase(
+		tontineGroupRepo,
+		tontineParticipantRepo,
+		postgresCustomerRepo,
+	)
+
+	payCycleUC := tontineusecase.NewPayCycleUsecase(
+		tontineGroupRepo,
+		tontineParticipantRepo,
+		tontinePaymentRepo,
+		shopRepo,
+		txmanagerRepo,
+	)
+
+	listCustomerPaymentsUC := tontineusecase.NewListCustomerPaymentsUsecase(
+		tontinePaymentRepo,
+		tontineGroupRepo,
+	)
+
+	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments)")
+
+	// ============ 🆕 v2.9.0 : KYC USECASES ============
+	uploadKYCUC := customerusecase.NewUploadKYCDocumentUsecase(
+		kycDocRepo,
+		postgresCustomerRepo,
+		txmanagerRepo,
+	)
+
+	getKYCStatusUC := customerusecase.NewGetKYCStatusUsecase(
+		postgresCustomerRepo,
+		kycDocRepo,
+	)
+
+	reviewKYCUC := customerusecase.NewReviewKYCUsecase(
+		postgresCustomerRepo,
+		kycDocRepo,
+		notifService,
+		txmanagerRepo,
+	)
+
+	listPendingKYCUC := customerusecase.NewListPendingKYCUsecase(
+		kycDocRepo,
+		postgresCustomerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ KYC usecases initialized (upload, get_status, review, list_pending)")
+
+	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
 	productHandler := productHandler.NewProductHandler(
@@ -266,7 +348,7 @@ func (a *App) setupRouter() {
 		postgresOrderItem,
 	)
 
-	// 🆕 Cash Order Handler
+	// Cash Order Handler
 	cashOrderHandler := ordershandler.NewCashOrderHandler(
 		acceptOrderUC,
 		rejectOrderUC,
@@ -289,6 +371,9 @@ func (a *App) setupRouter() {
 	// Payment Settings Handler
 	paymentSettingsHandler := shophandler.NewPaymentSettingsHandler(configurePaymentUC)
 
+	// 🆕 v2.9.0 : Tontine Settings Handler (handler dédié)
+	tontineSettingsHandler := shophandler.NewTontineSettingsHandler(configureTontineUC, shopRepo)
+
 	// Payment Handlers
 	paymentHandler := paymenthandler.NewPaymentHandler(
 		initiatePaymentUC,
@@ -304,6 +389,24 @@ func (a *App) setupRouter() {
 		createWithdrawalUC,
 		listWithdrawalsUC,
 	)
+
+	// 🆕 v2.9.0 : Tontine Handler
+	tontineHandler := tontinehandler.NewTontineHandler(
+		createTontineGroupUC,
+		joinTontineGroupUC,
+		payCycleUC,
+		listCustomerPaymentsUC,
+	)
+
+	// 🆕 v2.9.0 : KYC Handler
+	kycHandler := customerhandler.NewKYCHandler(
+		uploadKYCUC,
+		getKYCStatusUC,
+		reviewKYCUC,
+		listPendingKYCUC,
+	)
+
+	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -342,6 +445,10 @@ func (a *App) setupRouter() {
 			// Routes de configuration des paiements par boutique
 			r.Get("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.GetPaymentSettings))
 			r.Put("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.UpdatePaymentSettings))
+
+			// 🆕 v2.9.0 : Routes de configuration tontine par boutique
+			r.Get("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.GetTontineSettings))
+			r.Put("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.UpdateTontineSettings))
 		})
 
 		// Routes multi-tenant (AVEC TenantResolver)
@@ -357,26 +464,25 @@ func (a *App) setupRouter() {
 				r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
 			})
 
-			// Customers
+			// Customers (existants + 🆕 KYC)
 			r.Route("/customers", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
 				r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
 				r.Get("/{id}", middl.ErrorHandler(customerHandler.GetCustomerByIdHandler))
 				r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
 				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
+
+				// 🆕 v2.9.0 : KYC routes (côté client)
+				r.Post("/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
+				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
 			})
 
-			// Orders (existant + 🆕 cash workflow)
+			// Orders (existant + cash workflow)
 			r.Route("/orders", func(r chi.Router) {
-				// Routes existantes
 				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
 				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
 				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
-
-				// Payment initiation (mobile money)
 				r.Post("/{id}/pay", middl.ErrorHandler(paymentHandler.InitiatePayment))
-
-				// 🆕 Cash on Delivery - Workflow complet
 				r.Post("/{id}/accept", middl.ErrorHandler(cashOrderHandler.AcceptOrder))
 				r.Post("/{id}/reject", middl.ErrorHandler(cashOrderHandler.RejectOrder))
 				r.Post("/{id}/out-for-delivery", middl.ErrorHandler(cashOrderHandler.OutForDelivery))
@@ -398,6 +504,20 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
 				r.Get("/{id}", middl.ErrorHandler(withdrawalHandler.GetWithdrawal))
 			})
+
+			// 🆕 v2.9.0 : Tontine routes (côté client)
+			r.Route("/tontine", func(r chi.Router) {
+				r.Post("/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
+				r.Post("/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
+				r.Post("/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
+				r.Get("/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
+			})
+
+			// 🆕 v2.9.0 : Merchant KYC routes (côté marchand)
+			r.Route("/merchant/kyc", func(r chi.Router) {
+				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
+				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
+			})
 		})
 	})
 
@@ -406,7 +526,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (multi-tenant + payment + shop settings + withdrawals + cash workflow)")
+		Msg("✅ Router configuré avec succès (v2.9.0: multi-tenant + payment + shop settings + withdrawals + cash + tontine + kyc)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

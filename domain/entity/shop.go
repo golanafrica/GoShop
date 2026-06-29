@@ -107,7 +107,6 @@ type YengaPayShopSettings struct {
 }
 
 // ShopPaymentSettings représente tous les settings de paiement d'une boutique
-// 🆕 Inclut maintenant la configuration cash à la livraison
 type ShopPaymentSettings struct {
 	ShopID      uuid.UUID            `json:"shop_id"`
 	OrangeMoney bool                 `json:"orange_money_enabled"`
@@ -115,9 +114,13 @@ type ShopPaymentSettings struct {
 	Wave        bool                 `json:"wave_enabled"`
 	YengaPay    YengaPayShopSettings `json:"yenga_pay"`
 
-	// 🆕 Cash à la livraison
+	// Cash à la livraison
 	CashOnDeliveryEnabled bool `json:"cash_on_delivery_enabled"`
 	CashCommissionRate    int  `json:"cash_commission_rate"` // basis points (250 = 2.50%)
+
+	// 🆕 Tontine (v2.9.0)
+	TontineEnabled        bool `json:"tontine_enabled"`
+	TontineCommissionRate int  `json:"tontine_commission_rate"` // basis points (250 = 2.50%, max 1500 = 15%)
 }
 
 // IsYengaPayEnabled vérifie si Yenga Pay est activé pour cette boutique
@@ -147,4 +150,19 @@ func (s *ShopPaymentSettings) GetCashCommissionRate() int {
 		return 250 // Défaut : 2.50%
 	}
 	return s.CashCommissionRate
+}
+
+// IsTontineEnabled vérifie si la tontine est activée pour cette boutique
+func (s *ShopPaymentSettings) IsTontineEnabled() bool {
+	return s.TontineEnabled
+}
+
+// GetTontineCommissionRate retourne le taux de commission tontine en basis points
+// Retourne 250 (2.50%) par défaut si la valeur est 0 ou invalide
+// Max autorisé : 1500 (15%)
+func (s *ShopPaymentSettings) GetTontineCommissionRate() int {
+	if s.TontineCommissionRate <= 0 || s.TontineCommissionRate > 1500 {
+		return 250 // Défaut : 2.50%
+	}
+	return s.TontineCommissionRate
 }

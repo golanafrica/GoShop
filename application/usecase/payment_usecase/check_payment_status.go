@@ -69,15 +69,15 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 						_ = uc.paymentRepo.Update(ctx, paymentEntity)
 
 						// Mettre à jour le statut de la commande vers PAID
-						if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, "PAID"); err != nil {
+						if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, "paid"); err != nil {
 							logger.Error().Err(err).
 								Str("order_id", paymentEntity.OrderID.String()).
-								Msg("Failed to update order status to PAID")
+								Msg("Failed to update order status to paid")
 						} else {
 							logger.Info().
 								Str("order_id", paymentEntity.OrderID.String()).
 								Str("payment_id", paymentID).
-								Msg("Order status updated to PAID")
+								Msg("Order status updated to paid")
 						}
 					}
 				case entity.PaymentStatusFailed:

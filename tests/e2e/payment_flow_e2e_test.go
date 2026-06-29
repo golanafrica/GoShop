@@ -136,7 +136,7 @@ func TestPaymentFlowE2E(t *testing.T) {
 	testutils.ParseJSONBody(t, resp, &order)
 	resp.Body.Close()
 
-	if order["status"] != "PENDING" {
+	if strings.ToUpper(order["status"].(string)) != "PENDING" {
 		t.Fatalf("❌ Commande devrait être PENDING, obtenu: %v", order["status"])
 	}
 	t.Log("✅ Commande en statut PENDING")
@@ -186,7 +186,7 @@ func TestPaymentFlowE2E(t *testing.T) {
 // ============================================================================
 
 func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string, provider string, amountCents int64, expectedDelaySeconds int) {
-	t.Logf("  🔸 Initiation paiement %s pour commande %s", provider, orderID)
+	t.Logf("  🔸 Initiation paiement %s pour commande %s (montant: %d FCFA)", provider, orderID, amountCents/100)
 
 	// Initier le paiement
 	payReq := map[string]interface{}{
@@ -251,8 +251,8 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	testutils.ParseJSONBody(t, resp, &updatedOrder)
 	resp.Body.Close()
 
-	if updatedOrder["status"] != "PAID" {
-		t.Fatalf("❌ Commande devrait être PAID, obtenu: %v", updatedOrder["status"])
+	if updatedOrder["status"] != "paid" {
+		t.Fatalf("❌ Commande devrait être 'paid', obtenu: %v", updatedOrder["status"])
 	}
 	t.Log("  ✅ Commande passée à PAID automatiquement")
 
@@ -275,7 +275,7 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 
 	// Vérifier que le double remboursement est rejeté
 	t.Log("  🔸 Vérification rejet double remboursement")
-	resp = client.DoRequest("POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
+	resp, _ = client.DoRequest("POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("❌ Double remboursement devrait être rejeté")
 	}
@@ -335,6 +335,9 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	testutils.ParseJSONBody(t, resp, &paymentInit)
 	resp.Body.Close()
 
+	// 🆕 CORRECTION : Utiliser client.BaseURL pour les URLs webhook
+	webhookURL := client.BaseURL + "/webhooks/orange_money"
+
 	// TEST 1 : Webhook avec signature valide
 	webhookPayload := map[string]interface{}{
 		"event":        "payment.success",
@@ -346,7 +349,7 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	payloadBytes, _ := json.Marshal(webhookPayload)
 	validSignature := generateHMACSignature(payloadBytes, orangeMoneyWebhookSecret)
 
-	req, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req, _ := http.NewRequest("POST", webhookURL, strings.NewReader(string(payloadBytes)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Signature", validSignature)
 
@@ -362,7 +365,7 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	t.Log("  ✅ Webhook avec signature valide accepté (200)")
 
 	// TEST 2 : Webhook avec signature invalide
-	req2, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req2, _ := http.NewRequest("POST", webhookURL, strings.NewReader(string(payloadBytes)))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-Signature", "invalid_signature_12345")
 
@@ -378,7 +381,7 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	t.Log("  ✅ Webhook avec signature invalide rejeté (400)")
 
 	// TEST 3 : Webhook sans signature
-	req3, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(string(payloadBytes)))
+	req3, _ := http.NewRequest("POST", webhookURL, strings.NewReader(string(payloadBytes)))
 	req3.Header.Set("Content-Type", "application/json")
 
 	resp4, err := client.DoRequestRaw(req3)
@@ -397,7 +400,7 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	originalSignature := generateHMACSignature([]byte(originalPayload), orangeMoneyWebhookSecret)
 	tamperedPayload := `{"event":"payment.success","provider_ref":"OM-123","amount":999999,"status":"success"}`
 
-	req4, _ := http.NewRequest("POST", "/webhooks/orange_money", strings.NewReader(tamperedPayload))
+	req4, _ := http.NewRequest("POST", webhookURL, strings.NewReader(tamperedPayload))
 	req4.Header.Set("Content-Type", "application/json")
 	req4.Header.Set("X-Signature", originalSignature)
 
@@ -432,7 +435,7 @@ func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, origin
 	client.SetDefaultHeader("X-Shop-Slug", shop2Slug)
 
 	// Tenter de lire la commande du 1er shop
-	resp = client.DoRequest("GET", "/api/orders/"+orderID, nil)
+	resp, _ = client.DoRequest("GET", "/api/orders/"+orderID, nil)
 	resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
@@ -445,7 +448,7 @@ func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, origin
 	t.Log("  ✅ Isolation multi-tenant respectée (404 sur autre shop)")
 
 	// Tenter de lister les paiements du 1er shop
-	resp = client.DoRequest("GET", "/api/payments", nil)
+	resp, _ = client.DoRequest("GET", "/api/payments", nil)
 	var payments []interface{}
 	testutils.ParseJSONBody(t, resp, &payments)
 	resp.Body.Close()

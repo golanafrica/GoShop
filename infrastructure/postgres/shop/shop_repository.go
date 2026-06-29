@@ -242,9 +242,10 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 	return shop, nil
 }
 
-// ============ NOUVELLES MÉTHODES POUR CONFIG PAR BOUTIQUE ============
+// ============ CONFIG PAR BOUTIQUE (v2.9.0: + Cash COD + Tontine) ============
 
 // GetPaymentSettings récupère les settings de paiement d'une boutique
+// 🆕 v2.9.0 : Inclut maintenant cash_on_delivery et tontine
 func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
 	query := `
 		SELECT 
@@ -258,7 +259,11 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 			COALESCE(yenga_pay_project_id, ''),
 			COALESCE(yenga_pay_webhook_secret, ''),
 			COALESCE(yenga_pay_operators, '["orange_money","moov_money","telecel","coris_money","sank_money"]'::jsonb),
-			COALESCE(yenga_pay_env, 'test')
+			COALESCE(yenga_pay_env, 'test'),
+			COALESCE(cash_on_delivery_enabled, false),
+			COALESCE(cash_commission_rate, 250),
+			COALESCE(tontine_enabled, false),
+			COALESCE(tontine_commission_rate, 250)
 		FROM shop_payment_settings
 		WHERE shop_id = $1
 	`
@@ -279,6 +284,11 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 		&yengaWebhookSecret,
 		&yengaOperatorsJSON,
 		&settings.YengaPay.Env,
+		// 🆕 v2.9.0
+		&settings.CashOnDeliveryEnabled,
+		&settings.CashCommissionRate,
+		&settings.TontineEnabled,
+		&settings.TontineCommissionRate,
 	)
 
 	if err == sql.ErrNoRows {
@@ -290,6 +300,10 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 				Operators: []string{"orange_money", "moov_money", "telecel", "coris_money", "sank_money"},
 				Env:       "test",
 			},
+			CashOnDeliveryEnabled: false,
+			CashCommissionRate:    250, // 2.50%
+			TontineEnabled:        false,
+			TontineCommissionRate: 250, // 2.50%
 		}, nil
 	}
 
@@ -334,6 +348,7 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 }
 
 // UpsertPaymentSettings crée ou met à jour les settings de paiement
+// 🆕 v2.9.0 : Inclut maintenant cash_on_delivery et tontine
 func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error {
 	// Chiffrer les clés API
 	yengaAPIKey, err := crypto.EncryptOrEmpty(settings.YengaPay.APIKey)
@@ -364,8 +379,10 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 			shop_id,
 			orange_money_enabled, moov_money_enabled, wave_enabled,
 			yenga_pay_enabled, yenga_pay_api_key, yenga_pay_organization_id,
-			yenga_pay_project_id, yenga_pay_webhook_secret, yenga_pay_operators, yenga_pay_env
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			yenga_pay_project_id, yenga_pay_webhook_secret, yenga_pay_operators, yenga_pay_env,
+			cash_on_delivery_enabled, cash_commission_rate,
+			tontine_enabled, tontine_commission_rate
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (shop_id) DO UPDATE SET
 			orange_money_enabled = EXCLUDED.orange_money_enabled,
 			moov_money_enabled = EXCLUDED.moov_money_enabled,
@@ -377,6 +394,10 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 			yenga_pay_webhook_secret = EXCLUDED.yenga_pay_webhook_secret,
 			yenga_pay_operators = EXCLUDED.yenga_pay_operators,
 			yenga_pay_env = EXCLUDED.yenga_pay_env,
+			cash_on_delivery_enabled = EXCLUDED.cash_on_delivery_enabled,
+			cash_commission_rate = EXCLUDED.cash_commission_rate,
+			tontine_enabled = EXCLUDED.tontine_enabled,
+			tontine_commission_rate = EXCLUDED.tontine_commission_rate,
 			updated_at = NOW()
 	`
 
@@ -392,6 +413,11 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 		yengaWebhookSecret,
 		operatorsJSON,
 		settings.YengaPay.Env,
+		// 🆕 v2.9.0
+		settings.CashOnDeliveryEnabled,
+		settings.CashCommissionRate,
+		settings.TontineEnabled,
+		settings.TontineCommissionRate,
 	)
 
 	if err != nil {

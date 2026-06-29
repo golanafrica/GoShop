@@ -230,32 +230,54 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithSorting(ctx co
 	return customers, nil
 }
 
-// Create crée un client avec shop_id
+// Create crée un client avec shop_id et KYC par défaut (none)
 func (cr *CustomerRepoInfrastructurePostgres) Create(ctx context.Context, customer *entity.Customer) (*entity.Customer, error) {
 	shopID, err := cr.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query := `INSERT INTO customers(shop_id, first_name, last_name, email, created_at, updated_at) 
-	VALUES ($1, $2, $3, $4, NOW(), NOW())
-	RETURNING id, first_name, last_name, email, created_at, updated_at`
+	// Valeur par défaut pour KYC
+	if customer.KYCLevel == "" {
+		customer.KYCLevel = entity.KYCLevelNone
+	}
+
+	query := `
+		INSERT INTO customers (
+			shop_id, first_name, last_name, email,
+			kyc_level, kyc_validated_at, kyc_validated_by,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		RETURNING id, first_name, last_name, email,
+		          kyc_level, kyc_validated_at, kyc_validated_by,
+		          created_at, updated_at
+	`
 
 	err = cr.queryRowContext(ctx, query,
 		shopID,
 		customer.FirstName,
 		customer.LastName,
 		customer.Email,
+		string(customer.KYCLevel),
+		customer.KYCValidatedAt,
+		customer.KYCValidatedBy,
 	).Scan(
 		&customer.ID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
+		&customer.KYCLevel,
+		&customer.KYCValidatedAt,
+		&customer.KYCValidatedBy,
 		&customer.CreatedAt,
 		&customer.UpdatedAt,
 	)
 
-	return customer, err
+	if err != nil {
+		return nil, fmt.Errorf("failed to create customer: %w", err)
+	}
+
+	return customer, nil
 }
 
 // FindByCustomerID trouve un client par ID dans le shop courant
@@ -265,15 +287,22 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 		return nil, err
 	}
 
-	customer := entity.Customer{}
-	query := `SELECT id, first_name, last_name, email, created_at, updated_at 
-	FROM customers WHERE id=$1 AND shop_id=$2`
+	customer := &entity.Customer{}
+	query := `
+		SELECT id, first_name, last_name, email,
+		       kyc_level, kyc_validated_at, kyc_validated_by,
+		       created_at, updated_at
+		FROM customers WHERE id = $1 AND shop_id = $2
+	`
 
 	err = cr.queryRowContext(ctx, query, id, shopID).Scan(
 		&customer.ID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
+		&customer.KYCLevel,
+		&customer.KYCValidatedAt,
+		&customer.KYCValidatedBy,
 		&customer.CreatedAt,
 		&customer.UpdatedAt,
 	)
@@ -281,8 +310,11 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 	if err == sql.ErrNoRows {
 		return nil, err
 	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan customer: %w", err)
+	}
 
-	return &customer, nil
+	return customer, nil
 }
 
 // FindAllCustomers retourne tous les clients du shop courant
@@ -292,8 +324,12 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 		return nil, err
 	}
 
-	query := `SELECT id, first_name, last_name, email, created_at, updated_at 
-	FROM customers WHERE shop_id = $1`
+	query := `
+		SELECT id, first_name, last_name, email,
+		       kyc_level, kyc_validated_at, kyc_validated_by,
+		       created_at, updated_at
+		FROM customers WHERE shop_id = $1
+	`
 
 	rows, err := cr.queryContext(ctx, query, shopID)
 	if err != nil {
@@ -309,6 +345,9 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 			&customer.FirstName,
 			&customer.LastName,
 			&customer.Email,
+			&customer.KYCLevel,
+			&customer.KYCValidatedAt,
+			&customer.KYCValidatedBy,
 			&customer.CreatedAt,
 			&customer.UpdatedAt,
 		); err != nil {
@@ -320,7 +359,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 	return customers, nil
 }
 
-// UpdateCustomer met à jour un client dans le shop courant
+// UpdateCustomer met à jour un client (y compris les champs KYC) dans le shop courant
 func (cr *CustomerRepoInfrastructurePostgres) UpdateCustomer(ctx context.Context, customer *entity.Customer) (*entity.Customer, error) {
 	shopID, err := cr.getShopID(ctx)
 	if err != nil {
@@ -328,28 +367,49 @@ func (cr *CustomerRepoInfrastructurePostgres) UpdateCustomer(ctx context.Context
 	}
 
 	query := `
-    UPDATE customers
-    SET first_name = $1, last_name = $2, email = $3, updated_at = NOW()
-    WHERE id = $4 AND shop_id = $5
-    RETURNING first_name, last_name, email, created_at, updated_at, id
-    `
+		UPDATE customers SET
+			first_name = $1,
+			last_name = $2,
+			email = $3,
+			kyc_level = $4,
+			kyc_validated_at = $5,
+			kyc_validated_by = $6,
+			updated_at = NOW()
+		WHERE id = $7 AND shop_id = $8
+		RETURNING id, first_name, last_name, email,
+		          kyc_level, kyc_validated_at, kyc_validated_by,
+		          created_at, updated_at
+	`
 
 	err = cr.queryRowContext(ctx, query,
 		customer.FirstName,
 		customer.LastName,
 		customer.Email,
+		string(customer.KYCLevel),
+		customer.KYCValidatedAt,
+		customer.KYCValidatedBy,
 		customer.ID,
 		shopID,
 	).Scan(
+		&customer.ID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
+		&customer.KYCLevel,
+		&customer.KYCValidatedAt,
+		&customer.KYCValidatedBy,
 		&customer.CreatedAt,
 		&customer.UpdatedAt,
-		&customer.ID,
 	)
 
-	return customer, err
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("customer not found")
+		}
+		return nil, fmt.Errorf("failed to update customer: %w", err)
+	}
+
+	return customer, nil
 }
 
 // DeleteCustomer supprime un client du shop courant
@@ -373,30 +433,32 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByEmail(ctx context.Context, e
 		return nil, err
 	}
 
-	log.Printf("🔍 FindByEmail appelé avec email: '%s', shop_id: '%s'", email, shopID)
-
 	customer := &entity.Customer{}
-	query := `SELECT id, first_name, last_name, email, created_at, updated_at 
-	FROM customers WHERE email = $1 AND shop_id = $2`
+	query := `
+		SELECT id, first_name, last_name, email,
+		       kyc_level, kyc_validated_at, kyc_validated_by,
+		       created_at, updated_at
+		FROM customers WHERE email = $1 AND shop_id = $2
+	`
 
 	err = cr.queryRowContext(ctx, query, email, shopID).Scan(
 		&customer.ID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
+		&customer.KYCLevel,
+		&customer.KYCValidatedAt,
+		&customer.KYCValidatedBy,
 		&customer.CreatedAt,
 		&customer.UpdatedAt,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("📭 Aucun customer trouvé avec l'email: %s dans le shop %s", email, shopID)
 			return nil, sql.ErrNoRows
 		}
-		log.Printf("❌ Erreur FindByEmail pour %s: %v", email, err)
 		return nil, fmt.Errorf("failed to find customer by email: %w", err)
 	}
 
-	log.Printf("✅ Customer trouvé par email %s: ID=%s", email, customer.ID)
 	return customer, nil
 }
