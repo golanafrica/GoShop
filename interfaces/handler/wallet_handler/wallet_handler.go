@@ -11,6 +11,7 @@ import (
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -313,8 +314,8 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 		description = "Withdrawal to bank account"
 	}
 
-	// Générer un payout_id simulé (à remplacer par vrai payout)
-	payoutID := "payout_" + shopID[:8]
+	// 🆕 v3.0.1 : Générer un UUID valide pour le payout (reference_id doit être un UUID PostgreSQL)
+	payoutID := uuid.New().String()
 
 	resp, err := h.debitUC.DebitPayout(r.Context(), shopID, req.AmountCents, payoutID)
 	if err != nil {
@@ -328,12 +329,14 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 		Str("shop_id", shopID).
 		Int64("amount_cents", req.AmountCents).
 		Str("transaction_id", resp.TransactionID).
+		Str("payout_id", payoutID).
 		Msg("Withdrawal successful")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success":           true,
 		"message":           "Withdrawal successful",
 		"transaction_id":    resp.TransactionID,
+		"payout_id":         payoutID,
 		"amount_cents":      resp.AmountCents,
 		"amount_formatted":  formatMoney(resp.AmountCents),
 		"balance_cents":     resp.BalanceAfterCents,

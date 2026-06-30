@@ -48,7 +48,7 @@ const (
 	CODCommissionWaived    CODCommissionStatus = "waived"    // Commission annulée (litige)
 )
 
-// IsValid vérifie si le statut est valide
+// IsValid vérifie si le statut de commission est valide
 func (s CODCommissionStatus) IsValid() bool {
 	switch s {
 	case CODCommissionPending, CODCommissionCollected,
@@ -200,12 +200,19 @@ func (p *CODProof) SubmitClientProof(
 		p.ClientNotes = &notes
 	}
 
-	// Mise à jour statut
-	switch p.Status {
-	case CODProofPendingProofs, CODProofMerchantProofSent:
-		// OK, on continue
-	default:
-		return fmt.Errorf("cannot submit client proof with status: %s", p.Status)
+	// 🆕 v3.0.1 : Mettre à jour le statut
+	if p.Status == CODProofPendingProofs {
+		p.Status = CODProofClientProofSent
+	}
+
+	// 🆕 v3.0.1 : Si le marchand a déjà soumis, vérifier la cohérence
+	if p.HasMerchantProof() {
+		p.VerifyCoherence()
+		if p.IsCoherent() {
+			p.Status = CODProofConfirmed
+		} else {
+			p.Status = CODProofDisputed
+		}
 	}
 
 	p.UpdatedAt = now
@@ -248,12 +255,19 @@ func (p *CODProof) SubmitMerchantProof(
 		p.MerchantNotes = &notes
 	}
 
-	// Mise à jour statut
-	switch p.Status {
-	case CODProofPendingProofs, CODProofClientProofSent:
-		// OK, on continue
-	default:
-		return fmt.Errorf("cannot submit merchant proof with status: %s", p.Status)
+	// 🆕 v3.0.1 : Mettre à jour le statut
+	if p.Status == CODProofPendingProofs {
+		p.Status = CODProofMerchantProofSent
+	}
+
+	// 🆕 v3.0.1 : Si le client a déjà soumis, vérifier la cohérence
+	if p.HasClientProof() {
+		p.VerifyCoherence()
+		if p.IsCoherent() {
+			p.Status = CODProofConfirmed
+		} else {
+			p.Status = CODProofDisputed
+		}
 	}
 
 	p.UpdatedAt = now

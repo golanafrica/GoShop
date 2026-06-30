@@ -442,6 +442,7 @@ func (a *App) setupRouter() {
 		postgreProductRepo,
 		postgresCustomerRepo,
 		postgresOrderItem,
+		codProofRepo, // 🆕 v3.0.1
 	)
 
 	// Cash Order Handler

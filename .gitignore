@@ -53,3 +53,38 @@ tests/loadtest/results/*.log
 
 # Keep the directory structure
 !tests/loadtest/results/.gitkeep
+# Fichiers temporaires de test
+deposit.json
+login.json
+register.json
+*.exe
+*.backup
+fix_*.ps1
+
+# ========================================
+# FICHIERS TEMPORAIRES v3.0.1
+# ========================================
+
+# Fichiers JSON de test
+deposit.json
+login.json
+register.json
+
+# Binaires compilés
+*.exe
+*.test
+*.out
+
+# Backups
+*.backup
+*.bak
+*.old
+
+# Scripts temporaires
+fix_*.ps1
+test_*.ps1
+debug_*.ps1
+
+# Postman (collections vides)
+.postman/
+postman/collections/New*/

@@ -34,10 +34,11 @@ func NewOrderHandler(
 	productRepo repository.ProductRepository,
 	customerRepo repository.CustomerRepositoryInterface,
 	orderItemRepo repository.OrderItemRepository,
+	codProofRepo repository.CODProofRepository, // 🆕 v3.0.1
 	//logger *setupLogging.Logger,
 ) *OrderHandler {
 	return &OrderHandler{
-		createOrderUsecase:  orderusecase.NewCreateOrderUsecase(txManager, productRepo, customerRepo, orderItemRepo, orderRepo),
+		createOrderUsecase:  orderusecase.NewCreateOrderUsecase(txManager, productRepo, customerRepo, orderItemRepo, orderRepo, codProofRepo),
 		getOrderByIdUsecase: orderusecase.NewGetOrderByIdUsecase(orderRepo, txManager),
 		getAllOrderUsecase:  orderusecase.NewGetAllOrderUsecase(orderRepo, txManager),
 		productRepo:         productRepo,

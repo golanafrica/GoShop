@@ -1,4 +1,4 @@
-﻿package orderusecase_test
+package orderusecase_test
 
 import (
 	"context"
@@ -98,7 +98,7 @@ func TestCreateOrderUsecase_Success(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	result, err := uc.Execute(context.Background(), order)
@@ -147,13 +147,7 @@ func TestCreateOrderUsecase_CustomerNotFound(t *testing.T) {
 
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	uc := orderusecase.NewCreateOrderUsecase(
-		mockTxManager,
-		mockProductRepo,
-		mockCustomerRepo,
-		mockOrderItemRepo,
-		mockOrderRepo,
-	)
+	uc := orderusecase.NewCreateOrderUsecase(mockTxManager, mockProductRepo, mockCustomerRepo, mockOrderItemRepo, mockOrderRepo, nil)
 
 	_, err := uc.Execute(context.Background(), order)
 
@@ -210,7 +204,7 @@ func TestCreateOrderUsecase_ProductNotFound(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)
@@ -273,7 +267,7 @@ func TestCreateOrderUsecase_InsufficientStock(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)
@@ -338,7 +332,7 @@ func TestCreateOrderUsecase_UpdateStockError(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)
@@ -398,7 +392,7 @@ func TestCreateOrderUsecase_CreateOrderError(t *testing.T) {
 	// Update stock OK
 	mockProductRepoTx.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
-	// ❌ CREATE ORDER FAILS
+	// ? CREATE ORDER FAILS
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("order creation failed"))
 
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -409,7 +403,7 @@ func TestCreateOrderUsecase_CreateOrderError(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)
@@ -468,7 +462,7 @@ func TestCreateOrderUsecase_OrderItemError(t *testing.T) {
 
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(createdOrder, nil)
 
-	// ❌ ORDER ITEM FAILS
+	// ? ORDER ITEM FAILS
 	mockOrderItemRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("item error"))
 
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -479,7 +473,7 @@ func TestCreateOrderUsecase_OrderItemError(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)
@@ -513,7 +507,7 @@ func TestCreateOrderUsecase_BeginTxError(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), &entity.Order{})
@@ -570,7 +564,7 @@ func TestCreateOrderUsecase_CommitError(t *testing.T) {
 	mockOrderRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.Order{ID: "o1"}, nil)
 	mockOrderItemRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{}, nil)
 
-	// ❌ COMMIT FAILS
+	// ? COMMIT FAILS
 	mockTx.EXPECT().Commit().Return(errors.New("commit error"))
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
@@ -580,7 +574,7 @@ func TestCreateOrderUsecase_CommitError(t *testing.T) {
 		mockCustomerRepo,  // 4. customerRepo
 		mockOrderItemRepo, // 5. orderItemRepo
 		mockOrderRepo,     // 6. orderRepo
-
+		nil,
 	)
 
 	_, err := uc.Execute(context.Background(), order)

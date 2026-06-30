@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	customerusecase "Goshop/application/usecase/customer_usecase"
+	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
@@ -107,4 +108,19 @@ func (h *KYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) erro
 
 	utils.WriteJSON(w, http.StatusOK, items)
 	return nil
+}
+
+// RegisterRoutes enregistre les routes KYC dans le router
+func (h *KYCHandler) RegisterRoutes(r chi.Router) {
+	// Routes client (upload + status)
+	r.Route("/customers", func(r chi.Router) {
+		r.Post("/kyc/upload", middl.ErrorHandler(h.UploadKYC))
+		r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(h.GetKYCStatus))
+	})
+
+	// Routes marchand (review + list pending)
+	r.Route("/merchant/kyc", func(r chi.Router) {
+		r.Get("/pending", middl.ErrorHandler(h.ListPendingKYC))
+		r.Post("/{customer_id}/review", middl.ErrorHandler(h.ReviewKYC))
+	})
 }

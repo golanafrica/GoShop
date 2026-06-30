@@ -146,6 +146,21 @@ func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReference(ctx, referen
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReference", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReference), ctx, reference)
 }
 
+// FindByReferencePrefix mocks base method.
+func (m *MockTontinePaymentRepository) FindByReferencePrefix(ctx context.Context, referencePrefix string) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByReferencePrefix", ctx, referencePrefix)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByReferencePrefix indicates an expected call of FindByReferencePrefix.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferencePrefix(ctx, referencePrefix any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferencePrefix", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferencePrefix), ctx, referencePrefix)
+}
+
 // MarkDone mocks base method.
 func (m *MockTontinePaymentRepository) MarkDone(ctx context.Context, paymentID, transactionID string) error {
 	m.ctrl.T.Helper()

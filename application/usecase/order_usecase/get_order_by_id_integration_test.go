@@ -1,4 +1,4 @@
-﻿package orderusecase_test
+package orderusecase_test
 
 import (
 	orderusecase "Goshop/application/usecase/order_usecase"
@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// testShopByID est le shop utilisé pour ce test
+// testShopByID est le shop utilise pour ce test
 var testShopByID = &entity.Shop{
 	ID:       uuid.MustParse("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
 	Name:     "Test Shop",
@@ -34,7 +34,7 @@ var testShopByID = &entity.Shop{
 // --- Initialisation DB ---
 func setupTestDB_Get() *sql.DB {
 	if err := godotenv.Load("../../../.env"); err != nil {
-		log.Println("⚠️  .env non trouvé (mode defaut)")
+		log.Println("??  .env non trouv� (mode defaut)")
 	}
 
 	connStr := fmt.Sprintf(
@@ -49,10 +49,10 @@ func setupTestDB_Get() *sql.DB {
 
 	db, err := postgres.Connect(connStr)
 	if err != nil {
-		log.Fatalf("❌ Connexion DB échouée : %v", err)
+		log.Fatalf("? Connexion DB �chou�e : %v", err)
 	}
 
-	log.Println("✅ Connexion PostgreSQL OK")
+	log.Println("? Connexion PostgreSQL OK")
 	return db
 }
 
@@ -61,7 +61,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	db := setupTestDB_Get()
 	defer db.Close()
 
-	// ✅ Contexte avec tenant (au lieu de context.Background())
+	// ? Contexte avec tenant (au lieu de context.Background())
 	ctx := tenant.WithTenant(context.Background(), testShopByID)
 
 	// --- Repos
@@ -72,13 +72,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	txManager := txmanager.NewTxManagerPostgresInfra(db)
 
 	// --- Usecases
-	createOrderUsecase := orderusecase.NewCreateOrderUsecase(
-		txManager,
-		productRepo,
-		customerRepo,
-		orderItemRepo,
-		orderRepo,
-	)
+	createOrderUsecase := orderusecase.NewCreateOrderUsecase(txManager, productRepo, customerRepo, orderItemRepo, orderRepo, nil)
 
 	getOrderUsecase := orderusecase.NewGetOrderByIdUsecase(
 		orderRepo,
@@ -86,7 +80,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	)
 
 	// --------------------------
-	// 1. Création Customer
+	// 1. Cr�ation Customer
 	// --------------------------
 	customerEntity := &entity.Customer{
 		FirstName: "Client",
@@ -99,7 +93,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, createdCustomer.ID)
 
 	// --------------------------
-	// 2. Création Produit
+	// 2. Cr�ation Produit
 	// --------------------------
 	productEntity := &entity.Product{
 		Name:        "Produit A",
@@ -113,7 +107,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, productEntity.ID)
 
 	// --------------------------
-	// 3. Création Commande
+	// 3. Cr�ation Commande
 	// --------------------------
 	orderEntity := &entity.Order{
 		CustomerID: createdCustomer.ID,
@@ -134,7 +128,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotNil(t, orderFromDB)
 
 	// --------------------------
-	// 5. Vérifications
+	// 5. V�rifications
 	// --------------------------
 	assert.Equal(t, createdOrder.ID, orderFromDB.ID)
 	assert.Equal(t, createdCustomer.ID, orderFromDB.CustomerID)
@@ -147,5 +141,5 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.Equal(t, int64(10000), item.PriceCents)
 	assert.Equal(t, int64(20000), item.SubTotal_Cents)
 
-	fmt.Printf("✅ Order récupéré avec GetOrderById : %+v\n", orderFromDB)
+	fmt.Printf("? Order r�cup�r� avec GetOrderById : %+v\n", orderFromDB)
 }

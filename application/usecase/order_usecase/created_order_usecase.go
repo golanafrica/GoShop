@@ -11,7 +11,9 @@ import (
 	"Goshop/application/metrics"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/domain/tenant"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -21,6 +23,7 @@ type CreateOrderUsecase struct {
 	customerRepo  repository.CustomerRepositoryInterface
 	orderItemRepo repository.OrderItemRepository
 	orderRepo     repository.OrderRepository
+	codProofRepo  repository.CODProofRepository // 🆕 v3.0.1
 }
 
 func NewCreateOrderUsecase(
@@ -29,6 +32,7 @@ func NewCreateOrderUsecase(
 	customerRepo repository.CustomerRepositoryInterface,
 	orderItemRepo repository.OrderItemRepository,
 	orderRepo repository.OrderRepository,
+	codProofRepo repository.CODProofRepository, // 🆕 v3.0.1 (peut être nil pour rétrocompatibilité)
 ) *CreateOrderUsecase {
 	return &CreateOrderUsecase{
 		txManager:     txManager,
@@ -36,6 +40,7 @@ func NewCreateOrderUsecase(
 		customerRepo:  customerRepo,
 		orderItemRepo: orderItemRepo,
 		orderRepo:     orderRepo,
+		codProofRepo:  codProofRepo,
 	}
 }
 
@@ -72,6 +77,12 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 	customerRepo := ouc.customerRepo.WithTX(tx)
 	orderItemRepo := ouc.orderItemRepo.WithTX(tx)
 	orderRepo := ouc.orderRepo.WithTX(tx)
+
+	// 🆕 v3.0.1 : Attacher le repository COD à la transaction (si disponible)
+	var codProofRepo repository.CODProofRepository
+	if ouc.codProofRepo != nil {
+		codProofRepo = ouc.codProofRepo.WithTX(tx)
+	}
 
 	// 3. Vérifier le client
 	customer, err := customerRepo.FindByCustomerID(ctx, order.CustomerID)
@@ -132,18 +143,18 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 			Msg("Order item processed successfully")
 	}
 
-	// 5. 🆕 Définir le statut initial et reserved_until selon payment_method
+	// 5. Définir le statut initial et reserved_until selon payment_method
 	order.TotalCents = totalCents
 	now := time.Now().UTC()
 	order.CreatedAt = now
 	order.UpdatedAt = now
 
-	// 🆕 Valeur par défaut pour payment_method
+	// Valeur par défaut pour payment_method
 	if order.PaymentMethod == "" {
 		order.PaymentMethod = string(entity.PaymentMethodMobileMoney)
 	}
 
-	// 🆕 Statut initial selon la méthode de paiement
+	// Statut initial selon la méthode de paiement
 	switch order.PaymentMethod {
 	case string(entity.PaymentMethodCashOnDelivery):
 		order.Status = string(entity.OrderStatusPendingConfirmation)
@@ -179,6 +190,48 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 			Int("item_index", i).
 			Str("product_id", item.ProductID).
 			Msg("Order item created")
+	}
+
+	// 🆕 v3.0.1 : Créer automatiquement une preuve COD si paiement à la livraison
+	if createdOrder.PaymentMethod == string(entity.PaymentMethodCashOnDelivery) && codProofRepo != nil {
+		// Récupérer le shop_id depuis le contexte multi-tenant
+		var shopID string
+		if shop, tenantErr := tenant.FromContext(ctx); tenantErr == nil {
+			shopID = shop.ID.String()
+		} else {
+			logger.Warn().Err(tenantErr).Msg("Failed to get tenant from context, skipping COD proof creation")
+		}
+
+		if shopID != "" {
+			// Calculer la commission (2.5% du total)
+			commissionCents := createdOrder.TotalCents * 250 / 10000
+
+			codProof := &entity.CODProof{
+				ID:               uuid.New().String(),
+				OrderID:          createdOrder.ID,
+				ShopID:           shopID,
+				CustomerID:       createdOrder.CustomerID,
+				CommissionCents:  commissionCents,
+				CommissionStatus: entity.CODCommissionPending,
+				Status:           entity.CODProofPendingProofs,
+				CreatedAt:        now,
+				UpdatedAt:        now,
+			}
+
+			if err := codProofRepo.Create(ctx, codProof); err != nil {
+				// Non bloquant : on log mais on continue
+				logger.Error().
+					Err(err).
+					Str("order_id", createdOrder.ID).
+					Msg("Failed to create COD proof (non-blocking)")
+			} else {
+				logger.Info().
+					Str("order_id", createdOrder.ID).
+					Str("cod_proof_id", codProof.ID).
+					Int64("commission_cents", commissionCents).
+					Msg("COD proof created automatically")
+			}
+		}
 	}
 
 	// 8. Commit de la transaction

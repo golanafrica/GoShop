@@ -109,13 +109,7 @@ func TestCreateOrderUsecase_Integration(t *testing.T) {
 	txManager := txmanager.NewTxManagerPostgresInfra(db)
 
 	// --- Initialisation du usecase ---
-	usecase := orderusecase.NewCreateOrderUsecase(
-		txManager,
-		productRepo,
-		customerRepo,
-		orderItemRepo,
-		orderRepo,
-	)
+	usecase := orderusecase.NewCreateOrderUsecase(txManager, productRepo, customerRepo, orderItemRepo, orderRepo, nil)
 
 	// --- Étape 1 : Créer un customer ---
 	customerEntity := &entity.Customer{

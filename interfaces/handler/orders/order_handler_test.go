@@ -1,4 +1,4 @@
-﻿package orders_test
+package orders_test
 
 import (
 	orderitemdto "Goshop/application/dto/orderItem_dto"
@@ -108,6 +108,7 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Request body
@@ -200,6 +201,7 @@ func TestOrderHandler_CreateOrder_InvalidPayload(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Invalid JSON
@@ -242,6 +244,7 @@ func TestOrderHandler_CreateOrder_ValidationFailed(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Empty items - should fail validation
@@ -293,6 +296,7 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	reqBody := orderdto.OrderRequestDto{
@@ -302,7 +306,7 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 		},
 	}
 
-	// CORRECTION : Mock pour l'appel direct du handler � productRepo
+	// CORRECTION : Mock pour l'appel direct du handler ? productRepo
 	product := createTestProduct("product-123", 10)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
@@ -361,6 +365,7 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	reqBody := orderdto.OrderRequestDto{
@@ -372,11 +377,11 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 
 	customer := createTestCustomer("customer-123")
 
-	// CORRECTION : Mock pour l'appel direct du handler � productRepo (retourne nil pour produit non trouv�)
+	// CORRECTION : Mock pour l'appel direct du handler ? productRepo (retourne nil pour produit non trouv?)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "non-existent-product").Return(nil, sql.ErrNoRows)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appel�s car le handler retourne une erreur avant
-	// Ne pas d�finir d'attentes pour ces mocks OU utiliser AnyTimes()
+	// CORRECTION : Les mocks de transaction NE SERONT PAS appel?s car le handler retourne une erreur avant
+	// Ne pas d?finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -428,6 +433,7 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	reqBody := orderdto.OrderRequestDto{
@@ -440,11 +446,11 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 	customer := createTestCustomer("customer-123")
 	product := createTestProduct("product-123", 5) // Only 5 in stock
 
-	// CORRECTION : Mock pour l'appel direct du handler � productRepo
+	// CORRECTION : Mock pour l'appel direct du handler ? productRepo
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appel�s car le handler retourne une erreur avant
-	// Ne pas d�finir d'attentes pour ces mocks OU utiliser AnyTimes()
+	// CORRECTION : Les mocks de transaction NE SERONT PAS appel?s car le handler retourne une erreur avant
+	// Ne pas d?finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -494,6 +500,7 @@ func TestOrderHandler_GetOrderById_Success(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	order := createTestOrder("order-123", "customer-123", 2000)
@@ -547,6 +554,7 @@ func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Mock expectations
@@ -593,6 +601,7 @@ func TestOrderHandler_GetOrderById_EmptyID(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Empty ID in URL param
@@ -634,6 +643,7 @@ func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	orders := []*entity.Order{
@@ -689,6 +699,7 @@ func TestOrderHandler_GetAllOrders_Empty(t *testing.T) {
 		mockProductRepo,
 		mockCustomerRepo,
 		mockOrderItemRepo,
+		nil,
 	)
 
 	// Mock expectations
