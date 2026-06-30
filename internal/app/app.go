@@ -21,6 +21,11 @@ import (
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
 
+	// 🆕 v3.0.0 : Usecases
+	codusecase "Goshop/application/usecase/cod_usecase"
+	creditusecase "Goshop/application/usecase/credit_usecase"
+	walletusecase "Goshop/application/usecase/wallet_usecase"
+
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
@@ -34,6 +39,13 @@ import (
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
+
+	// 🆕 v3.0.0 : Repositories PostgreSQL
+	codinfra "Goshop/infrastructure/postgres/cod"
+	creditinfra "Goshop/infrastructure/postgres/credit"
+	escrowinfra "Goshop/infrastructure/postgres/escrow"
+	freezeinfra "Goshop/infrastructure/postgres/freeze"
+	walletinfra "Goshop/infrastructure/postgres/wallet"
 
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
@@ -51,6 +63,11 @@ import (
 	userhandler "Goshop/interfaces/handler/user_handler"
 	withdrawalhandler "Goshop/interfaces/handler/withdrawal_handler"
 	middleware "Goshop/interfaces/middl/user_middleware"
+
+	// 🆕 v3.0.0 : Handlers
+	codhandler "Goshop/interfaces/handler/cod_handler"
+	credithandler "Goshop/interfaces/handler/credit_handler"
+	wallethandler "Goshop/interfaces/handler/wallet_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -125,6 +142,29 @@ func (a *App) setupRouter() {
 
 	// 🆕 v2.9.0 : Repository KYC
 	kycDocRepo := customer.NewCustomerKYCRepositoryInfrastructure(a.DB)
+
+	// 🆕 v3.0.0 : Repositories Credit
+	creditPlanRepo := creditinfra.NewCreditPlanRepositoryInfrastructure(a.DB)
+	creditAppRepo := creditinfra.NewCreditApplicationRepositoryInfrastructure(a.DB)
+	creditContractRepo := creditinfra.NewCreditContractRepositoryInfrastructure(a.DB)
+	creditInstallmentRepo := creditinfra.NewCreditInstallmentRepositoryInfrastructure(a.DB)
+	creditScoreRepo := creditinfra.NewCreditScoreRepositoryInfrastructure(a.DB)
+
+	// 🆕 v3.0.0 : Repositories Escrow
+	_ = escrowinfra.NewEscrowAccountRepositoryInfrastructure(a.DB)
+	_ = escrowinfra.NewDeliveryProofRepositoryInfrastructure(a.DB)
+
+	// 🆕 v3.0.0 : Repositories Wallet
+	walletRepo := walletinfra.NewMerchantWalletRepositoryInfrastructure(a.DB)
+	walletTxnRepo := walletinfra.NewWalletTransactionRepositoryInfrastructure(a.DB)
+
+	// 🆕 v3.0.0 : Repository COD
+	codProofRepo := codinfra.NewCODProofRepositoryInfrastructure(a.DB)
+
+	// 🆕 v3.0.0 : Repository Freeze
+	freezeRepo := freezeinfra.NewAccountFreezeRepositoryInfrastructure(a.DB)
+
+	a.Logger.Info().Msg("✅ v3.0.0 repositories initialized (credit, escrow, wallet, cod, freeze)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -326,6 +366,62 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ KYC usecases initialized (upload, get_status, review, list_pending)")
 
+	// ============ 🆕 v3.0.0 : WALLET USECASES ============
+	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
+	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
+
+	a.Logger.Info().Msg("✅ v3.0.0 Wallet usecases initialized (credit, debit, freeze, unfreeze)")
+
+	// ============ 🆕 v3.0.0 : COD USECASES ============
+	submitClientProofUC := codusecase.NewSubmitClientProofUsecase(codProofRepo, postgresOrderRepo, txmanagerRepo)
+	submitMerchantProofUC := codusecase.NewSubmitMerchantProofUsecase(codProofRepo, postgresOrderRepo, txmanagerRepo)
+	collectCommissionUC := codusecase.NewCollectCommissionUsecase(
+		codProofRepo,
+		postgresOrderRepo,
+		debitWalletUC,
+		freezeAccountUC,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v3.0.0 COD usecases initialized (submit_client, submit_merchant, collect_commission)")
+
+	// ============ 🆕 v3.0.0 : CREDIT USECASES ============
+	configureCreditPlanUC := creditusecase.NewConfigureCreditPlanUsecase(
+		creditPlanRepo,
+		postgreProductRepo,
+		walletRepo,
+		txmanagerRepo,
+	)
+	applyForCreditUC := creditusecase.NewApplyForCreditUsecase(
+		creditAppRepo,
+		creditPlanRepo,
+		postgreProductRepo,
+		creditScoreRepo,
+		txmanagerRepo,
+	)
+	approveCreditUC := creditusecase.NewApproveCreditUsecase(
+		creditAppRepo,
+		creditContractRepo,
+		creditInstallmentRepo,
+		creditScoreRepo,
+		txmanagerRepo,
+	)
+	rejectCreditUC := creditusecase.NewRejectCreditUsecase(
+		creditAppRepo,
+		creditScoreRepo,
+		txmanagerRepo,
+	)
+	payDownPaymentUC := creditusecase.NewPayDownPaymentUsecase(
+		creditContractRepo,
+		creditInstallmentRepo,
+		creditScoreRepo,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -407,6 +503,31 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
+
+	// ============ 🆕 v3.0.0 : HANDLERS ============
+	walletHandler := wallethandler.NewWalletHandler(
+		creditWalletUC,
+		debitWalletUC,
+		freezeAccountUC,
+		unfreezeAccountUC,
+	)
+
+	codHandler := codhandler.NewCODHandler(
+		submitClientProofUC,
+		submitMerchantProofUC,
+		collectCommissionUC,
+		codProofRepo,
+	)
+
+	creditHandler := credithandler.NewCreditHandler(
+		configureCreditPlanUC,
+		applyForCreditUC,
+		approveCreditUC,
+		rejectCreditUC,
+		payDownPaymentUC,
+	)
+
+	a.Logger.Info().Msg("✅ v3.0.0 handlers initialized (wallet, cod, credit)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -518,6 +639,23 @@ func (a *App) setupRouter() {
 				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
 				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
 			})
+
+			// ============ 🆕 v3.0.0 : WALLET ROUTES ============
+			// Les handlers v3.0.0 gèrent leurs propres erreurs via utils.WriteError
+			// Donc on les appelle directement SANS middl.ErrorHandler
+			r.Route("/wallet", func(r chi.Router) {
+				walletHandler.RegisterRoutes(r)
+			})
+
+			// ============ 🆕 v3.0.0 : COD ROUTES ============
+			r.Route("/cod", func(r chi.Router) {
+				codHandler.RegisterRoutes(r)
+			})
+
+			// ============ 🆕 v3.0.0 : CREDIT ROUTES ============
+			r.Route("/credit", func(r chi.Router) {
+				creditHandler.RegisterRoutes(r)
+			})
 		})
 	})
 
@@ -526,7 +664,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v2.9.0: multi-tenant + payment + shop settings + withdrawals + cash + tontine + kyc)")
+		Msg("✅ Router configuré avec succès (v3.0.0: + wallet + cod + credit)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -593,10 +731,10 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "1.0.0",
+		Version:     "3.0.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
 	app := NewApp(db, logger)
-	return app.Handler()
+	return app.Router
 }
