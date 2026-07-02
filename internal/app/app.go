@@ -26,6 +26,9 @@ import (
 	creditusecase "Goshop/application/usecase/credit_usecase"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
 
+	// 🆕 v3.1.0 : Scheduler
+	appscheduler "Goshop/application/scheduler"
+
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
@@ -47,12 +50,18 @@ import (
 	freezeinfra "Goshop/infrastructure/postgres/freeze"
 	walletinfra "Goshop/infrastructure/postgres/wallet"
 
+	// 🆕 v3.1.0 : Scheduler Infrastructure
+	commissionbatch "Goshop/infrastructure/postgres/commission_batch"
+	commissionrate "Goshop/infrastructure/postgres/commission_rate"
+	infscheduler "Goshop/infrastructure/scheduler"
+
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	handlers "Goshop/interfaces/handler"
+	commissionratehandler "Goshop/interfaces/handler/commission_rate_handler"
 	customerhandler "Goshop/interfaces/handler/customer_handler"
 	ordershandler "Goshop/interfaces/handler/orders"
 	paymenthandler "Goshop/interfaces/handler/payment_handler"
@@ -69,6 +78,9 @@ import (
 	credithandler "Goshop/interfaces/handler/credit_handler"
 	wallethandler "Goshop/interfaces/handler/wallet_handler"
 
+	// 🆕 v3.1.0 : Scheduler Handler
+	schedulerhandler "Goshop/interfaces/handler/scheduler_handler"
+
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
@@ -80,9 +92,10 @@ import (
 
 // App représente l'application configurable
 type App struct {
-	Router *chi.Mux
-	DB     *sql.DB
-	Logger *setupLogging.Logger
+	Router    *chi.Mux
+	DB        *sql.DB
+	Logger    *setupLogging.Logger
+	Scheduler *infscheduler.CronScheduler // 🆕 v3.1.0
 }
 
 // NewApp crée une nouvelle instance de l'application avec logging
@@ -164,7 +177,13 @@ func (a *App) setupRouter() {
 	// 🆕 v3.0.0 : Repository Freeze
 	freezeRepo := freezeinfra.NewAccountFreezeRepositoryInfrastructure(a.DB)
 
-	a.Logger.Info().Msg("✅ v3.0.0 repositories initialized (credit, escrow, wallet, cod, freeze)")
+	// 🆕 v3.1.0 : Repository Commission Batches
+	batchRepo := commissionbatch.NewCommissionBatchRepositoryPostgres(a.DB)
+
+	// 🆕 v3.2.0 : Repository Commission Rates
+	rateRepo := commissionrate.NewCommissionRateRepositoryPostgres(a.DB)
+
+	a.Logger.Info().Msg("✅ v3.4.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -422,6 +441,56 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
 
+	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
+	commissionSched := appscheduler.NewCommissionScheduler(
+		codProofRepo,
+		batchRepo,
+		collectCommissionUC,
+		shopRepo,
+		a.Logger.Logger,
+	)
+
+	a.Logger.Info().Msg("✅ v3.1.0 Commission scheduler initialized")
+
+	// ============ 🆕 v3.2.0 : ONLINE PAYMENT SCHEDULER ============
+	onlinePaymentSched := appscheduler.NewOnlinePaymentScheduler(
+		paymentRepo,
+		batchRepo,
+		rateRepo,
+		walletRepo,
+		walletTxnRepo,
+		debitWalletUC,
+		freezeAccountUC,
+		a.Logger.Logger,
+	)
+
+	a.Logger.Info().Msg("✅ v3.2.0 Online payment scheduler initialized")
+
+	// ============ 🆕 v3.3.0 : TONTINE SCHEDULER ============
+	tontineSched := appscheduler.NewTontineScheduler(
+		tontinePaymentRepo,
+		tontineGroupRepo,
+		batchRepo,
+		rateRepo,
+		debitWalletUC,
+		freezeAccountUC,
+		a.Logger.Logger,
+	)
+
+	a.Logger.Info().Msg("✅ v3.3.0 Tontine scheduler initialized")
+
+	// ============ 🆕 v3.4.0 : CREDIT SCHEDULER ============
+	creditSched := appscheduler.NewCreditScheduler(
+		creditInstallmentRepo,
+		batchRepo,
+		rateRepo,
+		debitWalletUC,
+		freezeAccountUC,
+		a.Logger.Logger,
+	)
+
+	a.Logger.Info().Msg("✅ v3.4.0 Credit scheduler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -528,7 +597,21 @@ func (a *App) setupRouter() {
 		payDownPaymentUC,
 	)
 
-	a.Logger.Info().Msg("✅ v3.0.0 handlers initialized (wallet, cod, credit)")
+	// ============ 🆕 v3.1.0 : SCHEDULER HANDLER ============
+	schedulerHandler := schedulerhandler.NewSchedulerHandler(
+		commissionSched,
+		batchRepo,
+	)
+
+	// ============ 🆕 v3.3.0 : COMMISSION RATE HANDLER ============
+	commissionRateHandler := commissionratehandler.NewCommissionRateHandler(
+		rateRepo,
+		onlinePaymentSched,
+		tontineSched,
+		creditSched, // 🆕 v3.4.0
+	)
+
+	a.Logger.Info().Msg("✅ v3.4.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -642,8 +725,6 @@ func (a *App) setupRouter() {
 			})
 
 			// ============ 🆕 v3.0.0 : WALLET ROUTES ============
-			// Les handlers v3.0.0 gèrent leurs propres erreurs via utils.WriteError
-			// Donc on les appelle directement SANS middl.ErrorHandler
 			r.Route("/wallet", func(r chi.Router) {
 				walletHandler.RegisterRoutes(r)
 			})
@@ -658,14 +739,77 @@ func (a *App) setupRouter() {
 				creditHandler.RegisterRoutes(r)
 			})
 		})
+
+		// ============ 🆕 v3.1.0 : ADMIN SCHEDULER ROUTES ============
+		r.Route("/admin/scheduler", func(r chi.Router) {
+			r.Use(middleware.AuthMiddleware)
+			r.Post("/trigger", middl.ErrorHandler(schedulerHandler.TriggerManualCollection))
+			r.Get("/batches", middl.ErrorHandler(schedulerHandler.GetRecentBatches))
+			r.Get("/batches/{id}", middl.ErrorHandler(schedulerHandler.GetBatchDetails))
+			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
+		})
+
+		// ============ 🆕 v3.3.0 : COMMISSION RATES ROUTES ============
+		r.Route("/admin/commission-rates", func(r chi.Router) {
+			r.Use(middleware.AuthMiddleware)
+			r.Put("/", middl.ErrorHandler(commissionRateHandler.UpdateRate))
+			r.Get("/", middl.ErrorHandler(commissionRateHandler.GetRates))
+			r.Post("/trigger-online", middl.ErrorHandler(commissionRateHandler.TriggerOnlineCollection))
+			r.Post("/trigger-tontine", middl.ErrorHandler(commissionRateHandler.TriggerTontineCollection)) // 🆕 v3.3.0
+			r.Post("/trigger-credit", middl.ErrorHandler(commissionRateHandler.TriggerCreditCollection))   // 🆕 v3.4.0
+		})
 	})
+
+	// ============ 🆕 v3.4.0 : INITIALISATION DU CRON SCHEDULER ============
+	cronSchedule := os.Getenv("COMMISSION_SCHEDULE")
+	if cronSchedule == "" {
+		cronSchedule = "0 2 * * *" // Défaut : 2h du matin
+	}
+
+	onlinePaymentSchedule := os.Getenv("ONLINE_PAYMENT_SCHEDULE")
+	if onlinePaymentSchedule == "" {
+		onlinePaymentSchedule = "0 */1 * * *" // Défaut : toutes les heures
+	}
+
+	tontineSchedule := os.Getenv("TONTINE_SCHEDULE")
+	if tontineSchedule == "" {
+		tontineSchedule = "*/30 * * * *" // Défaut : toutes les 30 min
+	}
+
+	creditSchedule := os.Getenv("CREDIT_SCHEDULE") // 🆕 v3.4.0
+	if creditSchedule == "" {
+		creditSchedule = "0 3 * * *" // Défaut : 3h du matin
+	}
+
+	a.Scheduler = infscheduler.NewCronScheduler(
+		commissionSched,
+		onlinePaymentSched,
+		tontineSched,
+		creditSched, // 🆕 v3.4.0
+		a.Logger.Logger,
+		cronSchedule,
+		onlinePaymentSchedule,
+		tontineSchedule,
+		creditSchedule, // 🆕 v3.4.0
+	)
+
+	if err := a.Scheduler.Start(); err != nil {
+		a.Logger.Error().Err(err).Msg("❌ Failed to start scheduler")
+	} else {
+		a.Logger.Info().
+			Str("cod_schedule", cronSchedule).
+			Str("online_payment_schedule", onlinePaymentSchedule).
+			Str("tontine_schedule", tontineSchedule).
+			Str("credit_schedule", creditSchedule). // 🆕 v3.4.0
+			Msg("✅ v3.4.0 Commission schedulers started")
+	}
 
 	a.Router = r
 
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v3.0.0: + wallet + cod + credit)")
+		Msg("✅ Router configuré avec succès (v3.4.0: + credit_scheduler)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -732,7 +876,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "3.0.0",
+		Version:     "3.4.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

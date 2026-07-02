@@ -71,6 +71,17 @@ func (s InstallmentStatus) IsValid() bool {
 }
 
 // ============================================================
+// 🆕 v3.4.0 : STATUTS COMMISSION CRÉDIT
+// ============================================================
+
+const (
+	CreditCommissionPending   = "pending"
+	CreditCommissionCollected = "collected"
+	CreditCommissionFailed    = "failed"
+	CreditCommissionSkipped   = "skipped"
+)
+
+// ============================================================
 // CONSTANTES CRÉDIT
 // ============================================================
 
@@ -96,6 +107,9 @@ const (
 	// Pénalités
 	LateThresholdDays    = 7  // Après 7 jours → statut "late"
 	DefaultThresholdDays = 90 // Après 90 jours → statut "defaulted"
+
+	// 🆕 v3.4.0 : Taux de commission crédit par défaut (0.5% = 50 bps)
+	DefaultCreditCommissionRateBps = 50
 )
 
 // ============================================================
@@ -420,6 +434,16 @@ type CreditInstallment struct {
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+
+	// 🆕 v3.4.0 : Commission tracking
+	CommissionStatus      string     `json:"commission_status" db:"commission_status"` // pending, collected, failed
+	CommissionCents       int64      `json:"commission_cents" db:"commission_cents"`
+	CommissionBatchID     *string    `json:"commission_batch_id,omitempty" db:"commission_batch_id"`
+	CommissionCollectedAt *time.Time `json:"commission_collected_at,omitempty" db:"commission_collected_at"`
+
+	// 🆕 v3.4.0 : Pour le scheduler (non persisté en DB)
+	// Rempli par le repository lors du JOIN avec credit_contracts
+	ShopID string `json:"shop_id,omitempty" db:"-"`
 }
 
 // NewCreditInstallment crée une nouvelle échéance
@@ -435,6 +459,7 @@ func NewCreditInstallment(
 		DueDate:           dueDate,
 		AmountCents:       amountCents,
 		Status:            InstallmentPending,
+		CommissionStatus:  CreditCommissionPending,
 	}
 }
 
@@ -472,6 +497,29 @@ func (i *CreditInstallment) MarkDefaulted() error {
 	return nil
 }
 
+// 🆕 v3.4.0 : MarkCommissionCollected marque la commission comme collectée
+func (i *CreditInstallment) MarkCommissionCollected(batchID string, commissionCents int64) error {
+	if i.CommissionStatus == CreditCommissionCollected {
+		return errors.New("commission already collected")
+	}
+	now := time.Now().UTC()
+	i.CommissionStatus = CreditCommissionCollected
+	i.CommissionCents = commissionCents
+	i.CommissionBatchID = &batchID
+	i.CommissionCollectedAt = &now
+	i.UpdatedAt = now
+	return nil
+}
+
+// 🆕 v3.4.0 : MarkCommissionFailed marque la commission comme échouée
+func (i *CreditInstallment) MarkCommissionFailed(batchID string, reason string) error {
+	now := time.Now().UTC()
+	i.CommissionStatus = CreditCommissionFailed
+	i.CommissionBatchID = &batchID
+	i.UpdatedAt = now
+	return nil
+}
+
 // IsPending vérifie si l'échéance est en attente
 func (i *CreditInstallment) IsPending() bool {
 	return i.Status == InstallmentPending
@@ -485,6 +533,16 @@ func (i *CreditInstallment) IsPaid() bool {
 // IsLate vérifie si l'échéance est en retard
 func (i *CreditInstallment) IsLate() bool {
 	return i.Status == InstallmentLate
+}
+
+// 🆕 v3.4.0 : IsCommissionPending vérifie si la commission est en attente
+func (i *CreditInstallment) IsCommissionPending() bool {
+	return i.CommissionStatus == CreditCommissionPending || i.CommissionStatus == ""
+}
+
+// 🆕 v3.4.0 : IsCommissionCollected vérifie si la commission est collectée
+func (i *CreditInstallment) IsCommissionCollected() bool {
+	return i.CommissionStatus == CreditCommissionCollected
 }
 
 // IsOverdue vérifie si l'échéance est échue (due_date < now)
@@ -656,4 +714,13 @@ func CalculateCreditDetails(
 // CalculateLateFee calcule la pénalité de retard
 func CalculateLateFee(amountCents int64, penaltyRateBps int) int64 {
 	return (amountCents * int64(penaltyRateBps)) / 10000
+}
+
+// 🆕 v3.4.0 : CalculateCreditCommission calcule la commission pour une échéance de crédit
+// Taux par défaut : 0.5% (50 bps)
+func CalculateCreditCommission(amountCents int64, rateBps int) int64 {
+	if rateBps <= 0 || rateBps > 1500 {
+		rateBps = DefaultCreditCommissionRateBps
+	}
+	return (amountCents * int64(rateBps)) / 10000
 }

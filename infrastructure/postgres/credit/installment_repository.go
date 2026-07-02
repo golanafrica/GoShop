@@ -651,3 +651,125 @@ func (r *CreditInstallmentRepositoryInfrastructure) SumOverdueAmountByShopID(ctx
 
 	return total, nil
 }
+
+// ============================================================
+// 🆕 v3.4.0 : MÉTHODES POUR LE SCHEDULER DE COMMISSIONS
+// ============================================================
+
+// FindPaidWithoutCommission récupère les échéances payées sans commission collectée
+// 🆕 v3.4.0 : Fait un JOIN avec credit_contracts pour récupérer le shop_id
+func (r *CreditInstallmentRepositoryInfrastructure) FindPaidWithoutCommission(
+	ctx context.Context,
+	limit int,
+) ([]*entity.CreditInstallment, error) {
+	query := `
+		SELECT 
+			i.id, i.contract_id, i.installment_number, i.due_date, i.amount_cents,
+			i.payment_id, i.paid_at, i.status, i.late_fee_cents,
+			i.created_at, i.updated_at,
+			COALESCE(i.commission_status, 'pending') as commission_status,
+			COALESCE(i.commission_cents, 0) as commission_cents,
+			i.commission_batch_id,
+			i.commission_collected_at,
+			c.shop_id
+		FROM credit_installments i
+		JOIN credit_contracts c ON c.id = i.contract_id
+		WHERE i.status = 'paid'
+		  AND (i.commission_status IS NULL OR i.commission_status = 'pending')
+		ORDER BY i.paid_at ASC
+		LIMIT $1
+	`
+	rows, err := r.queryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query paid installments: %w", err)
+	}
+	defer rows.Close()
+
+	var installments []*entity.CreditInstallment
+	for rows.Next() {
+		inst := &entity.CreditInstallment{}
+		var paymentID sql.NullString
+		var paidAt sql.NullTime
+		var commissionStatus sql.NullString
+		var commissionBatchID sql.NullString
+		var commissionCollectedAt sql.NullTime
+
+		err := rows.Scan(
+			&inst.ID,
+			&inst.ContractID,
+			&inst.InstallmentNumber,
+			&inst.DueDate,
+			&inst.AmountCents,
+			&paymentID,
+			&paidAt,
+			&inst.Status,
+			&inst.LateFeeCents,
+			&inst.CreatedAt,
+			&inst.UpdatedAt,
+			&commissionStatus,
+			&inst.CommissionCents,
+			&commissionBatchID,
+			&commissionCollectedAt,
+			&inst.ShopID, // 🆕 v3.4.0 : Remplit le champ ShopID
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan installment: %w", err)
+		}
+
+		if paymentID.Valid {
+			inst.PaymentID = &paymentID.String
+		}
+		if paidAt.Valid {
+			inst.PaidAt = &paidAt.Time
+		}
+		if commissionStatus.Valid {
+			inst.CommissionStatus = commissionStatus.String
+		}
+		if commissionBatchID.Valid {
+			inst.CommissionBatchID = &commissionBatchID.String
+		}
+		if commissionCollectedAt.Valid {
+			inst.CommissionCollectedAt = &commissionCollectedAt.Time
+		}
+
+		installments = append(installments, inst)
+	}
+
+	if installments == nil {
+		installments = []*entity.CreditInstallment{}
+	}
+	return installments, rows.Err()
+}
+
+// UpdateCreditCommissionStatus met à jour le statut de commission d'une échéance
+// 🆕 v3.4.0 : Utilisé par le scheduler après collecte réussie/échouée
+func (r *CreditInstallmentRepositoryInfrastructure) UpdateCreditCommissionStatus(
+	ctx context.Context,
+	installmentID string,
+	status string,
+	commissionCents int64,
+	batchID *string,
+) error {
+	query := `
+		UPDATE credit_installments SET
+			commission_status = $1,
+			commission_cents = $2,
+			commission_batch_id = $3,
+			commission_collected_at = CASE 
+				WHEN $1 = 'collected' THEN NOW() 
+				ELSE commission_collected_at 
+			END,
+			updated_at = NOW()
+		WHERE id = $4
+	`
+	result, err := r.execContext(ctx, query, status, commissionCents, batchID, installmentID)
+	if err != nil {
+		return fmt.Errorf("failed to update credit commission status: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("credit installment not found")
+	}
+	return nil
+}

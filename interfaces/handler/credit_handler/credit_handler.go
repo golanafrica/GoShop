@@ -609,11 +609,17 @@ func (h *CreditHandler) ListPendingApplications(w http.ResponseWriter, r *http.R
 			"requested_duration_months": app.RequestedDurationMonths,
 			"credit_score":              app.CreditScoreAtApplication,
 			"product_price_cents":       app.ProductPriceCents,
+			"product_price_formatted":   utils.FormatMoney(app.ProductPriceCents),
 			"down_payment_cents":        app.DownPaymentCents,
+			"down_payment_formatted":    utils.FormatMoney(app.DownPaymentCents),
 			"financed_amount_cents":     app.FinancedAmountCents,
+			"financed_amount_formatted": utils.FormatMoney(app.FinancedAmountCents),
 			"interest_amount_cents":     app.InterestAmountCents,
+			"interest_amount_formatted": utils.FormatMoney(app.InterestAmountCents),
 			"total_amount_cents":        app.TotalAmountCents,
+			"total_amount_formatted":    utils.FormatMoney(app.TotalAmountCents),
 			"monthly_payment_cents":     app.MonthlyPaymentCents,
+			"monthly_payment_formatted": utils.FormatMoney(app.MonthlyPaymentCents),
 			"status":                    app.Status,
 			"created_at":                app.CreatedAt.Format("2006-01-02T15:04:05Z"),
 		})
@@ -734,9 +740,10 @@ func (h *CreditHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 			"installment_number": inst.InstallmentNumber,
 			"due_date":           inst.DueDate.Format("2006-01-02"),
 			"amount_cents":       inst.AmountCents,
-			"amount_formatted":   formatMoney(inst.AmountCents),
+			"amount_formatted":   utils.FormatMoney(inst.AmountCents), // 🆕 v3.4.1
 			"status":             inst.Status,
 			"late_fee_cents":     inst.LateFeeCents,
+			"late_fee_formatted": utils.FormatMoney(inst.LateFeeCents), // 🆕 v3.4.1
 		}
 		if inst.PaidAt != nil {
 			instResp["paid_at"] = inst.PaidAt.Format("2006-01-02T15:04:05Z")
@@ -746,19 +753,25 @@ func (h *CreditHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"contract": map[string]interface{}{
-			"id":                    contract.ID,
-			"customer_id":           contract.CustomerID,
-			"product_id":            contract.ProductID,
-			"product_price_cents":   contract.ProductPriceCents,
-			"down_payment_cents":    contract.DownPaymentCents,
-			"financed_amount_cents": contract.FinancedAmountCents,
-			"interest_amount_cents": contract.InterestAmountCents,
-			"total_amount_cents":    contract.TotalAmountCents,
-			"monthly_payment_cents": contract.MonthlyPaymentCents,
-			"duration_months":       contract.DurationMonths,
-			"start_date":            contract.StartDate.Format("2006-01-02"),
-			"end_date":              contract.EndDate.Format("2006-01-02"),
-			"status":                contract.Status,
+			"id":                        contract.ID,
+			"customer_id":               contract.CustomerID,
+			"product_id":                contract.ProductID,
+			"product_price_cents":       contract.ProductPriceCents,
+			"product_price_formatted":   utils.FormatMoney(contract.ProductPriceCents), // 🆕 v3.4.1
+			"down_payment_cents":        contract.DownPaymentCents,
+			"down_payment_formatted":    utils.FormatMoney(contract.DownPaymentCents), // 🆕 v3.4.1
+			"financed_amount_cents":     contract.FinancedAmountCents,
+			"financed_amount_formatted": utils.FormatMoney(contract.FinancedAmountCents), // 🆕 v3.4.1
+			"interest_amount_cents":     contract.InterestAmountCents,
+			"interest_amount_formatted": utils.FormatMoney(contract.InterestAmountCents), // 🆕 v3.4.1
+			"total_amount_cents":        contract.TotalAmountCents,
+			"total_amount_formatted":    utils.FormatMoney(contract.TotalAmountCents), // 🆕 v3.4.1
+			"monthly_payment_cents":     contract.MonthlyPaymentCents,
+			"monthly_payment_formatted": utils.FormatMoney(contract.MonthlyPaymentCents), // 🆕 v3.4.1
+			"duration_months":           contract.DurationMonths,
+			"start_date":                contract.StartDate.Format("2006-01-02"),
+			"end_date":                  contract.EndDate.Format("2006-01-02"),
+			"status":                    contract.Status,
 		},
 		"installments":       installmentResponses,
 		"installments_count": len(installmentResponses),
@@ -827,15 +840,17 @@ func (h *CreditHandler) ListActiveContracts(w http.ResponseWriter, r *http.Reque
 	contractResponses := make([]map[string]interface{}, 0, len(contracts))
 	for _, contract := range contracts {
 		contractResponses = append(contractResponses, map[string]interface{}{
-			"id":                    contract.ID,
-			"customer_id":           contract.CustomerID,
-			"product_id":            contract.ProductID,
-			"total_amount_cents":    contract.TotalAmountCents,
-			"monthly_payment_cents": contract.MonthlyPaymentCents,
-			"duration_months":       contract.DurationMonths,
-			"start_date":            contract.StartDate.Format("2006-01-02"),
-			"end_date":              contract.EndDate.Format("2006-01-02"),
-			"status":                contract.Status,
+			"id":                        contract.ID,
+			"customer_id":               contract.CustomerID,
+			"product_id":                contract.ProductID,
+			"total_amount_cents":        contract.TotalAmountCents,
+			"total_amount_formatted":    utils.FormatMoney(contract.TotalAmountCents), // 🆕 v3.4.1
+			"monthly_payment_cents":     contract.MonthlyPaymentCents,
+			"monthly_payment_formatted": utils.FormatMoney(contract.MonthlyPaymentCents), // 🆕 v3.4.1
+			"duration_months":           contract.DurationMonths,
+			"start_date":                contract.StartDate.Format("2006-01-02"),
+			"end_date":                  contract.EndDate.Format("2006-01-02"),
+			"status":                    contract.Status,
 		})
 	}
 
@@ -874,7 +889,7 @@ func (h *CreditHandler) ListOverdueInstallments(w http.ResponseWriter, r *http.R
 			"installment_number": inst.InstallmentNumber,
 			"due_date":           inst.DueDate.Format("2006-01-02"),
 			"amount_cents":       inst.AmountCents,
-			"amount_formatted":   formatMoney(inst.AmountCents),
+			"amount_formatted":   utils.FormatMoney(inst.AmountCents), // 🆕 v3.4.1
 			"status":             inst.Status,
 			"days_overdue":       inst.DaysOverdue(),
 		})
@@ -904,34 +919,11 @@ func determineScoreLevel(score int) string {
 	}
 }
 
-// formatMoney formate un montant en centimes pour affichage
+// 🆕 v3.4.1 : Utiliser le helper centralisé utils.FormatMoney
+// formatMoney formate un montant en centimes pour affichage avec arrondi
+// Exemple : 5499 centimes → "55 FCFA"
 func formatMoney(cents int64) string {
-	if cents < 0 {
-		return "-" + formatMoney(-cents)
-	}
-	fcfa := cents / 100
-	return formatNumber(fcfa) + " FCFA"
-}
-
-// formatNumber formate un nombre avec séparateurs de milliers
-func formatNumber(n int64) string {
-	if n < 1000 {
-		return fmt.Sprintf("%d", n)
-	}
-
-	str := fmt.Sprintf("%d", n)
-	result := ""
-	count := 0
-
-	for i := len(str) - 1; i >= 0; i-- {
-		if count > 0 && count%3 == 0 {
-			result = " " + result
-		}
-		result = string(str[i]) + result
-		count++
-	}
-
-	return result
+	return utils.FormatMoney(cents)
 }
 
 // ============================================================

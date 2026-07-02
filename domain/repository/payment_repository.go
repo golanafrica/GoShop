@@ -30,6 +30,10 @@ type PaymentRepository interface {
 	// Update met à jour un paiement
 	Update(ctx context.Context, payment *entity.Payment) error
 
+	// Ajoute à l'interface PaymentRepository :
+	FindCompletedWithoutCommission(ctx context.Context, limit int) ([]*entity.Payment, error)
+	UpdateCommissionStatus(ctx context.Context, paymentID string, status string, commissionCents int64) error
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) PaymentRepository
 }

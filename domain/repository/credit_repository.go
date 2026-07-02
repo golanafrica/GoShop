@@ -152,6 +152,14 @@ type CreditInstallmentRepository interface {
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) CreditInstallmentRepository
+
+	// 🆕 v3.4.0 : Méthodes pour le scheduler de commissions
+	// FindPaidWithoutCommission récupère les échéances payées sans commission collectée
+	// Remplit aussi le champ ShopID via JOIN avec credit_contracts
+	FindPaidWithoutCommission(ctx context.Context, limit int) ([]*entity.CreditInstallment, error)
+
+	// UpdateCreditCommissionStatus met à jour le statut de commission d'une échéance
+	UpdateCreditCommissionStatus(ctx context.Context, installmentID string, status string, commissionCents int64, batchID *string) error
 }
 
 // ============================================================

@@ -120,7 +120,7 @@ type TontinePaymentRepository interface {
 	// FindByReference trouve un paiement par sa référence YengaPay
 	FindByReference(ctx context.Context, reference string) (*entity.TontinePayment, error)
 
-	// 🆕 FindByReferencePrefix trouve un paiement par préfixe de référence YengaPay
+	// FindByReferencePrefix trouve un paiement par préfixe de référence YengaPay
 	// Utilisé par le webhook tontine qui ne connaît que les premiers caractères
 	FindByReferencePrefix(ctx context.Context, referencePrefix string) (*entity.TontinePayment, error)
 
@@ -145,6 +145,13 @@ type TontinePaymentRepository interface {
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) TontinePaymentRepository
+
+	// 🆕 v3.3.0 : Méthodes pour le scheduler de commissions
+	// FindDoneWithoutCommission récupère les paiements DONE sans commission collectée
+	FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error)
+
+	// UpdateTontineCommissionStatus met à jour le statut de commission d'un paiement tontine
+	UpdateTontineCommissionStatus(ctx context.Context, paymentID string, status string, batchID *string) error
 }
 
 // ============================================================

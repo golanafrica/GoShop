@@ -366,5 +366,119 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 	return payments, nil
 }
 
+// FindCompletedWithoutCommission récupère les paiements success sans commission collectée
+func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
+	ctx context.Context,
+	limit int,
+) ([]*entity.Payment, error) {
+	query := `
+        SELECT 
+            id, shop_id, order_id, provider, provider_ref,
+            amount_cents, currency, customer_phone, customer_email,
+            description, status, metadata, 
+            initiated_at, completed_at, expires_at,
+            created_at, updated_at,
+            COALESCE(commission_rate_bps, 0) as commission_rate_bps,
+            COALESCE(commission_cents, 0) as commission_cents,
+            COALESCE(commission_status, 'pending') as commission_status,
+            commission_collected_at
+        FROM payments
+        WHERE status = 'success'
+          AND (commission_status IS NULL OR commission_status = 'pending')
+        ORDER BY completed_at ASC
+        LIMIT $1
+    `
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query payments: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []*entity.Payment
+	for rows.Next() {
+		var p entity.Payment
+		var metadataBytes []byte
+		var providerRef, customerPhone, customerEmail, description sql.NullString
+
+		err := rows.Scan(
+			&p.ID,
+			&p.ShopID,
+			&p.OrderID,
+			&p.Provider,
+			&providerRef,
+			&p.AmountCents,
+			&p.Currency,
+			&customerPhone,
+			&customerEmail,
+			&description,
+			&p.Status,
+			&metadataBytes,
+			&p.InitiatedAt,
+			&p.CompletedAt,
+			&p.ExpiresAt,
+			&p.CreatedAt,
+			&p.UpdatedAt,
+			&p.CommissionRateBps,
+			&p.CommissionCents,
+			&p.CommissionStatus,
+			&p.CommissionCollectedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan payment: %w", err)
+		}
+
+		if providerRef.Valid {
+			p.ProviderRef = &providerRef.String
+		}
+		if customerPhone.Valid {
+			p.CustomerPhone = &customerPhone.String
+		}
+		if customerEmail.Valid {
+			p.CustomerEmail = &customerEmail.String
+		}
+		if description.Valid {
+			p.Description = &description.String
+		}
+
+		if len(metadataBytes) > 0 {
+			if err := json.Unmarshal(metadataBytes, &p.Metadata); err != nil {
+				return nil, fmt.Errorf("unmarshal metadata: %w", err)
+			}
+		} else {
+			p.Metadata = make(map[string]interface{})
+		}
+
+		payments = append(payments, &p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate payments: %w", err)
+	}
+
+	return payments, nil
+}
+
+// UpdateCommissionStatus met à jour le statut de commission
+func (r *PaymentRepositoryPostgres) UpdateCommissionStatus(
+	ctx context.Context,
+	paymentID string,
+	status string,
+	commissionCents int64,
+) error {
+	query := `
+        UPDATE payments SET
+            commission_status = $1,
+            commission_cents = $2,
+            commission_collected_at = CASE WHEN $1 = 'collected' THEN NOW() ELSE commission_collected_at END,
+            updated_at = NOW()
+        WHERE id = $3
+    `
+	_, err := r.db.ExecContext(ctx, query, status, commissionCents, paymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update commission status: %w", err)
+	}
+	return nil
+}
+
 // Unused import prevention
 var _ = time.Now

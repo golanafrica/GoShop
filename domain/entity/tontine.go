@@ -336,6 +336,10 @@ type TontinePayment struct {
 	PaidAt                *time.Time `json:"paid_at,omitempty" db:"paid_at"`
 	CreatedAt             time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at" db:"updated_at"`
+	CommissionStatus      string     `json:"commission_status" db:"commission_status"` // pending, collected, failed
+
+	// 🆕 v3.3.0 : Pour le scheduler (non persisté en DB)
+	ShopID string `json:"shop_id,omitempty" db:"-"` // Shop ID du groupe (pour le multi-tenant)
 }
 
 // NewTontinePayment crée un nouveau paiement de cotisation

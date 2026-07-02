@@ -30,6 +30,11 @@ const (
 	ProviderYengaPay    PaymentProvider = "yenga_pay"
 	ProviderCash        PaymentProvider = "cash"
 	ProviderMock        PaymentProvider = "mock"
+	// CommissionStatus
+
+	CommissionStatusPending   = "pending"
+	CommissionStatusCollected = "collected"
+	CommissionStatusFailed    = "failed"
 )
 
 // Currency représente la devise
@@ -59,6 +64,13 @@ type Payment struct {
 	ExpiresAt     *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	// Dans la struct Payment existante, ajoute :
+
+	// Commission
+	CommissionRateBps     int        `json:"commission_rate_bps" db:"commission_rate_bps"`
+	CommissionCents       int64      `json:"commission_cents" db:"commission_cents"`
+	CommissionStatus      string     `json:"commission_status" db:"commission_status"` // pending, collected, failed
+	CommissionCollectedAt *time.Time `json:"commission_collected_at,omitempty" db:"commission_collected_at"`
 }
 
 // IsValidStatusTransition vérifie si une transition de statut est valide
