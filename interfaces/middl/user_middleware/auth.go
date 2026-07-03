@@ -32,7 +32,7 @@ func NewAuthMiddleware(config ...AuthMiddlewareConfig) func(http.Handler) http.H
 
 			// 1. Header manquant
 			if auth == "" {
-				utils.WriteAppError(w, utils.ErrTokenMissing) // "missing Authorization header"
+				utils.WriteAppError(w, utils.ErrTokenMissing)
 				return
 			}
 
@@ -45,15 +45,14 @@ func NewAuthMiddleware(config ...AuthMiddlewareConfig) func(http.Handler) http.H
 			// 3. Extraction du token
 			tokenString := strings.TrimPrefix(auth, "Bearer ")
 			if tokenString == "" {
-				utils.WriteAppError(w, utils.ErrTokenMalformed) // "invalid or corrupted token"
+				utils.WriteAppError(w, utils.ErrTokenMalformed)
 				return
 			}
 
 			// 4. Validation via le validateur
 			claims, err := validator.ValidateToken(tokenString)
 			if err != nil {
-				// CORRECTION ICI : Utiliser ErrTokenMalformed au lieu de ErrUnauthorized
-				utils.WriteAppError(w, utils.ErrTokenMalformed) // "invalid or corrupted token"
+				utils.WriteAppError(w, utils.ErrTokenMalformed)
 				return
 			}
 
@@ -82,8 +81,19 @@ func NewAuthMiddleware(config ...AuthMiddlewareConfig) func(http.Handler) http.H
 				return
 			}
 
-			// 8. Injection dans le context
-			ctx := utils.WithUserID(r.Context(), userID)
+			// ============================================================
+			// 🆕 v4.0.0 : Extraction du rôle
+			// ============================================================
+			role, ok := claims["role"].(string)
+			if !ok || role == "" {
+				// Rétrocompatibilité : anciens tokens sans rôle → merchant
+				role = "merchant"
+			}
+
+			// ============================================================
+			// 🆕 v4.0.0 : Injection UserID + Role dans le contexte
+			// ============================================================
+			ctx := utils.WithUser(r.Context(), userID, role)
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

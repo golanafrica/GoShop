@@ -15,26 +15,29 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ============================================================
+// 🆕 v4.0.0 : Signature mise à jour avec rôle
+// ============================================================
+
 type RefreshUsecase struct {
 	repo               authrepository.RefreshSessionRepository
 	validateToken      func(string) (jwt.MapClaims, error)
-	generateAccess     func(string) (string, error)
-	generateRefresh    func(string, string) (string, error)
+	generateAccess     func(string, string) (string, error)         // 🆕 v4.0.0 : (userID, role)
+	generateRefresh    func(string, string, string) (string, error) // 🆕 v4.0.0 : (userID, jti, role)
 	now                func() time.Time
 	newJTI             func() string
 	refreshExpiryDelta time.Duration
-	logger             *setupLogging.Logger // ✅ Wrapper personnalisé
+	logger             *setupLogging.Logger
 }
 
 func NewRefreshUsecase(
 	repo authrepository.RefreshSessionRepository,
 	validateToken func(string) (jwt.MapClaims, error),
-	generateAccess func(string) (string, error),
-	generateRefresh func(string, string) (string, error),
+	generateAccess func(string, string) (string, error), // 🆕 v4.0.0
+	generateRefresh func(string, string, string) (string, error), // 🆕 v4.0.0
 	now func() time.Time,
 	newJTI func() string,
 	refreshExpiry time.Duration,
-	//logger *setupLogging.Logger, // ✅ Type corrigé
 ) *RefreshUsecase {
 	return &RefreshUsecase{
 		repo:               repo,
@@ -44,7 +47,6 @@ func NewRefreshUsecase(
 		now:                now,
 		newJTI:             newJTI,
 		refreshExpiryDelta: refreshExpiry,
-		//logger:             logger.WithComponent("refresh_usecase"), // ✅ Cohérent
 	}
 }
 
@@ -53,8 +55,6 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 
 	logger := zerolog.Ctx(ctx)
 
-	// ✅ Pas de .With().Logger() → on reste dans *setupLogging.Logger
-	// On ajoute les champs directement dans chaque log
 	logger.Info().
 		Str("operation", "execute").
 		Int("token_length", len(oldRefreshToken)).
@@ -99,6 +99,18 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 		return "", "", utils.ErrTokenJTIInvalid
 	}
 
+	// ============================================================
+	// 🆕 v4.0.0 : Récupère le rôle depuis le refresh token
+	// ============================================================
+	role, ok := claims["role"].(string)
+	if !ok || role == "" {
+		// Rétrocompatibilité : anciens tokens sans rôle → merchant
+		role = "merchant"
+		logger.Debug().
+			Str("role", role).
+			Msg("Role not found in refresh token, using default 'merchant'")
+	}
+
 	// Masque les données sensibles pour les logs suivants
 	maskedUserID := maskUserID(sub)
 	maskedJTI := maskJTI(jti)
@@ -106,6 +118,7 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	logger.Debug().
 		Str("user_id", maskedUserID).
 		Str("jti", maskedJTI).
+		Str("role", role). // 🆕 v4.0.0 : log du rôle
 		Msg("Token claims validated successfully")
 
 	// 5. Charge la session
@@ -156,7 +169,6 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	if err := uc.repo.Revoke(jti); err != nil {
 		logger.Error().
 			Err(err).
-			Stack().
 			Msg("Failed to revoke refresh token")
 		return "", "", utils.ErrInternalServer
 	}
@@ -184,30 +196,33 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	if err := uc.repo.Create(newSession); err != nil {
 		logger.Error().
 			Err(err).
-			Stack().
 			Msg("Failed to create new refresh session")
 		return "", "", utils.ErrInternalServer
 	}
 
 	logger.Debug().Msg("New refresh session created successfully")
 
-	// 9. Génère les tokens
-	logger.Debug().Msg("Generating new access token")
-	access, err := uc.generateAccess(sub)
+	// ============================================================
+	// 🆕 v4.0.0 : Génère les tokens avec le rôle
+	// ============================================================
+	logger.Debug().
+		Str("role", role).
+		Msg("Generating new access token")
+	access, err := uc.generateAccess(sub, role) // 🆕 v4.0.0 : avec rôle
 	if err != nil {
 		logger.Error().
 			Err(err).
-			Stack().
 			Msg("Failed to generate access token")
 		return "", "", utils.ErrInternalServer
 	}
 
-	logger.Debug().Msg("Generating new refresh token")
-	refresh, err := uc.generateRefresh(sub, newJti)
+	logger.Debug().
+		Str("role", role).
+		Msg("Generating new refresh token")
+	refresh, err := uc.generateRefresh(sub, newJti, role) // 🆕 v4.0.0 : avec rôle
 	if err != nil {
 		logger.Error().
 			Err(err).
-			Stack().
 			Msg("Failed to generate refresh token")
 		return "", "", utils.ErrInternalServer
 	}
@@ -215,6 +230,7 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	logger.Info().
 		Str("old_jti", maskedJTI).
 		Str("new_jti", maskedNewJTI).
+		Str("role", role). // 🆕 v4.0.0 : log du rôle
 		Dur("duration_ms", time.Since(start)).
 		Int("access_token_length", len(access)).
 		Int("refresh_token_length", len(refresh)).

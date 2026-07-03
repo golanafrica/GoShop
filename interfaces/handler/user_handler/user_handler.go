@@ -129,13 +129,17 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 // LOGIN
 // -----------------------
 
+// -----------------------
+// LOGIN
+// -----------------------
+
 // @Summary User Login
-// @Description Authenticate user and return JWT token
+// @Description Authenticate user and return JWT tokens (access + refresh)
 // @Tags Authentication
 // @Accept json
 // @Produce json
 // @Param request body userdto.LoginRequest true "Login credentials"
-// @Success 200 {object} map[string]string "{'token': 'jwt_token'}"
+// @Success 200 {object} map[string]string "{'access_token': 'jwt', 'refresh_token': 'jwt', 'role': 'merchant'}"
 // @Failure 400 {object} utils.AppError "Invalid request payload"
 // @Failure 401 {object} utils.AppError "Invalid credentials"
 // @Failure 500 {object} utils.AppError "Internal server error"
@@ -143,7 +147,6 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
-	//logger := setupLogging.FromContext(ctx).WithOperation("login")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Msg("🔐 Tentative de connexion")
@@ -186,7 +189,10 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 
 	logger.Info().Str("user_email", req.Email).Msg("🔑 Authentification en cours")
 
-	token, err := h.loginUc.Execute(ctx, req.Email, req.Password)
+	// ============================================================
+	// 🆕 v4.0.0 : Execute retourne maintenant 3 valeurs
+	// ============================================================
+	accessToken, refreshToken, err := h.loginUc.Execute(ctx, req.Email, req.Password)
 	if err != nil {
 		logger.Warn().
 			Err(err).
@@ -198,11 +204,28 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 
 	logger.Info().
 		Str("user_email", req.Email).
-		Int("token_length", len(token)).
-		Msg("✅ Connexion réussie, token généré")
+		Int("access_token_length", len(accessToken)).
+		Int("refresh_token_length", len(refreshToken)).
+		Msg("✅ Connexion réussie, tokens générés")
 
-	utils.WriteJSON(w, http.StatusOK, map[string]string{
-		"token": token,
+	// ============================================================
+	// 🆕 v4.0.0 : Retourner les 2 tokens + extraire le rôle
+	// ============================================================
+	// Extraire le rôle depuis l'access token pour le retourner au client
+	role := "merchant" // Valeur par défaut
+	if claims, err := utils.ValidateToken(accessToken); err == nil {
+		if r, ok := claims["role"].(string); ok && r != "" {
+			role = r
+		}
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"token":         accessToken, // 🔄 Rétrocompatibilité (ancien nom)
+		"role":          role,        // 🆕 v4.0.0 : Rôle pour le frontend
+		"token_type":    "Bearer",
+		"expires_in":    900, // 15 minutes en secondes
 	})
 	return nil
 }

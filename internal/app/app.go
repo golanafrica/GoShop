@@ -183,7 +183,7 @@ func (a *App) setupRouter() {
 	// 🆕 v3.2.0 : Repository Commission Rates
 	rateRepo := commissionrate.NewCommissionRateRepositoryPostgres(a.DB)
 
-	a.Logger.Info().Msg("✅ v3.4.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate)")
+	a.Logger.Info().Msg("✅ v4.0.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -611,7 +611,7 @@ func (a *App) setupRouter() {
 		creditSched, // 🆕 v3.4.0
 	)
 
-	a.Logger.Info().Msg("✅ v3.4.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate)")
+	a.Logger.Info().Msg("✅ v4.0.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -740,27 +740,33 @@ func (a *App) setupRouter() {
 			})
 		})
 
-		// ============ 🆕 v3.1.0 : ADMIN SCHEDULER ROUTES ============
+		// ============================================================
+		// 🆕 v4.0.0 : ADMIN ROUTES - PROTÉGÉES PAR RBAC
+		// ============================================================
+
+		// ============ ADMIN SCHEDULER ROUTES (super_admin + admin uniquement) ============
 		r.Route("/admin/scheduler", func(r chi.Router) {
 			r.Use(middleware.AuthMiddleware)
+			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
 			r.Post("/trigger", middl.ErrorHandler(schedulerHandler.TriggerManualCollection))
 			r.Get("/batches", middl.ErrorHandler(schedulerHandler.GetRecentBatches))
 			r.Get("/batches/{id}", middl.ErrorHandler(schedulerHandler.GetBatchDetails))
 			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
 		})
 
-		// ============ 🆕 v3.3.0 : COMMISSION RATES ROUTES ============
+		// ============ COMMISSION RATES ROUTES (super_admin + admin uniquement) ============
 		r.Route("/admin/commission-rates", func(r chi.Router) {
 			r.Use(middleware.AuthMiddleware)
+			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
 			r.Put("/", middl.ErrorHandler(commissionRateHandler.UpdateRate))
 			r.Get("/", middl.ErrorHandler(commissionRateHandler.GetRates))
 			r.Post("/trigger-online", middl.ErrorHandler(commissionRateHandler.TriggerOnlineCollection))
-			r.Post("/trigger-tontine", middl.ErrorHandler(commissionRateHandler.TriggerTontineCollection)) // 🆕 v3.3.0
-			r.Post("/trigger-credit", middl.ErrorHandler(commissionRateHandler.TriggerCreditCollection))   // 🆕 v3.4.0
+			r.Post("/trigger-tontine", middl.ErrorHandler(commissionRateHandler.TriggerTontineCollection))
+			r.Post("/trigger-credit", middl.ErrorHandler(commissionRateHandler.TriggerCreditCollection))
 		})
 	})
 
-	// ============ 🆕 v3.4.0 : INITIALISATION DU CRON SCHEDULER ============
+	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
 	cronSchedule := os.Getenv("COMMISSION_SCHEDULE")
 	if cronSchedule == "" {
 		cronSchedule = "0 2 * * *" // Défaut : 2h du matin
@@ -776,7 +782,7 @@ func (a *App) setupRouter() {
 		tontineSchedule = "*/30 * * * *" // Défaut : toutes les 30 min
 	}
 
-	creditSchedule := os.Getenv("CREDIT_SCHEDULE") // 🆕 v3.4.0
+	creditSchedule := os.Getenv("CREDIT_SCHEDULE")
 	if creditSchedule == "" {
 		creditSchedule = "0 3 * * *" // Défaut : 3h du matin
 	}
@@ -785,12 +791,12 @@ func (a *App) setupRouter() {
 		commissionSched,
 		onlinePaymentSched,
 		tontineSched,
-		creditSched, // 🆕 v3.4.0
+		creditSched,
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
 		tontineSchedule,
-		creditSchedule, // 🆕 v3.4.0
+		creditSchedule,
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -800,8 +806,8 @@ func (a *App) setupRouter() {
 			Str("cod_schedule", cronSchedule).
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
-			Str("credit_schedule", creditSchedule). // 🆕 v3.4.0
-			Msg("✅ v3.4.0 Commission schedulers started")
+			Str("credit_schedule", creditSchedule).
+			Msg("✅ v4.0.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -809,7 +815,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v3.4.0: + credit_scheduler)")
+		Msg("✅ Router configuré avec succès (v4.0.0: + RBAC protection)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -876,7 +882,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "3.4.0",
+		Version:     "4.0.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

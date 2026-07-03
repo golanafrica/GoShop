@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"Goshop/application/metrics" // ← AJOUTÉ
+	"Goshop/application/metrics"
 	"Goshop/config/setupLogging"
 
 	"github.com/rs/zerolog"
@@ -16,21 +16,31 @@ import (
 	"Goshop/interfaces/utils"
 )
 
+// ============================================================
+// 🆕 v4.0.0 : Types des générateurs de token mis à jour
+// ============================================================
+
+type generateAccessFunc func(userID, role string) (string, error)
+type generateRefreshFunc func(userID, jti, role string) (string, error)
+
 type LoginUsecase struct {
-	repo          userrepository.UserRepository
-	generateToken func(string) (string, error)
-	//logger        *setupLogging.Logger
+	repo            userrepository.UserRepository
+	generateAccess  generateAccessFunc
+	generateRefresh generateRefreshFunc
 }
 
 func NewLoginUsecase(repo userrepository.UserRepository, logger *setupLogging.Logger) *LoginUsecase {
 	return &LoginUsecase{
-		repo:          repo,
-		generateToken: utils.GenerateAccessToken,
-		//logger:        logger.WithComponent("login_usecase"),
+		repo:            repo,
+		generateAccess:  utils.GenerateAccessToken,  // 🆕 v4.0.0
+		generateRefresh: utils.GenerateRefreshToken, // 🆕 v4.0.0
 	}
 }
 
-// Helper local (inchangé)
+// ============================================================
+// HELPERS
+// ============================================================
+
 func maskEmails(e string) string {
 	if e == "" {
 		return ""
@@ -54,7 +64,11 @@ func maskUsersID(id string) string {
 	return id[:4] + "..." + id[len(id)-4:]
 }
 
-func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (string, error) {
+// ============================================================
+// EXECUTE - Retourne maintenant (accessToken, refreshToken, error)
+// ============================================================
+
+func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (string, string, error) {
 	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
@@ -80,10 +94,8 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 				Dur("duration_ms", time.Since(start)).
 				Msg("❌ Utilisateur non trouvé")
 
-			// ✅ Incrémenter métrique d'échec
 			metrics.AuthLoginFailedTotal.Inc()
-
-			return "", utils.ErrInvalidCredentials
+			return "", "", utils.ErrInvalidCredentials
 		}
 
 		logger.Error().
@@ -95,10 +107,8 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 			Dur("duration_ms", time.Since(start)).
 			Msg("❌ Erreur base de données lors de la recherche utilisateur")
 
-		// ✅ Incrémenter métrique d'échec (erreur système)
 		metrics.AuthLoginFailedTotal.Inc()
-
-		return "", utils.ErrInternalServer
+		return "", "", utils.ErrInternalServer
 	}
 
 	maskedUserID := maskUsersID(user.ID)
@@ -108,6 +118,38 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 		Str("user_id", maskedUserID).
 		Dur("find_user_duration_ms", time.Since(start)).
 		Msg("✅ Utilisateur trouvé en base")
+
+	// ============================================================
+	// 🆕 v4.0.0 : Vérification du statut utilisateur
+	// ============================================================
+	if err := user.CanLogin(); err != nil {
+		logger.Warn().
+			Str("operation", "login").
+			Str("email", maskedEmail).
+			Str("user_id", maskedUserID).
+			Str("status", user.Status).
+			Str("error_type", "account_not_allowed").
+			Msg("❌ Compte non autorisé à se connecter")
+
+		metrics.AuthLoginFailedTotal.Inc()
+		return "", "", utils.ErrInvalidCredentials
+	}
+
+	// ============================================================
+	// 🆕 v4.0.0 : Vérification du verrouillage
+	// ============================================================
+	if user.IsLocked() {
+		logger.Warn().
+			Str("operation", "login").
+			Str("email", maskedEmail).
+			Str("user_id", maskedUserID).
+			Str("error_type", "account_locked").
+			Time("locked_until", *user.LockedUntil).
+			Msg("❌ Compte temporairement verrouillé")
+
+		metrics.AuthLoginFailedTotal.Inc()
+		return "", "", utils.ErrInvalidCredentials
+	}
 
 	// 2. Vérification du mot de passe
 	passwordStart := time.Now()
@@ -127,10 +169,12 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 			Dur("total_duration_ms", time.Since(start)).
 			Msg("❌ Mot de passe incorrect")
 
-		// ✅ Incrémenter métrique d'échec
-		metrics.AuthLoginFailedTotal.Inc()
+		// 🆕 v4.0.0 : Enregistrer la tentative échouée
+		user.RecordFailedLogin()
+		// TODO: Sauvegarder en DB via repo.RecordFailedLogin()
 
-		return "", utils.ErrInvalidCredentials
+		metrics.AuthLoginFailedTotal.Inc()
+		return "", "", utils.ErrInvalidCredentials
 	}
 
 	logger.Debug().
@@ -140,15 +184,26 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 		Dur("password_check_duration_ms", time.Since(passwordStart)).
 		Msg("✅ Mot de passe validé")
 
-	// 3. Génération du token
+	// ============================================================
+	// 🆕 v4.0.0 : Enregistrer la connexion réussie
+	// ============================================================
+	user.RecordSuccessfulLogin()
+	// TODO: Sauvegarder en DB via repo.UpdateLastLogin()
+
+	// 3. Génération du refresh token (JTI)
 	tokenStart := time.Now()
 	logger.Debug().
 		Str("operation", "login").
 		Str("email", maskedEmail).
 		Str("user_id", maskedUserID).
-		Msg("🔄 Génération token JWT")
+		Str("role", user.Role).
+		Msg("🔄 Génération tokens JWT")
 
-	token, err := uc.generateToken(user.ID)
+	// 🆕 v4.0.0 : Générer un JTI pour le refresh token
+	jti := utils.GenerateUUID()
+
+	// 🆕 v4.0.0 : Passer le rôle aux générateurs de token
+	accessToken, err := uc.generateAccess(user.ID, user.Role)
 	if err != nil {
 		logger.Error().
 			Err(err).
@@ -158,25 +213,40 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 			Str("error_type", "token_generation_error").
 			Dur("token_gen_duration_ms", time.Since(tokenStart)).
 			Dur("total_duration_ms", time.Since(start)).
-			Msg("❌ Erreur génération token")
+			Msg("❌ Erreur génération access token")
 
-		// ✅ Incrémenter métrique d'échec (erreur système)
 		metrics.AuthLoginFailedTotal.Inc()
+		return "", "", utils.ErrInternalServer
+	}
 
-		return "", utils.ErrInternalServer
+	refreshToken, err := uc.generateRefresh(user.ID, jti, user.Role)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Str("operation", "login").
+			Str("email", maskedEmail).
+			Str("user_id", maskedUserID).
+			Str("error_type", "refresh_token_generation_error").
+			Dur("token_gen_duration_ms", time.Since(tokenStart)).
+			Dur("total_duration_ms", time.Since(start)).
+			Msg("❌ Erreur génération refresh token")
+
+		metrics.AuthLoginFailedTotal.Inc()
+		return "", "", utils.ErrInternalServer
 	}
 
 	logger.Info().
 		Str("operation", "login").
 		Str("email", maskedEmail).
 		Str("user_id", maskedUserID).
-		Int("token_length", len(token)).
+		Str("role", user.Role).
+		Int("access_token_length", len(accessToken)).
+		Int("refresh_token_length", len(refreshToken)).
 		Dur("token_gen_duration_ms", time.Since(tokenStart)).
 		Dur("total_duration_ms", time.Since(start)).
-		Msg("✅ Authentification réussie, token généré")
+		Msg("✅ Authentification réussie, tokens générés")
 
-	// ✅ Incrémenter métrique de succès
 	metrics.AuthLoginTotal.Inc()
 
-	return token, nil
+	return accessToken, refreshToken, nil
 }
