@@ -367,18 +367,31 @@ func parseIP(remoteAddr string) string {
 }
 
 // handleShopError convertit les erreurs usecase en AppError HTTP
+// 🆕 v4.2.1 : Support erreurs string (validation raison)
 func handleShopError(err error) error {
+	errMsg := err.Error()
+
 	switch {
+	// Erreurs typées (entity)
 	case errors.Is(err, entity.ErrShopAlreadySuspended):
-		return utils.NewAppError("SHOP_ALREADY_SUSPENDED", err.Error(), http.StatusConflict)
+		return utils.NewAppError("SHOP_ALREADY_SUSPENDED", errMsg, http.StatusConflict)
 	case errors.Is(err, entity.ErrShopNotSuspended):
-		return utils.NewAppError("SHOP_NOT_SUSPENDED", err.Error(), http.StatusConflict)
+		return utils.NewAppError("SHOP_NOT_SUSPENDED", errMsg, http.StatusConflict)
 	case errors.Is(err, entity.ErrSuspensionReasonRequired):
-		return utils.NewAppError("REASON_REQUIRED", err.Error(), http.StatusBadRequest)
-	case err.Error() == "shop not found":
-		return utils.NewAppError("SHOP_NOT_FOUND", err.Error(), http.StatusNotFound)
-	case err.Error() == "invalid shop_id format":
-		return utils.NewAppError("INVALID_SHOP_ID", err.Error(), http.StatusBadRequest)
+		return utils.NewAppError("REASON_REQUIRED", errMsg, http.StatusBadRequest)
+
+	// 🆕 v4.2.1 : Erreurs string (validation)
+	case errMsg == "shop not found":
+		return utils.NewAppError("SHOP_NOT_FOUND", errMsg, http.StatusNotFound)
+	case errMsg == "invalid shop_id format":
+		return utils.NewAppError("INVALID_SHOP_ID", errMsg, http.StatusBadRequest)
+	case errMsg == "reason is required":
+		return utils.NewAppError("REASON_REQUIRED", errMsg, http.StatusBadRequest)
+	case strings.HasPrefix(errMsg, "reason must be at least"):
+		return utils.NewAppError("REASON_TOO_SHORT", errMsg, http.StatusBadRequest)
+	case strings.HasPrefix(errMsg, "reason must be at most"):
+		return utils.NewAppError("REASON_TOO_LONG", errMsg, http.StatusBadRequest)
+
 	default:
 		return err
 	}
