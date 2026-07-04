@@ -43,6 +43,21 @@ func (m *MockShopRepository) EXPECT() *MockShopRepositoryMockRecorder {
 	return m.recorder
 }
 
+// CountByKYCStatus mocks base method.
+func (m *MockShopRepository) CountByKYCStatus(ctx context.Context) (map[entity.ShopKYCStatus]int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountByKYCStatus", ctx)
+	ret0, _ := ret[0].(map[entity.ShopKYCStatus]int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountByKYCStatus indicates an expected call of CountByKYCStatus.
+func (mr *MockShopRepositoryMockRecorder) CountByKYCStatus(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountByKYCStatus", reflect.TypeOf((*MockShopRepository)(nil).CountByKYCStatus), ctx)
+}
+
 // Create mocks base method.
 func (m *MockShopRepository) Create(ctx context.Context, shop *entity.Shop) error {
 	m.ctrl.T.Helper()
@@ -69,6 +84,22 @@ func (m *MockShopRepository) Deactivate(ctx context.Context, id uuid.UUID) error
 func (mr *MockShopRepositoryMockRecorder) Deactivate(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Deactivate", reflect.TypeOf((*MockShopRepository)(nil).Deactivate), ctx, id)
+}
+
+// FindAllShopsAdmin mocks base method.
+func (m *MockShopRepository) FindAllShopsAdmin(ctx context.Context, limit, offset int, filters *repository.ShopAdminFilters) ([]*entity.Shop, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindAllShopsAdmin", ctx, limit, offset, filters)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// FindAllShopsAdmin indicates an expected call of FindAllShopsAdmin.
+func (mr *MockShopRepositoryMockRecorder) FindAllShopsAdmin(ctx, limit, offset, filters any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAllShopsAdmin", reflect.TypeOf((*MockShopRepository)(nil).FindAllShopsAdmin), ctx, limit, offset, filters)
 }
 
 // FindByCustomDomain mocks base method.
@@ -99,6 +130,21 @@ func (m *MockShopRepository) FindByID(ctx context.Context, id uuid.UUID) (*entit
 func (mr *MockShopRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockShopRepository)(nil).FindByID), ctx, id)
+}
+
+// FindByKYCStatus mocks base method.
+func (m *MockShopRepository) FindByKYCStatus(ctx context.Context, status entity.ShopKYCStatus, limit, offset int) ([]*entity.Shop, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByKYCStatus", ctx, status, limit, offset)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByKYCStatus indicates an expected call of FindByKYCStatus.
+func (mr *MockShopRepositoryMockRecorder) FindByKYCStatus(ctx, status, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByKYCStatus", reflect.TypeOf((*MockShopRepository)(nil).FindByKYCStatus), ctx, status, limit, offset)
 }
 
 // FindByOwnerID mocks base method.
@@ -173,6 +219,48 @@ func (m *MockShopRepository) Update(ctx context.Context, shop *entity.Shop) erro
 func (mr *MockShopRepositoryMockRecorder) Update(ctx, shop any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockShopRepository)(nil).Update), ctx, shop)
+}
+
+// UpdateKYCStatus mocks base method.
+func (m *MockShopRepository) UpdateKYCStatus(ctx context.Context, shopID uuid.UUID, status entity.ShopKYCStatus, adminID string, rejectionReason *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateKYCStatus", ctx, shopID, status, adminID, rejectionReason)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateKYCStatus indicates an expected call of UpdateKYCStatus.
+func (mr *MockShopRepositoryMockRecorder) UpdateKYCStatus(ctx, shopID, status, adminID, rejectionReason any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateKYCStatus", reflect.TypeOf((*MockShopRepository)(nil).UpdateKYCStatus), ctx, shopID, status, adminID, rejectionReason)
+}
+
+// UpdateShopPlan mocks base method.
+func (m *MockShopRepository) UpdateShopPlan(ctx context.Context, shopID uuid.UUID, plan entity.ShopPlan, adminID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateShopPlan", ctx, shopID, plan, adminID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateShopPlan indicates an expected call of UpdateShopPlan.
+func (mr *MockShopRepositoryMockRecorder) UpdateShopPlan(ctx, shopID, plan, adminID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateShopPlan", reflect.TypeOf((*MockShopRepository)(nil).UpdateShopPlan), ctx, shopID, plan, adminID)
+}
+
+// UpdateShopStatus mocks base method.
+func (m *MockShopRepository) UpdateShopStatus(ctx context.Context, shopID uuid.UUID, isActive bool, adminID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateShopStatus", ctx, shopID, isActive, adminID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateShopStatus indicates an expected call of UpdateShopStatus.
+func (mr *MockShopRepositoryMockRecorder) UpdateShopStatus(ctx, shopID, isActive, adminID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateShopStatus", reflect.TypeOf((*MockShopRepository)(nil).UpdateShopStatus), ctx, shopID, isActive, adminID)
 }
 
 // UpsertPaymentSettings mocks base method.

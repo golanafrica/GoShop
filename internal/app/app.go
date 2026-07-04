@@ -26,6 +26,9 @@ import (
 	creditusecase "Goshop/application/usecase/credit_usecase"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
 
+	// 🆕 v4.1.0 : Merchant KYC Usecases
+	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -80,6 +83,9 @@ import (
 
 	// 🆕 v3.1.0 : Scheduler Handler
 	schedulerhandler "Goshop/interfaces/handler/scheduler_handler"
+
+	// 🆕 v4.1.0 : Merchant KYC Handler
+	merchantkyhandler "Goshop/interfaces/handler/merchant_kyc_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -153,7 +159,7 @@ func (a *App) setupRouter() {
 	tontinePaymentRepo := tontine.NewTontinePaymentRepositoryInfrastructure(a.DB)
 	tontineVoucherRepo := tontine.NewTontineVoucherRepositoryInfrastructure(a.DB)
 
-	// 🆕 v2.9.0 : Repository KYC
+	// 🆕 v2.9.0 : Repository KYC Client
 	kycDocRepo := customer.NewCustomerKYCRepositoryInfrastructure(a.DB)
 
 	// 🆕 v3.0.0 : Repositories Credit
@@ -183,7 +189,10 @@ func (a *App) setupRouter() {
 	// 🆕 v3.2.0 : Repository Commission Rates
 	rateRepo := commissionrate.NewCommissionRateRepositoryPostgres(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.0.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate)")
+	// 🆕 v4.1.0 : Repository Shop KYC Documents (KYC Marchand)
+	shopKYCDocRepo := shop.NewShopKYCDocumentRepositoryInfrastructure(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.1.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -359,7 +368,7 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments)")
 
-	// ============ 🆕 v2.9.0 : KYC USECASES ============
+	// ============ 🆕 v2.9.0 : KYC USECASES (Client) ============
 	uploadKYCUC := customerusecase.NewUploadKYCDocumentUsecase(
 		kycDocRepo,
 		postgresCustomerRepo,
@@ -384,6 +393,29 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ KYC usecases initialized (upload, get_status, review, list_pending)")
+
+	// ============ 🆕 v4.1.0 : MERCHANT KYC USECASES ============
+	submitMerchantKYCUC := merchantkycusecase.NewSubmitMerchantKYCUsecase(
+		shopRepo,
+		shopKYCDocRepo,
+	)
+
+	reviewMerchantKYCUC := merchantkycusecase.NewReviewMerchantKYCUsecase(
+		shopRepo,
+		shopKYCDocRepo,
+	)
+
+	listPendingMerchantKYCUC := merchantkycusecase.NewListPendingMerchantKYCUsecase(
+		shopRepo,
+		shopKYCDocRepo,
+	)
+
+	getMerchantKYCStatusUC := merchantkycusecase.NewGetMerchantKYCStatusUsecase(
+		shopRepo,
+		shopKYCDocRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.1.0 Merchant KYC usecases initialized (submit, review, list_pending, get_status)")
 
 	// ============ 🆕 v3.0.0 : WALLET USECASES ============
 	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
@@ -564,7 +596,7 @@ func (a *App) setupRouter() {
 		listCustomerPaymentsUC,
 	)
 
-	// 🆕 v2.9.0 : KYC Handler
+	// 🆕 v2.9.0 : KYC Handler (Client)
 	kycHandler := customerhandler.NewKYCHandler(
 		uploadKYCUC,
 		getKYCStatusUC,
@@ -611,7 +643,15 @@ func (a *App) setupRouter() {
 		creditSched, // 🆕 v3.4.0
 	)
 
-	a.Logger.Info().Msg("✅ v4.0.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate)")
+	// ============ 🆕 v4.1.0 : MERCHANT KYC HANDLER ============
+	merchantKYCHandler := merchantkyhandler.NewMerchantKYCHandler(
+		submitMerchantKYCUC,
+		reviewMerchantKYCUC,
+		listPendingMerchantKYCUC,
+		getMerchantKYCStatusUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.1.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -669,7 +709,7 @@ func (a *App) setupRouter() {
 				r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
 			})
 
-			// Customers (existants + 🆕 KYC)
+			// Customers (existants + 🆕 KYC Client)
 			r.Route("/customers", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
 				r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
@@ -703,7 +743,7 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment))
 			})
 
-			// Withdrawals (cash-out)
+			// Withdrawals (cash-out) - 🆕 v4.1.0 : KYC vérification ajoutée dans usecase
 			r.Route("/withdrawals", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(withdrawalHandler.CreateWithdrawal))
 				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
@@ -718,10 +758,16 @@ func (a *App) setupRouter() {
 				r.Get("/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
 			})
 
-			// 🆕 v2.9.0 : Merchant KYC routes (côté marchand)
+			// 🆕 v2.9.0 : Merchant KYC routes (côté marchand - revue par le marchand)
 			r.Route("/merchant/kyc", func(r chi.Router) {
 				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
 				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
+			})
+
+			// ============ 🆕 v4.1.0 : MERCHANT KYC ROUTES (KYC Marchand) ============
+			// Le marchand soumet ses documents KYC et consulte son statut
+			r.Route("/merchant-kyc", func(r chi.Router) {
+				merchantKYCHandler.RegisterMerchantRoutes(r)
 			})
 
 			// ============ 🆕 v3.0.0 : WALLET ROUTES ============
@@ -763,6 +809,14 @@ func (a *App) setupRouter() {
 			r.Post("/trigger-online", middl.ErrorHandler(commissionRateHandler.TriggerOnlineCollection))
 			r.Post("/trigger-tontine", middl.ErrorHandler(commissionRateHandler.TriggerTontineCollection))
 			r.Post("/trigger-credit", middl.ErrorHandler(commissionRateHandler.TriggerCreditCollection))
+		})
+
+		// ============ 🆕 v4.1.0 : ADMIN MERCHANT KYC ROUTES (super_admin + admin uniquement) ============
+		// L'admin liste les shops en attente et approuve/rejette leur KYC
+		r.Route("/admin/merchant-kyc", func(r chi.Router) {
+			r.Use(middleware.AuthMiddleware)
+			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.1.0 : Protection RBAC
+			merchantKYCHandler.RegisterAdminRoutes(r)
 		})
 	})
 
@@ -807,7 +861,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.0.0 Commission schedulers started")
+			Msg("✅ v4.1.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -815,7 +869,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.0.0: + RBAC protection)")
+		Msg("✅ Router configuré avec succès (v4.1.0: + Merchant KYC workflow)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -882,7 +936,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.0.0",
+		Version:     "4.1.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

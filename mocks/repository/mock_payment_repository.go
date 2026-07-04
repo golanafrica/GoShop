@@ -117,6 +117,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindByShop(ctx, shopID, filters any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShop", reflect.TypeOf((*MockPaymentRepository)(nil).FindByShop), ctx, shopID, filters)
 }
 
+// FindCompletedWithoutCommission mocks base method.
+func (m *MockPaymentRepository) FindCompletedWithoutCommission(ctx context.Context, limit int) ([]*entity.Payment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindCompletedWithoutCommission", ctx, limit)
+	ret0, _ := ret[0].([]*entity.Payment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindCompletedWithoutCommission indicates an expected call of FindCompletedWithoutCommission.
+func (mr *MockPaymentRepositoryMockRecorder) FindCompletedWithoutCommission(ctx, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompletedWithoutCommission", reflect.TypeOf((*MockPaymentRepository)(nil).FindCompletedWithoutCommission), ctx, limit)
+}
+
 // Update mocks base method.
 func (m *MockPaymentRepository) Update(ctx context.Context, payment *entity.Payment) error {
 	m.ctrl.T.Helper()
@@ -129,6 +144,20 @@ func (m *MockPaymentRepository) Update(ctx context.Context, payment *entity.Paym
 func (mr *MockPaymentRepositoryMockRecorder) Update(ctx, payment any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockPaymentRepository)(nil).Update), ctx, payment)
+}
+
+// UpdateCommissionStatus mocks base method.
+func (m *MockPaymentRepository) UpdateCommissionStatus(ctx context.Context, paymentID, status string, commissionCents int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateCommissionStatus", ctx, paymentID, status, commissionCents)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateCommissionStatus indicates an expected call of UpdateCommissionStatus.
+func (mr *MockPaymentRepositoryMockRecorder) UpdateCommissionStatus(ctx, paymentID, status, commissionCents any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCommissionStatus", reflect.TypeOf((*MockPaymentRepository)(nil).UpdateCommissionStatus), ctx, paymentID, status, commissionCents)
 }
 
 // WithTX mocks base method.

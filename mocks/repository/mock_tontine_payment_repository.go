@@ -161,6 +161,21 @@ func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferencePrefix(ctx, r
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferencePrefix", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferencePrefix), ctx, referencePrefix)
 }
 
+// FindDoneWithoutCommission mocks base method.
+func (m *MockTontinePaymentRepository) FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindDoneWithoutCommission", ctx, limit)
+	ret0, _ := ret[0].([]*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindDoneWithoutCommission indicates an expected call of FindDoneWithoutCommission.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindDoneWithoutCommission(ctx, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDoneWithoutCommission", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindDoneWithoutCommission), ctx, limit)
+}
+
 // MarkDone mocks base method.
 func (m *MockTontinePaymentRepository) MarkDone(ctx context.Context, paymentID, transactionID string) error {
 	m.ctrl.T.Helper()
@@ -187,6 +202,20 @@ func (m *MockTontinePaymentRepository) UpdateStatus(ctx context.Context, payment
 func (mr *MockTontinePaymentRepositoryMockRecorder) UpdateStatus(ctx, paymentID, status any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStatus", reflect.TypeOf((*MockTontinePaymentRepository)(nil).UpdateStatus), ctx, paymentID, status)
+}
+
+// UpdateTontineCommissionStatus mocks base method.
+func (m *MockTontinePaymentRepository) UpdateTontineCommissionStatus(ctx context.Context, paymentID, status string, batchID *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateTontineCommissionStatus", ctx, paymentID, status, batchID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateTontineCommissionStatus indicates an expected call of UpdateTontineCommissionStatus.
+func (mr *MockTontinePaymentRepositoryMockRecorder) UpdateTontineCommissionStatus(ctx, paymentID, status, batchID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateTontineCommissionStatus", reflect.TypeOf((*MockTontinePaymentRepository)(nil).UpdateTontineCommissionStatus), ctx, paymentID, status, batchID)
 }
 
 // WithTX mocks base method.

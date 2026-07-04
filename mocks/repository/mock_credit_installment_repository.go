@@ -160,6 +160,21 @@ func (mr *MockCreditInstallmentRepositoryMockRecorder) FindOverdueByContractID(c
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindOverdueByContractID", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).FindOverdueByContractID), ctx, contractID)
 }
 
+// FindPaidWithoutCommission mocks base method.
+func (m *MockCreditInstallmentRepository) FindPaidWithoutCommission(ctx context.Context, limit int) ([]*entity.CreditInstallment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPaidWithoutCommission", ctx, limit)
+	ret0, _ := ret[0].([]*entity.CreditInstallment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPaidWithoutCommission indicates an expected call of FindPaidWithoutCommission.
+func (mr *MockCreditInstallmentRepositoryMockRecorder) FindPaidWithoutCommission(ctx, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPaidWithoutCommission", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).FindPaidWithoutCommission), ctx, limit)
+}
+
 // FindPendingByContractID mocks base method.
 func (m *MockCreditInstallmentRepository) FindPendingByContractID(ctx context.Context, contractID string) ([]*entity.CreditInstallment, error) {
 	m.ctrl.T.Helper()
@@ -202,6 +217,20 @@ func (m *MockCreditInstallmentRepository) Update(ctx context.Context, installmen
 func (mr *MockCreditInstallmentRepositoryMockRecorder) Update(ctx, installment any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).Update), ctx, installment)
+}
+
+// UpdateCreditCommissionStatus mocks base method.
+func (m *MockCreditInstallmentRepository) UpdateCreditCommissionStatus(ctx context.Context, installmentID, status string, commissionCents int64, batchID *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateCreditCommissionStatus", ctx, installmentID, status, commissionCents, batchID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateCreditCommissionStatus indicates an expected call of UpdateCreditCommissionStatus.
+func (mr *MockCreditInstallmentRepositoryMockRecorder) UpdateCreditCommissionStatus(ctx, installmentID, status, commissionCents, batchID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCreditCommissionStatus", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).UpdateCreditCommissionStatus), ctx, installmentID, status, commissionCents, batchID)
 }
 
 // WithTX mocks base method.

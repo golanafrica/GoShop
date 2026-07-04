@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -47,10 +49,18 @@ func (r *ShopRepositoryInfrastructure) execContext(ctx context.Context, query st
 	return r.db.ExecContext(ctx, query, args...)
 }
 
+// ============================================================
+// CREATE
+// ============================================================
+
 func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.Shop) error {
 	query := `
-		INSERT INTO shops (id, name, slug, custom_domain, owner_id, logo_url, theme, plan, db_schema, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO shops (
+			id, name, slug, custom_domain, owner_id, logo_url, theme, plan, db_schema, is_active,
+			kyc_status, kyc_submissions_count,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING created_at, updated_at
 	`
 
@@ -70,6 +80,8 @@ func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.
 		shop.Plan,
 		shop.DBSchema,
 		shop.IsActive,
+		shop.KYCStatus,           // 🆕 v4.1.0
+		shop.KYCSubmissionsCount, // 🆕 v4.1.0
 		shop.CreatedAt,
 		shop.UpdatedAt,
 	).Scan(&shop.CreatedAt, &shop.UpdatedAt)
@@ -77,10 +89,17 @@ func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.
 	return err
 }
 
+// ============================================================
+// FIND METHODS
+// ============================================================
+
 func (r *ShopRepositoryInfrastructure) FindByID(ctx context.Context, id uuid.UUID) (*entity.Shop, error) {
 	query := `
 		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan, 
-		       db_schema, is_active, created_at, updated_at
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
 		FROM shops
 		WHERE id = $1
 	`
@@ -90,7 +109,10 @@ func (r *ShopRepositoryInfrastructure) FindByID(ctx context.Context, id uuid.UUI
 func (r *ShopRepositoryInfrastructure) FindBySlug(ctx context.Context, slug string) (*entity.Shop, error) {
 	query := `
 		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active, created_at, updated_at
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
 		FROM shops
 		WHERE slug = $1
 	`
@@ -100,7 +122,10 @@ func (r *ShopRepositoryInfrastructure) FindBySlug(ctx context.Context, slug stri
 func (r *ShopRepositoryInfrastructure) FindByCustomDomain(ctx context.Context, domain string) (*entity.Shop, error) {
 	query := `
 		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active, created_at, updated_at
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
 		FROM shops
 		WHERE custom_domain = $1
 	`
@@ -110,7 +135,10 @@ func (r *ShopRepositoryInfrastructure) FindByCustomDomain(ctx context.Context, d
 func (r *ShopRepositoryInfrastructure) FindByOwnerID(ctx context.Context, ownerID string) ([]*entity.Shop, error) {
 	query := `
 		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active, created_at, updated_at
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
 		FROM shops
 		WHERE owner_id = $1
 		ORDER BY created_at DESC
@@ -133,6 +161,10 @@ func (r *ShopRepositoryInfrastructure) FindByOwnerID(ctx context.Context, ownerI
 
 	return shops, rows.Err()
 }
+
+// ============================================================
+// UPDATE
+// ============================================================
 
 func (r *ShopRepositoryInfrastructure) Update(ctx context.Context, shop *entity.Shop) error {
 	query := `
@@ -169,10 +201,16 @@ func (r *ShopRepositoryInfrastructure) Deactivate(ctx context.Context, id uuid.U
 	return err
 }
 
+// ============================================================
+// SCAN HELPERS (mis à jour avec champs KYC)
+// ============================================================
+
 // scanShop scanne une ligne depuis sql.Row
 func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, error) {
 	shop := &entity.Shop{}
 	var themeJSON []byte
+	var kycSubmittedAt, kycVerifiedAt, kycLastSubmissionAt sql.NullTime
+	var kycVerifiedBy, kycRejectionReason sql.NullString
 
 	err := row.Scan(
 		&shop.ID,
@@ -185,6 +223,14 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 		&shop.Plan,
 		&shop.DBSchema,
 		&shop.IsActive,
+		// 🆕 v4.1.0 : Champs KYC
+		&shop.KYCStatus,
+		&kycSubmittedAt,
+		&kycVerifiedAt,
+		&kycVerifiedBy,
+		&kycRejectionReason,
+		&shop.KYCSubmissionsCount,
+		&kycLastSubmissionAt,
 		&shop.CreatedAt,
 		&shop.UpdatedAt,
 	)
@@ -194,6 +240,23 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Gestion des champs nullable
+	if kycSubmittedAt.Valid {
+		shop.KYCSubmittedAt = &kycSubmittedAt.Time
+	}
+	if kycVerifiedAt.Valid {
+		shop.KYCVerifiedAt = &kycVerifiedAt.Time
+	}
+	if kycVerifiedBy.Valid {
+		shop.KYCVerifiedBy = &kycVerifiedBy.String
+	}
+	if kycRejectionReason.Valid {
+		shop.KYCRejectionReason = &kycRejectionReason.String
+	}
+	if kycLastSubmissionAt.Valid {
+		shop.KYCLastSubmissionAt = &kycLastSubmissionAt.Time
 	}
 
 	if len(themeJSON) > 0 {
@@ -211,6 +274,8 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity.Shop, error) {
 	shop := &entity.Shop{}
 	var themeJSON []byte
+	var kycSubmittedAt, kycVerifiedAt, kycLastSubmissionAt sql.NullTime
+	var kycVerifiedBy, kycRejectionReason sql.NullString
 
 	err := rows.Scan(
 		&shop.ID,
@@ -223,12 +288,37 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 		&shop.Plan,
 		&shop.DBSchema,
 		&shop.IsActive,
+		// 🆕 v4.1.0 : Champs KYC
+		&shop.KYCStatus,
+		&kycSubmittedAt,
+		&kycVerifiedAt,
+		&kycVerifiedBy,
+		&kycRejectionReason,
+		&shop.KYCSubmissionsCount,
+		&kycLastSubmissionAt,
 		&shop.CreatedAt,
 		&shop.UpdatedAt,
 	)
 
 	if err != nil {
 		return nil, err
+	}
+
+	// Gestion des champs nullable
+	if kycSubmittedAt.Valid {
+		shop.KYCSubmittedAt = &kycSubmittedAt.Time
+	}
+	if kycVerifiedAt.Valid {
+		shop.KYCVerifiedAt = &kycVerifiedAt.Time
+	}
+	if kycVerifiedBy.Valid {
+		shop.KYCVerifiedBy = &kycVerifiedBy.String
+	}
+	if kycRejectionReason.Valid {
+		shop.KYCRejectionReason = &kycRejectionReason.String
+	}
+	if kycLastSubmissionAt.Valid {
+		shop.KYCLastSubmissionAt = &kycLastSubmissionAt.Time
 	}
 
 	if len(themeJSON) > 0 {
@@ -242,10 +332,11 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 	return shop, nil
 }
 
-// ============ CONFIG PAR BOUTIQUE (v2.9.0: + Cash COD + Tontine) ============
+// ============================================================
+// CONFIG PAR BOUTIQUE (v2.9.0: + Cash COD + Tontine)
+// ============================================================
 
 // GetPaymentSettings récupère les settings de paiement d'une boutique
-// 🆕 v2.9.0 : Inclut maintenant cash_on_delivery et tontine
 func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
 	query := `
 		SELECT 
@@ -284,7 +375,6 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 		&yengaWebhookSecret,
 		&yengaOperatorsJSON,
 		&settings.YengaPay.Env,
-		// 🆕 v2.9.0
 		&settings.CashOnDeliveryEnabled,
 		&settings.CashCommissionRate,
 		&settings.TontineEnabled,
@@ -292,7 +382,6 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 	)
 
 	if err == sql.ErrNoRows {
-		// Retourner des settings par défaut
 		return &entity.ShopPaymentSettings{
 			ShopID: shopID,
 			YengaPay: entity.YengaPayShopSettings{
@@ -301,9 +390,9 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 				Env:       "test",
 			},
 			CashOnDeliveryEnabled: false,
-			CashCommissionRate:    250, // 2.50%
+			CashCommissionRate:    250,
 			TontineEnabled:        false,
-			TontineCommissionRate: 250, // 2.50%
+			TontineCommissionRate: 250,
 		}, nil
 	}
 
@@ -337,7 +426,6 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 		}
 	}
 
-	// Parser les opérateurs JSON
 	if len(yengaOperatorsJSON) > 0 {
 		if err := json.Unmarshal(yengaOperatorsJSON, &settings.YengaPay.Operators); err != nil {
 			return nil, fmt.Errorf("parse yenga operators: %w", err)
@@ -348,9 +436,7 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 }
 
 // UpsertPaymentSettings crée ou met à jour les settings de paiement
-// 🆕 v2.9.0 : Inclut maintenant cash_on_delivery et tontine
 func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error {
-	// Chiffrer les clés API
 	yengaAPIKey, err := crypto.EncryptOrEmpty(settings.YengaPay.APIKey)
 	if err != nil {
 		return fmt.Errorf("encrypt yenga api key: %w", err)
@@ -368,7 +454,6 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 		return fmt.Errorf("encrypt yenga webhook secret: %w", err)
 	}
 
-	// Sérialiser les opérateurs en JSON
 	operatorsJSON, err := json.Marshal(settings.YengaPay.Operators)
 	if err != nil {
 		return fmt.Errorf("serialize yenga operators: %w", err)
@@ -413,7 +498,6 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 		yengaWebhookSecret,
 		operatorsJSON,
 		settings.YengaPay.Env,
-		// 🆕 v2.9.0
 		settings.CashOnDeliveryEnabled,
 		settings.CashCommissionRate,
 		settings.TontineEnabled,
@@ -441,4 +525,254 @@ func (r *ShopRepositoryInfrastructure) IsOwner(ctx context.Context, shopID uuid.
 	}
 
 	return ownerID == userID, nil
+}
+
+// ============================================================
+// 🆕 v4.1.0 : MÉTHODES KYC MARCHAND
+// ============================================================
+
+// FindByKYCStatus retourne les shops filtrés par statut KYC
+func (r *ShopRepositoryInfrastructure) FindByKYCStatus(
+	ctx context.Context,
+	status entity.ShopKYCStatus,
+	limit, offset int,
+) ([]*entity.Shop, error) {
+	query := `
+		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
+		FROM shops
+		WHERE kyc_status = $1
+		ORDER BY kyc_submitted_at DESC NULLS LAST, created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.queryContext(ctx, query, status, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("find by kyc status: %w", err)
+	}
+	defer rows.Close()
+
+	var shops []*entity.Shop
+	for rows.Next() {
+		shop, err := r.scanShopFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		shops = append(shops, shop)
+	}
+
+	return shops, rows.Err()
+}
+
+// CountByKYCStatus compte les shops par statut KYC
+func (r *ShopRepositoryInfrastructure) CountByKYCStatus(ctx context.Context) (map[entity.ShopKYCStatus]int, error) {
+	query := `
+		SELECT kyc_status, COUNT(*)
+		FROM shops
+		GROUP BY kyc_status
+	`
+
+	rows, err := r.queryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("count by kyc status: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[entity.ShopKYCStatus]int)
+	for rows.Next() {
+		var status entity.ShopKYCStatus
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+
+	return counts, rows.Err()
+}
+
+// UpdateKYCStatus met à jour le statut KYC d'un shop
+func (r *ShopRepositoryInfrastructure) UpdateKYCStatus(
+	ctx context.Context,
+	shopID uuid.UUID,
+	status entity.ShopKYCStatus,
+	adminID string,
+	rejectionReason *string,
+) error {
+	var query string
+	var args []interface{}
+
+	now := time.Now()
+
+	switch status {
+	case entity.ShopKYCStatusVerified:
+		query = `
+			UPDATE shops
+			SET kyc_status = $2,
+			    kyc_verified_at = $3,
+			    kyc_verified_by = $4,
+			    kyc_rejection_reason = NULL,
+			    updated_at = NOW()
+			WHERE id = $1
+		`
+		args = []interface{}{shopID, status, now, adminID}
+
+	case entity.ShopKYCStatusRejected:
+		query = `
+			UPDATE shops
+			SET kyc_status = $2,
+			    kyc_verified_by = $3,
+			    kyc_rejection_reason = $4,
+			    updated_at = NOW()
+			WHERE id = $1
+		`
+		args = []interface{}{shopID, status, adminID, rejectionReason}
+
+	case entity.ShopKYCStatusPending:
+		query = `
+			UPDATE shops
+			SET kyc_status = $2,
+			    kyc_submitted_at = $3,
+			    kyc_last_submission_at = $3,
+			    kyc_submissions_count = kyc_submissions_count + 1,
+			    kyc_rejection_reason = NULL,
+			    updated_at = NOW()
+			WHERE id = $1
+		`
+		args = []interface{}{shopID, status, now}
+
+	default:
+		query = `
+			UPDATE shops
+			SET kyc_status = $2,
+			    updated_at = NOW()
+			WHERE id = $1
+		`
+		args = []interface{}{shopID, status}
+	}
+
+	_, err := r.execContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("update kyc status: %w", err)
+	}
+
+	return nil
+}
+
+// FindAllShopsAdmin retourne tous les shops (cross-tenant) avec pagination et filtres
+func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
+	ctx context.Context,
+	limit, offset int,
+	filters *repository.ShopAdminFilters,
+) ([]*entity.Shop, int, error) {
+	whereClauses := []string{"1=1"}
+	args := []interface{}{}
+	argIndex := 1
+
+	if filters != nil {
+		if filters.KYCStatus != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("kyc_status = $%d", argIndex))
+			args = append(args, *filters.KYCStatus)
+			argIndex++
+		}
+		if filters.Plan != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("plan = $%d", argIndex))
+			args = append(args, *filters.Plan)
+			argIndex++
+		}
+		if filters.IsActive != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("is_active = $%d", argIndex))
+			args = append(args, *filters.IsActive)
+			argIndex++
+		}
+		if filters.Search != "" {
+			whereClauses = append(whereClauses, fmt.Sprintf("(name ILIKE $%d OR slug ILIKE $%d)", argIndex, argIndex))
+			args = append(args, "%"+filters.Search+"%")
+			argIndex++
+		}
+	}
+
+	whereClause := strings.Join(whereClauses, " AND ")
+
+	// Compter le total
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM shops WHERE %s", whereClause)
+	var total int
+	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count shops: %w", err)
+	}
+
+	// Récupérer les shops
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
+		       db_schema, is_active,
+		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+		       created_at, updated_at
+		FROM shops
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argIndex, argIndex+1)
+
+	rows, err := r.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("find all shops admin: %w", err)
+	}
+	defer rows.Close()
+
+	var shops []*entity.Shop
+	for rows.Next() {
+		shop, err := r.scanShopFromRows(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		shops = append(shops, shop)
+	}
+
+	return shops, total, rows.Err()
+}
+
+// UpdateShopStatus active ou désactive une boutique (admin)
+func (r *ShopRepositoryInfrastructure) UpdateShopStatus(
+	ctx context.Context,
+	shopID uuid.UUID,
+	isActive bool,
+	adminID string,
+) error {
+	query := `
+		UPDATE shops
+		SET is_active = $2,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.execContext(ctx, query, shopID, isActive)
+	if err != nil {
+		return fmt.Errorf("update shop status: %w", err)
+	}
+	return nil
+}
+
+// UpdateShopPlan change le plan d'abonnement (super_admin uniquement)
+func (r *ShopRepositoryInfrastructure) UpdateShopPlan(
+	ctx context.Context,
+	shopID uuid.UUID,
+	plan entity.ShopPlan,
+	adminID string,
+) error {
+	query := `
+		UPDATE shops
+		SET plan = $2,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.execContext(ctx, query, shopID, plan)
+	if err != nil {
+		return fmt.Errorf("update shop plan: %w", err)
+	}
+	return nil
 }

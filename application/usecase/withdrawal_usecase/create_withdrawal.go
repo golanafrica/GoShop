@@ -54,6 +54,48 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Str("payment_method", req.PaymentMethod).
 		Msg("Creating withdrawal")
 
+	// ============================================================
+	// 🆕 v4.1.0 : Vérification KYC pour les retraits
+	// ============================================================
+	// Règle : Un marchand doit avoir son KYC vérifié pour effectuer des retraits
+	// - unverified : ❌ Bloqué (doit soumettre documents)
+	// - pending    : ❌ Bloqué (en attente de vérification)
+	// - verified   : ✅ Autorisé
+	// - rejected   : ❌ Bloqué (doit re-soumettre)
+	// ============================================================
+	if !shop.CanWithdraw() {
+		logger.Warn().
+			Str("shop_id", shop.ID.String()).
+			Str("shop_name", shop.Name).
+			Str("kyc_status", string(shop.KYCStatus)).
+			Int64("amount_cents", req.AmountCents).
+			Msg("❌ Retrait bloqué : KYC non vérifié")
+
+		// Message d'erreur informatif pour le marchand
+		var message string
+		switch shop.KYCStatus {
+		case entity.ShopKYCStatusUnverified:
+			message = "Merchant KYC verification required for withdrawals. Please submit your identity document and business registry to unlock withdrawals."
+		case entity.ShopKYCStatusPending:
+			message = "Your KYC documents are currently under review. Withdrawals will be available once verification is complete."
+		case entity.ShopKYCStatusRejected:
+			if shop.KYCRejectionReason != nil {
+				message = fmt.Sprintf("Your KYC was rejected: %s. Please resubmit corrected documents.", *shop.KYCRejectionReason)
+			} else {
+				message = "Your KYC was rejected. Please resubmit corrected documents to unlock withdrawals."
+			}
+		default:
+			message = "Merchant KYC verification required for withdrawals."
+		}
+
+		return nil, fmt.Errorf("%s (current status: %s)", message, shop.KYCStatus)
+	}
+
+	logger.Debug().
+		Str("shop_id", shop.ID.String()).
+		Str("kyc_status", string(shop.KYCStatus)).
+		Msg("✅ KYC vérifié, retrait autorisé")
+
 	// 2. Créer l'entité Withdrawal
 	withdrawal, err := entity.NewWithdrawal(
 		shop.ID,
