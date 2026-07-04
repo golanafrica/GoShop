@@ -50,6 +50,21 @@ func (r *ShopRepositoryInfrastructure) execContext(ctx context.Context, query st
 }
 
 // ============================================================
+// 🆕 v4.2.0 : CONSTANTES SQL (évite duplication)
+// ============================================================
+
+// shopColumnsFull contient toutes les colonnes pour SELECT
+const shopColumnsFull = `
+	id, name, slug, custom_domain, owner_id, logo_url, theme, plan, db_schema, is_active,
+	kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
+	kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
+	suspended_at, suspended_by, suspension_reason,
+	health_score, health_level, health_updated_at,
+	admin_notes, last_reviewed_at, last_reviewed_by,
+	created_at, updated_at
+`
+
+// ============================================================
 // CREATE
 // ============================================================
 
@@ -58,9 +73,10 @@ func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.
 		INSERT INTO shops (
 			id, name, slug, custom_domain, owner_id, logo_url, theme, plan, db_schema, is_active,
 			kyc_status, kyc_submissions_count,
+			health_score, health_level,
 			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING created_at, updated_at
 	`
 
@@ -80,8 +96,10 @@ func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.
 		shop.Plan,
 		shop.DBSchema,
 		shop.IsActive,
-		shop.KYCStatus,           // 🆕 v4.1.0
-		shop.KYCSubmissionsCount, // 🆕 v4.1.0
+		shop.KYCStatus,
+		shop.KYCSubmissionsCount,
+		shop.HealthScore,
+		shop.HealthLevel,
 		shop.CreatedAt,
 		shop.UpdatedAt,
 	).Scan(&shop.CreatedAt, &shop.UpdatedAt)
@@ -94,55 +112,22 @@ func (r *ShopRepositoryInfrastructure) Create(ctx context.Context, shop *entity.
 // ============================================================
 
 func (r *ShopRepositoryInfrastructure) FindByID(ctx context.Context, id uuid.UUID) (*entity.Shop, error) {
-	query := `
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan, 
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
-		FROM shops
-		WHERE id = $1
-	`
-	return r.scanShop(r.queryRowContext(ctx, query, id))
+	query := fmt.Sprintf("SELECT %s FROM shops WHERE id = $1", shopColumnsFull)
+	return r.scanShopFull(r.queryRowContext(ctx, query, id))
 }
 
 func (r *ShopRepositoryInfrastructure) FindBySlug(ctx context.Context, slug string) (*entity.Shop, error) {
-	query := `
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
-		FROM shops
-		WHERE slug = $1
-	`
-	return r.scanShop(r.queryRowContext(ctx, query, slug))
+	query := fmt.Sprintf("SELECT %s FROM shops WHERE slug = $1", shopColumnsFull)
+	return r.scanShopFull(r.queryRowContext(ctx, query, slug))
 }
 
 func (r *ShopRepositoryInfrastructure) FindByCustomDomain(ctx context.Context, domain string) (*entity.Shop, error) {
-	query := `
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
-		FROM shops
-		WHERE custom_domain = $1
-	`
-	return r.scanShop(r.queryRowContext(ctx, query, domain))
+	query := fmt.Sprintf("SELECT %s FROM shops WHERE custom_domain = $1", shopColumnsFull)
+	return r.scanShopFull(r.queryRowContext(ctx, query, domain))
 }
 
 func (r *ShopRepositoryInfrastructure) FindByOwnerID(ctx context.Context, ownerID string) ([]*entity.Shop, error) {
-	query := `
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
-		FROM shops
-		WHERE owner_id = $1
-		ORDER BY created_at DESC
-	`
+	query := fmt.Sprintf("SELECT %s FROM shops WHERE owner_id = $1 ORDER BY created_at DESC", shopColumnsFull)
 
 	rows, err := r.queryContext(ctx, query, ownerID)
 	if err != nil {
@@ -152,7 +137,7 @@ func (r *ShopRepositoryInfrastructure) FindByOwnerID(ctx context.Context, ownerI
 
 	var shops []*entity.Shop
 	for rows.Next() {
-		shop, err := r.scanShopFromRows(rows)
+		shop, err := r.scanShopFullFromRows(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -202,15 +187,21 @@ func (r *ShopRepositoryInfrastructure) Deactivate(ctx context.Context, id uuid.U
 }
 
 // ============================================================
-// SCAN HELPERS (mis à jour avec champs KYC)
+// 🆕 v4.2.0 : SCAN HELPERS COMPLETS (KYC + Admin)
 // ============================================================
 
-// scanShop scanne une ligne depuis sql.Row
-func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, error) {
+// scanShopFull scanne une ligne complète depuis sql.Row
+func (r *ShopRepositoryInfrastructure) scanShopFull(row *sql.Row) (*entity.Shop, error) {
 	shop := &entity.Shop{}
 	var themeJSON []byte
+
+	// Champs KYC nullable
 	var kycSubmittedAt, kycVerifiedAt, kycLastSubmissionAt sql.NullTime
 	var kycVerifiedBy, kycRejectionReason sql.NullString
+
+	// 🆕 v4.2.0 : Champs Admin nullable
+	var suspendedAt, healthUpdatedAt, lastReviewedAt sql.NullTime
+	var suspendedBy, suspensionReason, adminNotes, lastReviewedBy sql.NullString
 
 	err := row.Scan(
 		&shop.ID,
@@ -223,7 +214,7 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 		&shop.Plan,
 		&shop.DBSchema,
 		&shop.IsActive,
-		// 🆕 v4.1.0 : Champs KYC
+		// KYC
 		&shop.KYCStatus,
 		&kycSubmittedAt,
 		&kycVerifiedAt,
@@ -231,6 +222,16 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 		&kycRejectionReason,
 		&shop.KYCSubmissionsCount,
 		&kycLastSubmissionAt,
+		// 🆕 v4.2.0 : Admin
+		&suspendedAt,
+		&suspendedBy,
+		&suspensionReason,
+		&shop.HealthScore,
+		&shop.HealthLevel,
+		&healthUpdatedAt,
+		&adminNotes,
+		&lastReviewedAt,
+		&lastReviewedBy,
 		&shop.CreatedAt,
 		&shop.UpdatedAt,
 	)
@@ -242,7 +243,7 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 		return nil, err
 	}
 
-	// Gestion des champs nullable
+	// Gestion des champs nullable KYC
 	if kycSubmittedAt.Valid {
 		shop.KYCSubmittedAt = &kycSubmittedAt.Time
 	}
@@ -257,6 +258,29 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 	}
 	if kycLastSubmissionAt.Valid {
 		shop.KYCLastSubmissionAt = &kycLastSubmissionAt.Time
+	}
+
+	// 🆕 v4.2.0 : Gestion des champs nullable Admin
+	if suspendedAt.Valid {
+		shop.SuspendedAt = &suspendedAt.Time
+	}
+	if suspendedBy.Valid {
+		shop.SuspendedBy = &suspendedBy.String
+	}
+	if suspensionReason.Valid {
+		shop.SuspensionReason = &suspensionReason.String
+	}
+	if healthUpdatedAt.Valid {
+		shop.HealthUpdatedAt = &healthUpdatedAt.Time
+	}
+	if adminNotes.Valid {
+		shop.AdminNotes = &adminNotes.String
+	}
+	if lastReviewedAt.Valid {
+		shop.LastReviewedAt = &lastReviewedAt.Time
+	}
+	if lastReviewedBy.Valid {
+		shop.LastReviewedBy = &lastReviewedBy.String
 	}
 
 	if len(themeJSON) > 0 {
@@ -270,12 +294,16 @@ func (r *ShopRepositoryInfrastructure) scanShop(row *sql.Row) (*entity.Shop, err
 	return shop, nil
 }
 
-// scanShopFromRows scanne une ligne depuis sql.Rows
-func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity.Shop, error) {
+// scanShopFullFromRows scanne une ligne complète depuis sql.Rows
+func (r *ShopRepositoryInfrastructure) scanShopFullFromRows(rows *sql.Rows) (*entity.Shop, error) {
 	shop := &entity.Shop{}
 	var themeJSON []byte
+
 	var kycSubmittedAt, kycVerifiedAt, kycLastSubmissionAt sql.NullTime
 	var kycVerifiedBy, kycRejectionReason sql.NullString
+
+	var suspendedAt, healthUpdatedAt, lastReviewedAt sql.NullTime
+	var suspendedBy, suspensionReason, adminNotes, lastReviewedBy sql.NullString
 
 	err := rows.Scan(
 		&shop.ID,
@@ -288,7 +316,6 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 		&shop.Plan,
 		&shop.DBSchema,
 		&shop.IsActive,
-		// 🆕 v4.1.0 : Champs KYC
 		&shop.KYCStatus,
 		&kycSubmittedAt,
 		&kycVerifiedAt,
@@ -296,6 +323,15 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 		&kycRejectionReason,
 		&shop.KYCSubmissionsCount,
 		&kycLastSubmissionAt,
+		&suspendedAt,
+		&suspendedBy,
+		&suspensionReason,
+		&shop.HealthScore,
+		&shop.HealthLevel,
+		&healthUpdatedAt,
+		&adminNotes,
+		&lastReviewedAt,
+		&lastReviewedBy,
 		&shop.CreatedAt,
 		&shop.UpdatedAt,
 	)
@@ -304,7 +340,6 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 		return nil, err
 	}
 
-	// Gestion des champs nullable
 	if kycSubmittedAt.Valid {
 		shop.KYCSubmittedAt = &kycSubmittedAt.Time
 	}
@@ -319,6 +354,28 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 	}
 	if kycLastSubmissionAt.Valid {
 		shop.KYCLastSubmissionAt = &kycLastSubmissionAt.Time
+	}
+
+	if suspendedAt.Valid {
+		shop.SuspendedAt = &suspendedAt.Time
+	}
+	if suspendedBy.Valid {
+		shop.SuspendedBy = &suspendedBy.String
+	}
+	if suspensionReason.Valid {
+		shop.SuspensionReason = &suspensionReason.String
+	}
+	if healthUpdatedAt.Valid {
+		shop.HealthUpdatedAt = &healthUpdatedAt.Time
+	}
+	if adminNotes.Valid {
+		shop.AdminNotes = &adminNotes.String
+	}
+	if lastReviewedAt.Valid {
+		shop.LastReviewedAt = &lastReviewedAt.Time
+	}
+	if lastReviewedBy.Valid {
+		shop.LastReviewedBy = &lastReviewedBy.String
 	}
 
 	if len(themeJSON) > 0 {
@@ -336,7 +393,6 @@ func (r *ShopRepositoryInfrastructure) scanShopFromRows(rows *sql.Rows) (*entity
 // CONFIG PAR BOUTIQUE (v2.9.0: + Cash COD + Tontine)
 // ============================================================
 
-// GetPaymentSettings récupère les settings de paiement d'une boutique
 func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
 	query := `
 		SELECT 
@@ -400,7 +456,6 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 		return nil, fmt.Errorf("query payment settings: %w", err)
 	}
 
-	// Déchiffrer les clés API
 	if yengaAPIKey != "" {
 		settings.YengaPay.APIKey, err = crypto.DecryptOrEmpty(yengaAPIKey)
 		if err != nil {
@@ -435,7 +490,6 @@ func (r *ShopRepositoryInfrastructure) GetPaymentSettings(ctx context.Context, s
 	return &settings, nil
 }
 
-// UpsertPaymentSettings crée ou met à jour les settings de paiement
 func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context, settings *entity.ShopPaymentSettings) error {
 	yengaAPIKey, err := crypto.EncryptOrEmpty(settings.YengaPay.APIKey)
 	if err != nil {
@@ -511,7 +565,6 @@ func (r *ShopRepositoryInfrastructure) UpsertPaymentSettings(ctx context.Context
 	return nil
 }
 
-// IsOwner vérifie qu'un utilisateur est propriétaire d'une boutique
 func (r *ShopRepositoryInfrastructure) IsOwner(ctx context.Context, shopID uuid.UUID, userID uuid.UUID) (bool, error) {
 	var ownerID uuid.UUID
 	query := `SELECT owner_id FROM shops WHERE id = $1`
@@ -531,23 +584,18 @@ func (r *ShopRepositoryInfrastructure) IsOwner(ctx context.Context, shopID uuid.
 // 🆕 v4.1.0 : MÉTHODES KYC MARCHAND
 // ============================================================
 
-// FindByKYCStatus retourne les shops filtrés par statut KYC
 func (r *ShopRepositoryInfrastructure) FindByKYCStatus(
 	ctx context.Context,
 	status entity.ShopKYCStatus,
 	limit, offset int,
 ) ([]*entity.Shop, error) {
-	query := `
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
+	query := fmt.Sprintf(`
+		SELECT %s
 		FROM shops
 		WHERE kyc_status = $1
 		ORDER BY kyc_submitted_at DESC NULLS LAST, created_at DESC
 		LIMIT $2 OFFSET $3
-	`
+	`, shopColumnsFull)
 
 	rows, err := r.queryContext(ctx, query, status, limit, offset)
 	if err != nil {
@@ -557,7 +605,7 @@ func (r *ShopRepositoryInfrastructure) FindByKYCStatus(
 
 	var shops []*entity.Shop
 	for rows.Next() {
-		shop, err := r.scanShopFromRows(rows)
+		shop, err := r.scanShopFullFromRows(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -567,7 +615,6 @@ func (r *ShopRepositoryInfrastructure) FindByKYCStatus(
 	return shops, rows.Err()
 }
 
-// CountByKYCStatus compte les shops par statut KYC
 func (r *ShopRepositoryInfrastructure) CountByKYCStatus(ctx context.Context) (map[entity.ShopKYCStatus]int, error) {
 	query := `
 		SELECT kyc_status, COUNT(*)
@@ -594,7 +641,6 @@ func (r *ShopRepositoryInfrastructure) CountByKYCStatus(ctx context.Context) (ma
 	return counts, rows.Err()
 }
 
-// UpdateKYCStatus met à jour le statut KYC d'un shop
 func (r *ShopRepositoryInfrastructure) UpdateKYCStatus(
 	ctx context.Context,
 	shopID uuid.UUID,
@@ -662,10 +708,13 @@ func (r *ShopRepositoryInfrastructure) UpdateKYCStatus(
 	return nil
 }
 
-// FindAllShopsAdmin retourne tous les shops (cross-tenant) avec pagination et filtres
+// ============================================================
+// 🆕 v4.2.0 : MÉTHODES ADMIN SHOP MANAGEMENT
+// ============================================================
+
+// FindAllShopsAdmin retourne tous les shops avec filtres avancés
 func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 	ctx context.Context,
-	limit, offset int,
 	filters *repository.ShopAdminFilters,
 ) ([]*entity.Shop, int, error) {
 	whereClauses := []string{"1=1"}
@@ -688,8 +737,43 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 			args = append(args, *filters.IsActive)
 			argIndex++
 		}
+		if filters.IsSuspended != nil {
+			if *filters.IsSuspended {
+				whereClauses = append(whereClauses, "suspended_at IS NOT NULL")
+			} else {
+				whereClauses = append(whereClauses, "suspended_at IS NULL")
+			}
+		}
+		if filters.HealthLevel != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("health_level = $%d", argIndex))
+			args = append(args, *filters.HealthLevel)
+			argIndex++
+		}
+		if filters.MinHealthScore != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("health_score >= $%d", argIndex))
+			args = append(args, *filters.MinHealthScore)
+			argIndex++
+		}
+		if filters.MaxHealthScore != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("health_score <= $%d", argIndex))
+			args = append(args, *filters.MaxHealthScore)
+			argIndex++
+		}
+		if filters.CreatedAfter != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("created_at >= $%d", argIndex))
+			args = append(args, *filters.CreatedAfter)
+			argIndex++
+		}
+		if filters.CreatedBefore != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("created_at <= $%d", argIndex))
+			args = append(args, *filters.CreatedBefore)
+			argIndex++
+		}
 		if filters.Search != "" {
-			whereClauses = append(whereClauses, fmt.Sprintf("(name ILIKE $%d OR slug ILIKE $%d)", argIndex, argIndex))
+			whereClauses = append(whereClauses, fmt.Sprintf(
+				"(name ILIKE $%d OR slug ILIKE $%d OR owner_id ILIKE $%d)",
+				argIndex, argIndex, argIndex,
+			))
 			args = append(args, "%"+filters.Search+"%")
 			argIndex++
 		}
@@ -705,19 +789,39 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 		return nil, 0, fmt.Errorf("count shops: %w", err)
 	}
 
+	// Déterminer le tri
+	sortBy := "created_at"
+	sortOrder := "DESC"
+	if filters != nil {
+		if filters.SortBy != "" {
+			sortBy = filters.SortBy
+		}
+		if filters.SortOrder != "" {
+			sortOrder = strings.ToUpper(filters.SortOrder)
+		}
+	}
+
+	// Pagination par défaut
+	limit := 20
+	offset := 0
+	if filters != nil {
+		if filters.Limit > 0 {
+			limit = filters.Limit
+		}
+		if filters.Offset > 0 {
+			offset = filters.Offset
+		}
+	}
+
 	// Récupérer les shops
 	args = append(args, limit, offset)
 	query := fmt.Sprintf(`
-		SELECT id, name, slug, custom_domain, owner_id, logo_url, theme, plan,
-		       db_schema, is_active,
-		       kyc_status, kyc_submitted_at, kyc_verified_at, kyc_verified_by,
-		       kyc_rejection_reason, kyc_submissions_count, kyc_last_submission_at,
-		       created_at, updated_at
+		SELECT %s
 		FROM shops
 		WHERE %s
-		ORDER BY created_at DESC
+		ORDER BY %s %s
 		LIMIT $%d OFFSET $%d
-	`, whereClause, argIndex, argIndex+1)
+	`, shopColumnsFull, whereClause, sortBy, sortOrder, argIndex, argIndex+1)
 
 	rows, err := r.queryContext(ctx, query, args...)
 	if err != nil {
@@ -727,7 +831,7 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 
 	var shops []*entity.Shop
 	for rows.Next() {
-		shop, err := r.scanShopFromRows(rows)
+		shop, err := r.scanShopFullFromRows(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -775,4 +879,285 @@ func (r *ShopRepositoryInfrastructure) UpdateShopPlan(
 		return fmt.Errorf("update shop plan: %w", err)
 	}
 	return nil
+}
+
+// SuspendShop suspend une boutique avec raison
+func (r *ShopRepositoryInfrastructure) SuspendShop(
+	ctx context.Context,
+	shopID uuid.UUID,
+	adminID, reason string,
+) error {
+	now := time.Now()
+	query := `
+		UPDATE shops
+		SET suspended_at = $2,
+		    suspended_by = $3,
+		    suspension_reason = $4,
+		    is_active = false,
+		    updated_at = NOW()
+		WHERE id = $1 AND suspended_at IS NULL
+	`
+	result, err := r.execContext(ctx, query, shopID, now, adminID, reason)
+	if err != nil {
+		return fmt.Errorf("suspend shop: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return entity.ErrShopAlreadySuspended
+	}
+
+	return nil
+}
+
+// ActivateShop réactive une boutique suspendue
+func (r *ShopRepositoryInfrastructure) ActivateShop(
+	ctx context.Context,
+	shopID uuid.UUID,
+	adminID string,
+) error {
+	query := `
+		UPDATE shops
+		SET suspended_at = NULL,
+		    suspended_by = NULL,
+		    suspension_reason = NULL,
+		    is_active = true,
+		    updated_at = NOW()
+		WHERE id = $1 AND suspended_at IS NOT NULL
+	`
+	result, err := r.execContext(ctx, query, shopID)
+	if err != nil {
+		return fmt.Errorf("activate shop: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return entity.ErrShopNotSuspended
+	}
+
+	return nil
+}
+
+// UpdateHealthScore met à jour le score de santé d'un shop
+func (r *ShopRepositoryInfrastructure) UpdateHealthScore(
+	ctx context.Context,
+	shopID uuid.UUID,
+	score int,
+	level entity.ShopHealthLevel,
+) error {
+	// Validation
+	if score < 0 || score > 1000 {
+		return entity.ErrInvalidHealthScore
+	}
+	if !entity.IsValidHealthLevel(level) {
+		return entity.ErrInvalidHealthLevel
+	}
+
+	query := `
+		UPDATE shops
+		SET health_score = $2,
+		    health_level = $3,
+		    health_updated_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.execContext(ctx, query, shopID, score, level)
+	if err != nil {
+		return fmt.Errorf("update health score: %w", err)
+	}
+
+	return nil
+}
+
+// AddAdminNote ajoute une note admin à un shop
+func (r *ShopRepositoryInfrastructure) AddAdminNote(
+	ctx context.Context,
+	shopID uuid.UUID,
+	note string,
+	adminID string,
+) error {
+	now := time.Now()
+	formattedNote := fmt.Sprintf("[%s - %s]\n%s", now.Format("2006-01-02 15:04"), adminID, note)
+
+	query := `
+		UPDATE shops
+		SET admin_notes = CASE 
+			WHEN admin_notes IS NULL OR admin_notes = '' THEN $2
+			ELSE admin_notes || E'\n\n' || $2
+		END,
+		updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.execContext(ctx, query, shopID, formattedNote)
+	if err != nil {
+		return fmt.Errorf("add admin note: %w", err)
+	}
+
+	return nil
+}
+
+// MarkShopReviewed marque un shop comme revu par un admin
+func (r *ShopRepositoryInfrastructure) MarkShopReviewed(
+	ctx context.Context,
+	shopID uuid.UUID,
+	adminID string,
+) error {
+	now := time.Now()
+	query := `
+		UPDATE shops
+		SET last_reviewed_at = $2,
+		    last_reviewed_by = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.execContext(ctx, query, shopID, now, adminID)
+	if err != nil {
+		return fmt.Errorf("mark shop reviewed: %w", err)
+	}
+
+	return nil
+}
+
+// ============================================================
+// 🆕 v4.2.0 : MÉTHODES DASHBOARD ADMIN
+// ============================================================
+
+// GetHealthStats retourne les statistiques de santé globales
+func (r *ShopRepositoryInfrastructure) GetHealthStats(ctx context.Context) (*repository.ShopHealthStats, error) {
+	stats := &repository.ShopHealthStats{}
+
+	// Statistiques de base
+	query := `
+		SELECT 
+			COUNT(*) as total,
+			COUNT(*) FILTER (WHERE is_active = true) as active,
+			COUNT(*) FILTER (WHERE is_active = false) as inactive,
+			COUNT(*) FILTER (WHERE suspended_at IS NOT NULL) as suspended,
+			COUNT(*) FILTER (WHERE kyc_status = 'pending') as pending_kyc,
+			COUNT(*) FILTER (WHERE health_level = 'excellent') as excellent,
+			COUNT(*) FILTER (WHERE health_level = 'good') as good,
+			COUNT(*) FILTER (WHERE health_level = 'warning') as warning,
+			COUNT(*) FILTER (WHERE health_level = 'critical') as critical,
+			COALESCE(AVG(health_score), 0) as avg_score,
+			COALESCE(MIN(health_score), 0) as min_score,
+			COALESCE(MAX(health_score), 0) as max_score,
+			COUNT(*) FILTER (WHERE plan = 'free') as free,
+			COUNT(*) FILTER (WHERE plan = 'pro') as pro,
+			COUNT(*) FILTER (WHERE plan = 'business') as business
+		FROM shops
+	`
+
+	err := r.db.QueryRowContext(ctx, query).Scan(
+		&stats.TotalShops,
+		&stats.ActiveShops,
+		&stats.InactiveShops,
+		&stats.SuspendedShops,
+		&stats.PendingKYC,
+		&stats.ExcellentCount,
+		&stats.GoodCount,
+		&stats.WarningCount,
+		&stats.CriticalCount,
+		&stats.AverageScore,
+		&stats.MinScore,
+		&stats.MaxScore,
+		&stats.FreeCount,
+		&stats.ProCount,
+		&stats.BusinessCount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get health stats: %w", err)
+	}
+
+	// Actions admin récentes
+	actionsQuery := `
+		SELECT 
+			COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as last_24h,
+			COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as last_7d
+		FROM shop_admin_actions
+	`
+	err = r.db.QueryRowContext(ctx, actionsQuery).Scan(
+		&stats.ActionsLast24h,
+		&stats.ActionsLast7d,
+	)
+	if err != nil {
+		// Non bloquant si la table n'existe pas encore
+		stats.ActionsLast24h = 0
+		stats.ActionsLast7d = 0
+	}
+
+	return stats, nil
+}
+
+// GetSuspendedShops retourne la liste des shops suspendus
+func (r *ShopRepositoryInfrastructure) GetSuspendedShops(
+	ctx context.Context,
+	limit, offset int,
+) ([]*entity.Shop, int, error) {
+	filters := &repository.ShopAdminFilters{
+		IsSuspended: boolPtr(true),
+		Limit:       limit,
+		Offset:      offset,
+		SortBy:      "suspended_at",
+		SortOrder:   "DESC",
+	}
+	return r.FindAllShopsAdmin(ctx, filters)
+}
+
+// GetCriticalShops retourne la liste des shops critiques (score < 400)
+func (r *ShopRepositoryInfrastructure) GetCriticalShops(
+	ctx context.Context,
+	limit, offset int,
+) ([]*entity.Shop, int, error) {
+	filters := &repository.ShopAdminFilters{
+		HealthLevel: healthLevelPtr(entity.ShopHealthCritical),
+		Limit:       limit,
+		Offset:      offset,
+		SortBy:      "health_score",
+		SortOrder:   "ASC",
+	}
+	return r.FindAllShopsAdmin(ctx, filters)
+}
+
+// GetShopsByHealthLevel retourne les shops par niveau de santé
+func (r *ShopRepositoryInfrastructure) GetShopsByHealthLevel(
+	ctx context.Context,
+	level entity.ShopHealthLevel,
+	limit, offset int,
+) ([]*entity.Shop, int, error) {
+	filters := &repository.ShopAdminFilters{
+		HealthLevel: &level,
+		Limit:       limit,
+		Offset:      offset,
+		SortBy:      "health_score",
+		SortOrder:   "DESC",
+	}
+	return r.FindAllShopsAdmin(ctx, filters)
+}
+
+// SearchShopsAdmin recherche des shops par nom/slug/email
+func (r *ShopRepositoryInfrastructure) SearchShopsAdmin(
+	ctx context.Context,
+	query string,
+	limit, offset int,
+) ([]*entity.Shop, int, error) {
+	filters := &repository.ShopAdminFilters{
+		Search:    query,
+		Limit:     limit,
+		Offset:    offset,
+		SortBy:    "name",
+		SortOrder: "ASC",
+	}
+	return r.FindAllShopsAdmin(ctx, filters)
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func healthLevelPtr(level entity.ShopHealthLevel) *entity.ShopHealthLevel {
+	return &level
 }

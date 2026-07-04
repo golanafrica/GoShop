@@ -29,6 +29,9 @@ import (
 	// 🆕 v4.1.0 : Merchant KYC Usecases
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
 
+	// 🆕 v4.2.0 : Admin Shop Usecases
+	adminshopusecase "Goshop/application/usecase/admin_shop_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -64,6 +67,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	handlers "Goshop/interfaces/handler"
+
+	// 🆕 v4.2.0 : Admin Shop Handler
+	adminshophandler "Goshop/interfaces/handler/admin_shop_handler"
 	commissionratehandler "Goshop/interfaces/handler/commission_rate_handler"
 	customerhandler "Goshop/interfaces/handler/customer_handler"
 	ordershandler "Goshop/interfaces/handler/orders"
@@ -192,7 +198,10 @@ func (a *App) setupRouter() {
 	// 🆕 v4.1.0 : Repository Shop KYC Documents (KYC Marchand)
 	shopKYCDocRepo := shop.NewShopKYCDocumentRepositoryInfrastructure(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.1.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents)")
+	// 🆕 v4.2.0 : Repository Shop Admin Actions (Audit Trail)
+	adminActionRepo := shop.NewShopAdminActionRepositoryInfrastructure(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.2.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents, shop_admin_actions)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -416,6 +425,15 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ v4.1.0 Merchant KYC usecases initialized (submit, review, list_pending, get_status)")
+
+	// ============ 🆕 v4.2.0 : ADMIN SHOP USECASES ============
+	adminListShopsUC := adminshopusecase.NewListShopsUsecase(shopRepo)
+	adminGetShopDetailsUC := adminshopusecase.NewGetShopDetailsUsecase(shopRepo, shopKYCDocRepo)
+	adminGetShopHealthUC := adminshopusecase.NewGetShopHealthUsecase(shopRepo)
+	adminSuspendShopUC := adminshopusecase.NewSuspendShopUsecase(shopRepo, adminActionRepo)
+	adminActivateShopUC := adminshopusecase.NewActivateShopUsecase(shopRepo, adminActionRepo)
+
+	a.Logger.Info().Msg("✅ v4.2.0 Admin Shop usecases initialized (list, details, health, suspend, activate)")
 
 	// ============ 🆕 v3.0.0 : WALLET USECASES ============
 	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
@@ -651,7 +669,16 @@ func (a *App) setupRouter() {
 		getMerchantKYCStatusUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.1.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc)")
+	// ============ 🆕 v4.2.0 : ADMIN SHOP HANDLER ============
+	adminShopHandler := adminshophandler.NewAdminShopHandler(
+		adminListShopsUC,
+		adminGetShopDetailsUC,
+		adminGetShopHealthUC,
+		adminSuspendShopUC,
+		adminActivateShopUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.2.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -818,6 +845,14 @@ func (a *App) setupRouter() {
 			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.1.0 : Protection RBAC
 			merchantKYCHandler.RegisterAdminRoutes(r)
 		})
+
+		// ============ 🆕 v4.2.0 : ADMIN SHOP ROUTES (super_admin + admin uniquement) ============
+		// Gestion cross-tenant des shops : liste, détails, health score, suspend, activate
+		r.Route("/admin/shops", func(r chi.Router) {
+			r.Use(middleware.AuthMiddleware)
+			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.2.0 : Protection RBAC
+			adminShopHandler.RegisterRoutes(r)
+		})
 	})
 
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
@@ -861,7 +896,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.1.0 Commission schedulers started")
+			Msg("✅ v4.2.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -869,7 +904,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.1.0: + Merchant KYC workflow)")
+		Msg("✅ Router configuré avec succès (v4.2.0: + Admin Shop Management)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -936,7 +971,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.1.0",
+		Version:     "4.2.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

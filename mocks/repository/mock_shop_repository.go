@@ -43,6 +43,34 @@ func (m *MockShopRepository) EXPECT() *MockShopRepositoryMockRecorder {
 	return m.recorder
 }
 
+// ActivateShop mocks base method.
+func (m *MockShopRepository) ActivateShop(ctx context.Context, shopID uuid.UUID, adminID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ActivateShop", ctx, shopID, adminID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ActivateShop indicates an expected call of ActivateShop.
+func (mr *MockShopRepositoryMockRecorder) ActivateShop(ctx, shopID, adminID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ActivateShop", reflect.TypeOf((*MockShopRepository)(nil).ActivateShop), ctx, shopID, adminID)
+}
+
+// AddAdminNote mocks base method.
+func (m *MockShopRepository) AddAdminNote(ctx context.Context, shopID uuid.UUID, note, adminID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddAdminNote", ctx, shopID, note, adminID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddAdminNote indicates an expected call of AddAdminNote.
+func (mr *MockShopRepositoryMockRecorder) AddAdminNote(ctx, shopID, note, adminID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddAdminNote", reflect.TypeOf((*MockShopRepository)(nil).AddAdminNote), ctx, shopID, note, adminID)
+}
+
 // CountByKYCStatus mocks base method.
 func (m *MockShopRepository) CountByKYCStatus(ctx context.Context) (map[entity.ShopKYCStatus]int, error) {
 	m.ctrl.T.Helper()
@@ -87,9 +115,9 @@ func (mr *MockShopRepositoryMockRecorder) Deactivate(ctx, id any) *gomock.Call {
 }
 
 // FindAllShopsAdmin mocks base method.
-func (m *MockShopRepository) FindAllShopsAdmin(ctx context.Context, limit, offset int, filters *repository.ShopAdminFilters) ([]*entity.Shop, int, error) {
+func (m *MockShopRepository) FindAllShopsAdmin(ctx context.Context, filters *repository.ShopAdminFilters) ([]*entity.Shop, int, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindAllShopsAdmin", ctx, limit, offset, filters)
+	ret := m.ctrl.Call(m, "FindAllShopsAdmin", ctx, filters)
 	ret0, _ := ret[0].([]*entity.Shop)
 	ret1, _ := ret[1].(int)
 	ret2, _ := ret[2].(error)
@@ -97,9 +125,9 @@ func (m *MockShopRepository) FindAllShopsAdmin(ctx context.Context, limit, offse
 }
 
 // FindAllShopsAdmin indicates an expected call of FindAllShopsAdmin.
-func (mr *MockShopRepositoryMockRecorder) FindAllShopsAdmin(ctx, limit, offset, filters any) *gomock.Call {
+func (mr *MockShopRepositoryMockRecorder) FindAllShopsAdmin(ctx, filters any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAllShopsAdmin", reflect.TypeOf((*MockShopRepository)(nil).FindAllShopsAdmin), ctx, limit, offset, filters)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAllShopsAdmin", reflect.TypeOf((*MockShopRepository)(nil).FindAllShopsAdmin), ctx, filters)
 }
 
 // FindByCustomDomain mocks base method.
@@ -177,6 +205,37 @@ func (mr *MockShopRepositoryMockRecorder) FindBySlug(ctx, slug any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindBySlug", reflect.TypeOf((*MockShopRepository)(nil).FindBySlug), ctx, slug)
 }
 
+// GetCriticalShops mocks base method.
+func (m *MockShopRepository) GetCriticalShops(ctx context.Context, limit, offset int) ([]*entity.Shop, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCriticalShops", ctx, limit, offset)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetCriticalShops indicates an expected call of GetCriticalShops.
+func (mr *MockShopRepositoryMockRecorder) GetCriticalShops(ctx, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCriticalShops", reflect.TypeOf((*MockShopRepository)(nil).GetCriticalShops), ctx, limit, offset)
+}
+
+// GetHealthStats mocks base method.
+func (m *MockShopRepository) GetHealthStats(ctx context.Context) (*repository.ShopHealthStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetHealthStats", ctx)
+	ret0, _ := ret[0].(*repository.ShopHealthStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetHealthStats indicates an expected call of GetHealthStats.
+func (mr *MockShopRepositoryMockRecorder) GetHealthStats(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHealthStats", reflect.TypeOf((*MockShopRepository)(nil).GetHealthStats), ctx)
+}
+
 // GetPaymentSettings mocks base method.
 func (m *MockShopRepository) GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error) {
 	m.ctrl.T.Helper()
@@ -190,6 +249,38 @@ func (m *MockShopRepository) GetPaymentSettings(ctx context.Context, shopID uuid
 func (mr *MockShopRepositoryMockRecorder) GetPaymentSettings(ctx, shopID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPaymentSettings", reflect.TypeOf((*MockShopRepository)(nil).GetPaymentSettings), ctx, shopID)
+}
+
+// GetShopsByHealthLevel mocks base method.
+func (m *MockShopRepository) GetShopsByHealthLevel(ctx context.Context, level entity.ShopHealthLevel, limit, offset int) ([]*entity.Shop, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetShopsByHealthLevel", ctx, level, limit, offset)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetShopsByHealthLevel indicates an expected call of GetShopsByHealthLevel.
+func (mr *MockShopRepositoryMockRecorder) GetShopsByHealthLevel(ctx, level, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetShopsByHealthLevel", reflect.TypeOf((*MockShopRepository)(nil).GetShopsByHealthLevel), ctx, level, limit, offset)
+}
+
+// GetSuspendedShops mocks base method.
+func (m *MockShopRepository) GetSuspendedShops(ctx context.Context, limit, offset int) ([]*entity.Shop, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSuspendedShops", ctx, limit, offset)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetSuspendedShops indicates an expected call of GetSuspendedShops.
+func (mr *MockShopRepositoryMockRecorder) GetSuspendedShops(ctx, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSuspendedShops", reflect.TypeOf((*MockShopRepository)(nil).GetSuspendedShops), ctx, limit, offset)
 }
 
 // IsOwner mocks base method.
@@ -207,6 +298,50 @@ func (mr *MockShopRepositoryMockRecorder) IsOwner(ctx, shopID, userID any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOwner", reflect.TypeOf((*MockShopRepository)(nil).IsOwner), ctx, shopID, userID)
 }
 
+// MarkShopReviewed mocks base method.
+func (m *MockShopRepository) MarkShopReviewed(ctx context.Context, shopID uuid.UUID, adminID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkShopReviewed", ctx, shopID, adminID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkShopReviewed indicates an expected call of MarkShopReviewed.
+func (mr *MockShopRepositoryMockRecorder) MarkShopReviewed(ctx, shopID, adminID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkShopReviewed", reflect.TypeOf((*MockShopRepository)(nil).MarkShopReviewed), ctx, shopID, adminID)
+}
+
+// SearchShopsAdmin mocks base method.
+func (m *MockShopRepository) SearchShopsAdmin(ctx context.Context, query string, limit, offset int) ([]*entity.Shop, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SearchShopsAdmin", ctx, query, limit, offset)
+	ret0, _ := ret[0].([]*entity.Shop)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// SearchShopsAdmin indicates an expected call of SearchShopsAdmin.
+func (mr *MockShopRepositoryMockRecorder) SearchShopsAdmin(ctx, query, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SearchShopsAdmin", reflect.TypeOf((*MockShopRepository)(nil).SearchShopsAdmin), ctx, query, limit, offset)
+}
+
+// SuspendShop mocks base method.
+func (m *MockShopRepository) SuspendShop(ctx context.Context, shopID uuid.UUID, adminID, reason string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SuspendShop", ctx, shopID, adminID, reason)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SuspendShop indicates an expected call of SuspendShop.
+func (mr *MockShopRepositoryMockRecorder) SuspendShop(ctx, shopID, adminID, reason any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SuspendShop", reflect.TypeOf((*MockShopRepository)(nil).SuspendShop), ctx, shopID, adminID, reason)
+}
+
 // Update mocks base method.
 func (m *MockShopRepository) Update(ctx context.Context, shop *entity.Shop) error {
 	m.ctrl.T.Helper()
@@ -219,6 +354,20 @@ func (m *MockShopRepository) Update(ctx context.Context, shop *entity.Shop) erro
 func (mr *MockShopRepositoryMockRecorder) Update(ctx, shop any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockShopRepository)(nil).Update), ctx, shop)
+}
+
+// UpdateHealthScore mocks base method.
+func (m *MockShopRepository) UpdateHealthScore(ctx context.Context, shopID uuid.UUID, score int, level entity.ShopHealthLevel) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateHealthScore", ctx, shopID, score, level)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateHealthScore indicates an expected call of UpdateHealthScore.
+func (mr *MockShopRepositoryMockRecorder) UpdateHealthScore(ctx, shopID, score, level any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateHealthScore", reflect.TypeOf((*MockShopRepository)(nil).UpdateHealthScore), ctx, shopID, score, level)
 }
 
 // UpdateKYCStatus mocks base method.

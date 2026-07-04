@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"Goshop/domain/entity"
 
@@ -10,9 +11,10 @@ import (
 
 //go:generate mockgen -destination=../../mocks/repository/mock_shop_repository.go -package=repository . ShopRepository
 //go:generate mockgen -destination=../../mocks/repository/mock_shop_kyc_document_repository.go -package=repository . ShopKYCDocumentRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_shop_admin_action_repository.go -package=repository . ShopAdminActionRepository
 
 // ============================================================
-// SHOP REPOSITORY (existant + extensions KYC)
+// SHOP REPOSITORY (existant + extensions KYC + Admin)
 // ============================================================
 
 // ShopRepository définit les opérations sur les boutiques
@@ -34,15 +36,12 @@ type ShopRepository interface {
 	// ============ 🆕 v4.1.0 : MÉTHODES KYC MARCHAND ============
 
 	// FindByKYCStatus retourne les shops filtrés par statut KYC
-	// Utilisé par le dashboard admin pour voir les shops en attente
 	FindByKYCStatus(ctx context.Context, status entity.ShopKYCStatus, limit, offset int) ([]*entity.Shop, error)
 
 	// CountByKYCStatus compte les shops par statut KYC
-	// Utilisé pour les statistiques du dashboard admin
 	CountByKYCStatus(ctx context.Context) (map[entity.ShopKYCStatus]int, error)
 
 	// UpdateKYCStatus met à jour le statut KYC d'un shop
-	// Utilisé par ApproveKYC et RejectKYC
 	UpdateKYCStatus(
 		ctx context.Context,
 		shopID uuid.UUID,
@@ -51,9 +50,11 @@ type ShopRepository interface {
 		rejectionReason *string,
 	) error
 
-	// FindAllShopsAdmin retourne tous les shops (cross-tenant) avec pagination
+	// ============ 🆕 v4.2.0 : MÉTHODES ADMIN SHOP MANAGEMENT ============
+
+	// FindAllShopsAdmin retourne tous les shops (cross-tenant) avec pagination et filtres
 	// Utilisé par le dashboard admin pour gérer toutes les boutiques
-	FindAllShopsAdmin(ctx context.Context, limit, offset int, filters *ShopAdminFilters) ([]*entity.Shop, int, error)
+	FindAllShopsAdmin(ctx context.Context, filters *ShopAdminFilters) ([]*entity.Shop, int, error)
 
 	// UpdateShopStatus active ou désactive une boutique (admin)
 	UpdateShopStatus(ctx context.Context, shopID uuid.UUID, isActive bool, adminID string) error
@@ -61,19 +62,107 @@ type ShopRepository interface {
 	// UpdateShopPlan change le plan d'abonnement (super_admin uniquement)
 	UpdateShopPlan(ctx context.Context, shopID uuid.UUID, plan entity.ShopPlan, adminID string) error
 
+	// SuspendShop suspend une boutique avec raison (admin)
+	SuspendShop(ctx context.Context, shopID uuid.UUID, adminID, reason string) error
+
+	// ActivateShop réactive une boutique suspendue (admin)
+	ActivateShop(ctx context.Context, shopID uuid.UUID, adminID string) error
+
+	// UpdateHealthScore met à jour le score de santé d'un shop
+	UpdateHealthScore(ctx context.Context, shopID uuid.UUID, score int, level entity.ShopHealthLevel) error
+
+	// AddAdminNote ajoute une note admin à un shop
+	AddAdminNote(ctx context.Context, shopID uuid.UUID, note string, adminID string) error
+
+	// MarkShopReviewed marque un shop comme revu par un admin
+	MarkShopReviewed(ctx context.Context, shopID uuid.UUID, adminID string) error
+
+	// ============ 🆕 v4.2.0 : MÉTHODES DASHBOARD ADMIN ============
+
+	// GetHealthStats retourne les statistiques de santé globales
+	GetHealthStats(ctx context.Context) (*ShopHealthStats, error)
+
+	// GetSuspendedShops retourne la liste des shops suspendus
+	GetSuspendedShops(ctx context.Context, limit, offset int) ([]*entity.Shop, int, error)
+
+	// GetCriticalShops retourne la liste des shops critiques (score < 400)
+	GetCriticalShops(ctx context.Context, limit, offset int) ([]*entity.Shop, int, error)
+
+	// GetShopsByHealthLevel retourne les shops par niveau de santé
+	GetShopsByHealthLevel(ctx context.Context, level entity.ShopHealthLevel, limit, offset int) ([]*entity.Shop, int, error)
+
+	// SearchShopsAdmin recherche des shops par nom/slug/email
+	SearchShopsAdmin(ctx context.Context, query string, limit, offset int) ([]*entity.Shop, int, error)
+
 	WithTX(tx Tx) ShopRepository
 }
 
 // ============================================================
-// 🆕 v4.1.0 : FILTRES ADMIN
+// 🆕 v4.2.0 : FILTRES ADMIN
 // ============================================================
 
 // ShopAdminFilters représente les filtres pour la recherche admin
 type ShopAdminFilters struct {
-	KYCStatus *entity.ShopKYCStatus
-	Plan      *entity.ShopPlan
-	IsActive  *bool
-	Search    string // Recherche sur name/slug
+	// Filtres simples
+	KYCStatus   *entity.ShopKYCStatus
+	Plan        *entity.ShopPlan
+	IsActive    *bool
+	IsSuspended *bool
+
+	// Filtre santé
+	HealthLevel    *entity.ShopHealthLevel
+	MinHealthScore *int
+	MaxHealthScore *int
+
+	// Filtres date
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	UpdatedAfter  *time.Time
+	UpdatedBefore *time.Time
+
+	// Recherche texte
+	Search string // Recherche sur name/slug/owner_email
+
+	// Pagination
+	Limit  int
+	Offset int
+
+	// Tri
+	SortBy    string // "created_at", "updated_at", "health_score", "name"
+	SortOrder string // "asc", "desc"
+}
+
+// ============================================================
+// 🆕 v4.2.0 : STATS SANTÉ
+// ============================================================
+
+// ShopHealthStats représente les statistiques de santé globales
+type ShopHealthStats struct {
+	TotalShops     int `json:"total_shops"`
+	ActiveShops    int `json:"active_shops"`
+	InactiveShops  int `json:"inactive_shops"`
+	SuspendedShops int `json:"suspended_shops"`
+	PendingKYC     int `json:"pending_kyc"`
+
+	// Distribution par niveau de santé
+	ExcellentCount int `json:"excellent_count"`
+	GoodCount      int `json:"good_count"`
+	WarningCount   int `json:"warning_count"`
+	CriticalCount  int `json:"critical_count"`
+
+	// Scores
+	AverageScore float64 `json:"average_score"`
+	MinScore     int     `json:"min_score"`
+	MaxScore     int     `json:"max_score"`
+
+	// Distribution par plan
+	FreeCount     int `json:"free_count"`
+	ProCount      int `json:"pro_count"`
+	BusinessCount int `json:"business_count"`
+
+	// Activité admin
+	ActionsLast24h int `json:"actions_last_24h"`
+	ActionsLast7d  int `json:"actions_last_7d"`
 }
 
 // ============================================================
@@ -116,6 +205,45 @@ type ShopKYCDocumentRepository interface {
 	FindAllPending(ctx context.Context, limit, offset int) ([]*entity.ShopKYCDocument, error)
 
 	WithTX(tx Tx) ShopKYCDocumentRepository
+}
+
+// ============================================================
+// 🆕 v4.2.0 : SHOP ADMIN ACTION REPOSITORY (audit trail)
+// ============================================================
+
+// ShopAdminActionRepository définit les opérations sur les actions admin
+type ShopAdminActionRepository interface {
+	// Create crée une nouvelle action admin
+	Create(ctx context.Context, action *entity.ShopAdminAction) error
+
+	// FindByID retourne une action par son ID
+	FindByID(ctx context.Context, id uuid.UUID) (*entity.ShopAdminAction, error)
+
+	// FindByShopID retourne toutes les actions d'un shop
+	FindByShopID(ctx context.Context, shopID uuid.UUID, limit, offset int) ([]*entity.ShopAdminAction, error)
+
+	// FindByAdminID retourne toutes les actions d'un admin
+	FindByAdminID(ctx context.Context, adminID string, limit, offset int) ([]*entity.ShopAdminAction, error)
+
+	// FindByActionType retourne les actions par type
+	FindByActionType(ctx context.Context, actionType entity.ShopAdminActionType, limit, offset int) ([]*entity.ShopAdminAction, error)
+
+	// FindRecent retourne les actions récentes (tous shops)
+	FindRecent(ctx context.Context, limit, offset int) ([]*entity.ShopAdminAction, error)
+
+	// CountByShopID compte les actions d'un shop
+	CountByShopID(ctx context.Context, shopID uuid.UUID) (int, error)
+
+	// CountByAdminID compte les actions d'un admin
+	CountByAdminID(ctx context.Context, adminID string) (int, error)
+
+	// CountRecent compte les actions récentes
+	CountRecent(ctx context.Context, since time.Time) (int, error)
+
+	// DeleteByShopID supprime toutes les actions d'un shop
+	DeleteByShopID(ctx context.Context, shopID uuid.UUID) error
+
+	WithTX(tx Tx) ShopAdminActionRepository
 }
 
 // ============================================================
