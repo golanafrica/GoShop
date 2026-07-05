@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invitation à rejoindre {{.PlatformName}}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #1f2937;
+            background-color: #f9fafb;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .header .emoji {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .greeting {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #1f2937;
+        }
+        .invitation-text {
+            font-size: 16px;
+            color: #4b5563;
+            margin-bottom: 25px;
+        }
+        .invitation-text strong {
+            color: #1f2937;
+        }
+        .custom-message {
+            background-color: #eff6ff;
+            border-left: 4px solid #2563eb;
+            padding: 20px;
+            margin: 25px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .custom-message .label {
+            font-weight: 600;
+            color: #1e40af;
+            margin-bottom: 8px;
+        }
+        .custom-message .message {
+            font-style: italic;
+            color: #1f2937;
+        }
+        .details-box {
+            background-color: #f3f4f6;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 25px 0;
+        }
+        .details-box .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .details-box .detail-row:last-child {
+            border-bottom: none;
+        }
+        .details-box .label {
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .details-box .value {
+            color: #1f2937;
+        }
+        .cta-container {
+            text-align: center;
+            margin: 35px 0;
+        }
+        .cta-button {
+            display: inline-block;
+            padding: 16px 40px;
+            background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+            color: white !important;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 16px;
+            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(37, 99, 235, 0.4);
+        }
+        .fallback-link {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #6b7280;
+        }
+        .fallback-link a {
+            color: #2563eb;
+            word-break: break-all;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #e5e7eb;
+            margin: 35px 0;
+        }
+        .warning {
+            background-color: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 14px;
+            color: #92400e;
+        }
+        .footer {
+            background-color: #f9fafb;
+            padding: 25px 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #9ca3af;
+            border-top: 1px solid #e5e7eb;
+        }
+        .footer p {
+            margin: 5px 0;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background-color: #dbeafe;
+            color: #1e40af;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="emoji">🎉</div>
+            <h1>Vous êtes invité(e) !</h1>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Greeting -->
+            <p class="greeting">
+                Bonjour {{if .RecipientName}}{{.RecipientName}}{{else}}cher(e) collaborateur(trice){{end}},
+            </p>
+
+            <!-- Invitation text -->
+            <p class="invitation-text">
+                <strong>{{.InviterName}}</strong> 
+                {{if .InviterRole}}<span class="badge">{{.InviterRole}}</span>{{end}}
+                vous invite à rejoindre <strong>{{.PlatformName}}</strong> en tant que 
+                <strong>{{.RoleDisplayName}}</strong>.
+            </p>
+
+            <!-- Custom message (optional) -->
+            {{if .CustomMessage}}
+            <div class="custom-message">
+                <div class="label">💬 Message de {{.InviterName}} :</div>
+                <div class="message">"{{.CustomMessage}}"</div>
+            </div>
+            {{end}}
+
+            <!-- Details box -->
+            <div class="details-box">
+                <div class="detail-row">
+                    <span class="label">👤 Votre rôle :</span>
+                    <span class="value"><strong>{{.RoleDisplayName}}</strong></span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">🏢 Plateforme :</span>
+                    <span class="value">{{.PlatformName}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">⏰ Expire le :</span>
+                    <span class="value">{{.ExpiresAt.Format "02/01/2006 à 15:04"}}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="label">📅 Jours restants :</span>
+                    <span class="value"><strong>{{.DaysUntilExpire}} jours</strong></span>
+                </div>
+            </div>
+
+            <!-- Call to action -->
+            <div class="cta-container">
+                <a href="{{.AcceptURL}}" class="cta-button">
+                    ✓ Accepter l'invitation
+                </a>
+            </div>
+
+            <!-- Fallback link -->
+            <p class="fallback-link">
+                Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br>
+                <a href="{{.AcceptURL}}">{{.AcceptURL}}</a>
+            </p>
+
+            <!-- Warning -->
+            <div class="warning">
+                ⚠️ Cette invitation expire dans <strong>{{.DaysUntilExpire}} jours</strong>. 
+                Passé ce délai, vous devrez demander une nouvelle invitation.
+            </div>
+
+            <hr class="divider">
+
+            <!-- Security note -->
+            <p style="color: #6b7280; font-size: 13px;">
+                🔒 Si vous n'avez pas demandé cette invitation, vous pouvez ignorer cet email en toute sécurité. 
+                Votre compte restera inchangé.
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p><strong>© 2026 {{.PlatformName}}. Tous droits réservés.</strong></p>
+            <p>Cet email a été envoyé à {{.RecipientEmail}}</p>
+            <p>Besoin d'aide ? Contactez-nous à support@goshop.com</p>
+        </div>
+    </div>
+</body>
+</html>

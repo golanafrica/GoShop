@@ -38,6 +38,9 @@ import (
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
+	// 🆕 v4.3.2 : Configuration Email
+	"Goshop/config"
+
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
 	"Goshop/infrastructure/postgres/collaborator"
@@ -144,6 +147,7 @@ func (a *App) setupRouter() {
 	r.Use(middl.RequestLoggerMiddleware)
 	r.Use(middl.Recovery)
 	r.Use(middl.SecureHeaders)
+	r.Use(middl.CharsetUTF8)
 
 	// ============ 2. INITIALISATION ============
 	hh := handlers.HealthHandler{
@@ -255,6 +259,24 @@ func (a *App) setupRouter() {
 	// ============ 🆕 NOTIFICATION SERVICE ============
 	notifService := service.NotificationService(notification.NewNoopNotificationService(a.Logger.Logger))
 	a.Logger.Info().Msg("✅ Notification service initialized (no-op mode)")
+
+	// ============ 🆕 v4.3.2 : EMAIL SERVICE (SMTP) ============
+	emailConfig := config.LoadEmailConfig()
+	var emailService service.EmailService
+
+	smtpService, err := notification.NewSMTPService(emailConfig, a.Logger.Logger)
+	if err != nil {
+		a.Logger.Warn().Err(err).Msg("⚠️ Email service non disponible (mode dégradé)")
+		// Fallback : utiliser NoopEmailService (pas NoopNotificationService)
+		emailService = notification.NewNoopEmailService(a.Logger.Logger)
+	} else {
+		emailService = smtpService
+		a.Logger.Info().
+			Str("provider", emailService.GetProvider()).
+			Bool("configured", emailService.IsConfigured()).
+			Bool("debug_mode", emailConfig.DebugMode).
+			Msg("✅ v4.3.2 Email service initialized")
+	}
 
 	// -- Usecases (existants)
 	refreshUsecase := authusecase.NewRefreshUsecase(
@@ -505,10 +527,12 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
 
 	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
+	// 🆕 v4.3.2 : + emailService injecté pour envoi automatique des emails
 	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
 		platformCollabRepo,
 		invitationRepo,
 		postgresUserRepo,
+		emailService, // 🆕 v4.3.2
 	)
 
 	inviteShopUC := collaboratorusecase.NewInviteShopCollaboratorUsecase(
@@ -516,6 +540,7 @@ func (a *App) setupRouter() {
 		invitationRepo,
 		shopRepo,
 		postgresUserRepo,
+		emailService, // 🆕 v4.3.2
 	)
 
 	acceptInvitationUC := collaboratorusecase.NewAcceptInvitationUsecase(
@@ -544,7 +569,7 @@ func (a *App) setupRouter() {
 		shopRepo,
 	)
 
-	a.Logger.Info().Msg("✅ v4.3.0 Collaborator usecases initialized (invite, accept, list, update, remove)")
+	a.Logger.Info().Msg("✅ v4.3.2 Collaborator usecases initialized (invite, accept, list, update, remove) + emailService")
 
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
@@ -743,7 +768,7 @@ func (a *App) setupRouter() {
 		removeCollabUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.3.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator)")
+	a.Logger.Info().Msg("✅ v4.3.2 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -975,7 +1000,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.3.0 Commission schedulers started")
+			Msg("✅ v4.3.2 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -983,7 +1008,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.3.0: + Collaborators System)")
+		Msg("✅ Router configuré avec succès (v4.3.2: + Email Notifications)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1050,7 +1075,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.3.0",
+		Version:     "4.3.2", // 🆕 v4.3.2
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
