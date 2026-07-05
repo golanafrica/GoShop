@@ -32,11 +32,15 @@ import (
 	// 🆕 v4.2.0 : Admin Shop Usecases
 	adminshopusecase "Goshop/application/usecase/admin_shop_usecase"
 
+	// 🆕 v4.3.0 : Collaborator Usecases
+	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
 	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/infrastructure/payment/mock"
+	"Goshop/infrastructure/postgres/collaborator"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
 
 	authrefreshrepositoryinfra "Goshop/infrastructure/postgres/auth_refresh_repository_infra"
@@ -70,6 +74,10 @@ import (
 
 	// 🆕 v4.2.0 : Admin Shop Handler
 	adminshophandler "Goshop/interfaces/handler/admin_shop_handler"
+
+	// 🆕 v4.3.0 : Collaborator Handler
+	collaboratorhandler "Goshop/interfaces/handler/collaborator_handler"
+
 	commissionratehandler "Goshop/interfaces/handler/commission_rate_handler"
 	customerhandler "Goshop/interfaces/handler/customer_handler"
 	ordershandler "Goshop/interfaces/handler/orders"
@@ -201,7 +209,12 @@ func (a *App) setupRouter() {
 	// 🆕 v4.2.0 : Repository Shop Admin Actions (Audit Trail)
 	adminActionRepo := shop.NewShopAdminActionRepositoryInfrastructure(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.2.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents, shop_admin_actions)")
+	// 🆕 v4.3.0 : Repositories Collaborateurs
+	platformCollabRepo := collaborator.NewPlatformCollaboratorRepositoryInfrastructure(a.DB)
+	shopCollabRepo := collaborator.NewShopCollaboratorRepositoryInfrastructure(a.DB)
+	invitationRepo := collaborator.NewCollaboratorInvitationRepositoryInfrastructure(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.3.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents, shop_admin_actions, platform_collaborators, shop_collaborators, invitations)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -491,6 +504,48 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
 
+	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
+	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
+		platformCollabRepo,
+		invitationRepo,
+		postgresUserRepo,
+	)
+
+	inviteShopUC := collaboratorusecase.NewInviteShopCollaboratorUsecase(
+		shopCollabRepo,
+		invitationRepo,
+		shopRepo,
+		postgresUserRepo,
+	)
+
+	acceptInvitationUC := collaboratorusecase.NewAcceptInvitationUsecase(
+		invitationRepo,
+		platformCollabRepo,
+		shopCollabRepo,
+		shopRepo,
+		postgresUserRepo,
+	)
+
+	listCollabsUC := collaboratorusecase.NewListCollaboratorsUsecase(
+		platformCollabRepo,
+		shopCollabRepo,
+		shopRepo,
+	)
+
+	updateRoleUC := collaboratorusecase.NewUpdateCollaboratorRoleUsecase(
+		platformCollabRepo,
+		shopCollabRepo,
+		shopRepo,
+	)
+
+	removeCollabUC := collaboratorusecase.NewRemoveCollaboratorUsecase(
+		platformCollabRepo,
+		shopCollabRepo,
+		shopRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.3.0 Collaborator usecases initialized (invite, accept, list, update, remove)")
+
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
 		codProofRepo,
@@ -678,7 +733,17 @@ func (a *App) setupRouter() {
 		adminActivateShopUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.2.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop)")
+	// ============ 🆕 v4.3.0 : COLLABORATOR HANDLER ============
+	collaboratorHandler := collaboratorhandler.NewCollaboratorHandler(
+		invitePlatformUC,
+		inviteShopUC,
+		acceptInvitationUC,
+		listCollabsUC,
+		updateRoleUC,
+		removeCollabUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.3.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -699,6 +764,12 @@ func (a *App) setupRouter() {
 
 	// Webhooks (public, pas d'auth requise)
 	r.Post("/webhooks/{provider}", middl.ErrorHandler(webhookHandler.HandleWebhook))
+
+	// ============ 🆕 v4.3.0 : PUBLIC COLLABORATOR INVITATION ROUTES ============
+	r.Route("/api/collaborators/invitations", func(r chi.Router) {
+		r.Use(middl.RateLimiter) // Rate limiting global (30 req/min)
+		collaboratorHandler.RegisterPublicRoutes(r)
+	})
 
 	// ============ 4. ROUTE PROTÉGÉE (user authentifié) ============
 	r.With(middleware.AuthMiddleware).
@@ -819,7 +890,6 @@ func (a *App) setupRouter() {
 
 		// ============ ADMIN SCHEDULER ROUTES (super_admin + admin uniquement) ============
 		r.Route("/admin/scheduler", func(r chi.Router) {
-			r.Use(middleware.AuthMiddleware)
 			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
 			r.Post("/trigger", middl.ErrorHandler(schedulerHandler.TriggerManualCollection))
 			r.Get("/batches", middl.ErrorHandler(schedulerHandler.GetRecentBatches))
@@ -829,7 +899,6 @@ func (a *App) setupRouter() {
 
 		// ============ COMMISSION RATES ROUTES (super_admin + admin uniquement) ============
 		r.Route("/admin/commission-rates", func(r chi.Router) {
-			r.Use(middleware.AuthMiddleware)
 			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
 			r.Put("/", middl.ErrorHandler(commissionRateHandler.UpdateRate))
 			r.Get("/", middl.ErrorHandler(commissionRateHandler.GetRates))
@@ -841,7 +910,6 @@ func (a *App) setupRouter() {
 		// ============ 🆕 v4.1.0 : ADMIN MERCHANT KYC ROUTES (super_admin + admin uniquement) ============
 		// L'admin liste les shops en attente et approuve/rejette leur KYC
 		r.Route("/admin/merchant-kyc", func(r chi.Router) {
-			r.Use(middleware.AuthMiddleware)
 			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.1.0 : Protection RBAC
 			merchantKYCHandler.RegisterAdminRoutes(r)
 		})
@@ -849,9 +917,20 @@ func (a *App) setupRouter() {
 		// ============ 🆕 v4.2.0 : ADMIN SHOP ROUTES (super_admin + admin uniquement) ============
 		// Gestion cross-tenant des shops : liste, détails, health score, suspend, activate
 		r.Route("/admin/shops", func(r chi.Router) {
-			r.Use(middleware.AuthMiddleware)
 			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.2.0 : Protection RBAC
 			adminShopHandler.RegisterRoutes(r)
+		})
+
+		// ============ 🆕 v4.3.0 : ADMIN COLLABORATOR PLATFORM ROUTES ============
+		r.Route("/admin/collaborators/platform", func(r chi.Router) {
+			r.Use(middl.RequireRoles("super_admin", "admin"))
+			collaboratorHandler.RegisterAdminPlatformRoutes(r)
+		})
+
+		// ============ 🆕 v4.3.0 : SHOP COLLABORATOR ROUTES ============
+		r.Route("/shops/{shop_id}/collaborators", func(r chi.Router) {
+			r.Use(middl.RequireRoles("merchant", "super_admin"))
+			collaboratorHandler.RegisterShopRoutes(r)
 		})
 	})
 
@@ -896,7 +975,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.2.0 Commission schedulers started")
+			Msg("✅ v4.3.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -904,7 +983,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.2.0: + Admin Shop Management)")
+		Msg("✅ Router configuré avec succès (v4.3.0: + Collaborators System)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -971,7 +1050,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.2.0",
+		Version:     "4.3.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

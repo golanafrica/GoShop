@@ -3,6 +3,7 @@ package middl
 import (
 	"Goshop/interfaces/utils"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -31,6 +32,11 @@ var (
 // Redis rate limiter
 // -------------------------
 func checkRedisLimit(ip string) (bool, error) {
+	// 🆕 v4.3.0 : Vérifier que Redis est initialisé
+	if utils.Rdb == nil {
+		return false, errors.New("redis client not initialized")
+	}
+
 	ctx := context.Background()
 	key := "rl:" + ip
 

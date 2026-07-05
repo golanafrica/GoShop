@@ -40,6 +40,21 @@ func (m *MockUserRepository) EXPECT() *MockUserRepositoryMockRecorder {
 	return m.recorder
 }
 
+// CountUsersByRole mocks base method.
+func (m *MockUserRepository) CountUsersByRole(role string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountUsersByRole", role)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountUsersByRole indicates an expected call of CountUsersByRole.
+func (mr *MockUserRepositoryMockRecorder) CountUsersByRole(role any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountUsersByRole", reflect.TypeOf((*MockUserRepository)(nil).CountUsersByRole), role)
+}
+
 // CreateUser mocks base method.
 func (m *MockUserRepository) CreateUser(user *userentity.UserEntity) (*userentity.UserEntity, error) {
 	m.ctrl.T.Helper()
@@ -83,4 +98,75 @@ func (m *MockUserRepository) FindUserByID(id string) (*userentity.UserEntity, er
 func (mr *MockUserRepositoryMockRecorder) FindUserByID(id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindUserByID", reflect.TypeOf((*MockUserRepository)(nil).FindUserByID), id)
+}
+
+// ListUsersByRole mocks base method.
+func (m *MockUserRepository) ListUsersByRole(role string, limit, offset int) ([]*userentity.UserEntity, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListUsersByRole", role, limit, offset)
+	ret0, _ := ret[0].([]*userentity.UserEntity)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListUsersByRole indicates an expected call of ListUsersByRole.
+func (mr *MockUserRepositoryMockRecorder) ListUsersByRole(role, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListUsersByRole", reflect.TypeOf((*MockUserRepository)(nil).ListUsersByRole), role, limit, offset)
+}
+
+// RecordFailedLogin mocks base method.
+func (m *MockUserRepository) RecordFailedLogin(id string, attempts int, lockedUntil *string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordFailedLogin", id, attempts, lockedUntil)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordFailedLogin indicates an expected call of RecordFailedLogin.
+func (mr *MockUserRepositoryMockRecorder) RecordFailedLogin(id, attempts, lockedUntil any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordFailedLogin", reflect.TypeOf((*MockUserRepository)(nil).RecordFailedLogin), id, attempts, lockedUntil)
+}
+
+// UpdateLastLogin mocks base method.
+func (m *MockUserRepository) UpdateLastLogin(id string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateLastLogin", id)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateLastLogin indicates an expected call of UpdateLastLogin.
+func (mr *MockUserRepositoryMockRecorder) UpdateLastLogin(id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastLogin", reflect.TypeOf((*MockUserRepository)(nil).UpdateLastLogin), id)
+}
+
+// UpdateRole mocks base method.
+func (m *MockUserRepository) UpdateRole(id, role, updatedBy string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateRole", id, role, updatedBy)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateRole indicates an expected call of UpdateRole.
+func (mr *MockUserRepositoryMockRecorder) UpdateRole(id, role, updatedBy any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateRole", reflect.TypeOf((*MockUserRepository)(nil).UpdateRole), id, role, updatedBy)
+}
+
+// UpdateStatus mocks base method.
+func (m *MockUserRepository) UpdateStatus(id, status, updatedBy string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateStatus", id, status, updatedBy)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateStatus indicates an expected call of UpdateStatus.
+func (mr *MockUserRepositoryMockRecorder) UpdateStatus(id, status, updatedBy any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStatus", reflect.TypeOf((*MockUserRepository)(nil).UpdateStatus), id, status, updatedBy)
 }
