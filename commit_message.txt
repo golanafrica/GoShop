@@ -1,68 +1,65 @@
-﻿feat(security): v4.4.2 - Session Management complet
+﻿feat(security): v4.4.3 - API Keys Management complet
 
 Objectif :
-  Implementer la gestion des sessions utilisateurs pour permettre :
-  - Creation automatique de session au login
-  - Verification de session active a chaque requete
-  - Revocation de session au logout
-  - Rejet immediat des sessions revoquees
-  - Audit trail complet (IP, User Agent, device)
+  Permettre l'acces programmatique a l'API via des cles API
+  securisees avec scopes granulaires et audit trail.
 
 Architecture :
-  - Migration 025 + 025b : Table user_sessions (12 colonnes)
-  - Entite UserSession : Hash SHA-256, DeviceInfo, statuts dynamiques
-  - Repository : 25 methodes (CRUD, securite, nettoyage, stats)
-  - 5 Usecases : list, revoke, revoke-all, stats, cleanup
-  - Handler HTTP : 5 endpoints REST
-  - Middleware Auth : Verification session a chaque requete
+  - Migrations 026 + 026b + 026c : Tables api_keys + api_key_usage_logs
+  - Entite APIKey : Hash SHA-256, scopes, generation crypto/rand
+  - Repository : 30 methodes (CRUD, securite, audit, stats)
+  - 6 Usecases : create, list, revoke, revoke-all, stats, validate
+  - Handler HTTP : 5 endpoints REST admin
+  - Middleware APIKeyAuth : Authentification par cle API
 
-Endpoints ajoutes :
-  - GET    /api/admin/sessions         - Lister sessions
-  - GET    /api/admin/sessions/stats   - Statistiques globales
-  - POST   /api/admin/sessions/revoke  - Revoquer une session
-  - POST   /api/admin/sessions/revoke-all - Revoquer toutes
-  - POST   /api/admin/sessions/cleanup - Nettoyage (super_admin)
-  - POST   /logout                     - Deconnexion utilisateur
+Endpoints admin (JWT + RBAC) :
+  - POST   /api/admin/api-keys           - Creer une cle
+  - GET    /api/admin/api-keys           - Lister les cles
+  - POST   /api/admin/api-keys/revoke    - Revoquer une cle
+  - POST   /api/admin/api-keys/revoke-all - Revoquer toutes
+  - GET    /api/admin/api-keys/stats     - Statistiques
+
+Endpoints publics (API Key Auth) :
+  - GET    /v1/public/products           - Scope: read:products
+  - GET    /v1/public/shops              - Scope: read:shops
 
 Securite :
-  - Token JWT avec jti (session_id)
-  - Hash SHA-256 du token en base (jamais en clair)
-  - Verification middleware a chaque requete protegee
-  - Revocation immediate au logout
-  - Rejet 401 des sessions revoquees
-  - Audit trail (IP, User Agent, device info)
-  - Expiration automatique (7 jours par defaut)
+  - Cles API prefixees (gsk_live_, gsk_test_)
+  - Hash SHA-256 en base (jamais stockees en clair)
+  - Affichage complet UNE SEULE FOIS a la creation
+  - 18 scopes granulaires (read/write par domaine)
+  - Revocation immediate avec HTTP 410 Gone
+  - Rate limiting configurable (60/min, 10000/jour)
+  - Limite 10 cles actives par utilisateur
+  - Audit trail complet (usage logs)
+  - Expiration configurable (defaut 1 an, max 5 ans)
 
-Parsing User Agent :
-  - Navigateurs : Chrome, Firefox, Safari, Edge, IE, Opera
-  - OS : Windows, macOS, Linux, Android, iOS
-  - Devices : Desktop, Mobile, Tablet
-
-Statistiques :
-  - Total sessions actives/revoquees/expirees
-  - Users uniques actifs
-  - Moyenne d'inactivite
-  - Top 10 users les plus actifs
-
-Tests valides (6/6) :
-  1. Login : OK (session creee avec jti)
-  2. /auth/me (session active) : OK (200)
-  3. Lister sessions : OK (1 session [CURRENT])
-  4. Statistiques : OK (1 active, 0 revoquee)
-  5. Logout : OK (session revoquee)
-  6. /auth/me apres logout : OK (401 Unauthorized)
+Tests valides (10/10) :
+   0. Verification prealable : OK (migration 026c)
+   1. Login admin (JWT) : OK (544ms)
+   2. Creation cle API : OK (367ms)
+   3. Lister cles API : OK (300ms)
+   4. Auth API Key /products : OK (1.8ms)
+   5. Auth API Key /shops : OK (1.8ms)
+   6. Mauvaise cle rejetee : OK (401, 1.4ms)
+   7. Sans cle rejetee : OK (401, 0.5ms)
+   8. Statistiques : OK (192ms)
+   9. Revocation cle : OK (59ms)
+  10. Cle revoquee rejetee : OK (410, 1.3ms)
 
 Performance :
-  - Login : ~1180ms (creation session inclus)
-  - /auth/me : ~182ms (verification session)
-  - Lister sessions : ~784ms
-  - Stats : ~216ms
-  - Logout : ~408ms (revocation session)
-  - Rejet session revoquee : ~2.5ms
+  - Auth API Key : ~1.8ms (index sur key_hash)
+  - Creation cle : ~367ms
+  - Revocation : ~59ms
+  - Rejet cle revoquee : ~1.3ms
+
+Hotfix :
+  - Migration 026b : Correction vue v_api_key_statistics
+  - Migration 026c : key_prefix VARCHAR(20) -> VARCHAR(50)
 
 Impact :
   - Aucune breaking change
-  - Middleware retro-compatible (SessionRepo optionnel)
-  - Compatible avec v4.4.1 (migration additive)
+  - Middleware retro-compatible
+  - Compatible avec v4.4.2 (migrations additives)
 
-Prochaine etape : Phase 4.3 (API Keys - optionnel)
+Phase 4 completee : Securite avancee 100%

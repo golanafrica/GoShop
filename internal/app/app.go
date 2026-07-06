@@ -41,6 +41,9 @@ import (
 	// 🆕 v4.4.2 : Session Management Usecases
 	sessionusecase "Goshop/application/usecase/session_usecase"
 
+	// 🆕 v4.4.3 : API Key Management Usecases
+	apikeyusecase "Goshop/application/usecase/apikey_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -68,6 +71,9 @@ import (
 	// 🆕 v4.4.2 : Session Management Repository
 	usersessioninfra "Goshop/infrastructure/postgres/user_session"
 
+	// 🆕 v4.4.3 : API Key Management Repository
+	apikeyinfra "Goshop/infrastructure/postgres/api_key"
+
 	// 🆕 v3.0.0 : Repositories PostgreSQL
 	codinfra "Goshop/infrastructure/postgres/cod"
 	creditinfra "Goshop/infrastructure/postgres/credit"
@@ -80,6 +86,7 @@ import (
 	commissionrate "Goshop/infrastructure/postgres/commission_rate"
 	infscheduler "Goshop/infrastructure/scheduler"
 
+	"Goshop/domain/entity"
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
 
@@ -121,6 +128,9 @@ import (
 
 	// 🆕 v4.4.2 : Session Management Handler
 	sessionhandler "Goshop/interfaces/handler/session_handler"
+
+	// 🆕 v4.4.3 : API Key Management Handler
+	apikeyhandler "Goshop/interfaces/handler/apikey_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -242,7 +252,10 @@ func (a *App) setupRouter() {
 	// 🆕 v4.4.2 : Repository Session Management
 	userSessionRepo := usersessioninfra.NewUserSessionRepository(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.4.2 repositories initialized (all + user_2fa + user_sessions)")
+	// 🆕 v4.4.3 : Repository API Keys
+	apiKeyRepo := apikeyinfra.NewAPIKeyRepository(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.4.3 repositories initialized (all + user_2fa + user_sessions + api_keys)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -642,6 +655,29 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.4.2 Session Management usecases initialized (list, revoke, revoke-all, stats, cleanup)")
 
+	// ============ 🆕 v4.4.3 : API KEY MANAGEMENT USECASES ============
+	createAPIKeyUC := apikeyusecase.NewCreateAPIKeyUsecase(
+		apiKeyRepo,
+	)
+
+	listAPIKeysUC := apikeyusecase.NewListAPIKeysUsecase(
+		apiKeyRepo,
+	)
+
+	revokeAPIKeyUC := apikeyusecase.NewRevokeAPIKeyUsecase(
+		apiKeyRepo,
+	)
+
+	revokeAllAPIKeysUC := apikeyusecase.NewRevokeAllAPIKeysUsecase(
+		apiKeyRepo,
+	)
+
+	getAPIKeyStatsUC := apikeyusecase.NewGetAPIKeyStatsUsecase(
+		apiKeyRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.3 API Key Management usecases initialized (create, list, revoke, revoke-all, stats)")
+
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
 		codProofRepo,
@@ -859,13 +895,20 @@ func (a *App) setupRouter() {
 		cleanupSessionsUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.4.2 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions)")
+	// ============ 🆕 v4.4.3 : API KEY MANAGEMENT HANDLER ============
+	apiKeyHandler := apikeyhandler.NewAPIKeyHandler(
+		createAPIKeyUC,
+		listAPIKeysUC,
+		revokeAPIKeyUC,
+		revokeAllAPIKeysUC,
+		getAPIKeyStatsUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
 	// ============================================================
-	// Ce middleware vérifie que la session existe et est active dans la DB
-	// à chaque requête protégée. Si la session est révoquée, il retourne 401.
 	authMiddlewareWithSession := middleware.NewAuthMiddleware(middleware.AuthMiddlewareConfig{
 		SessionRepo: userSessionRepo,
 	})
@@ -894,6 +937,38 @@ func (a *App) setupRouter() {
 	// Webhooks (public, pas d'auth requise)
 	r.Post("/webhooks/{provider}", middl.ErrorHandler(webhookHandler.HandleWebhook))
 
+	// ============================================================
+	// 🆕 v4.4.3 : ROUTES PROTÉGÉES PAR API KEY (pour intégrations tierces)
+	// ============================================================
+	// Ces routes peuvent être appelées avec une API Key au lieu d'un JWT
+	// Exemple : curl -H "X-API-Key: gsk_live_..." https://api.goshop.com/v1/public/products
+
+	// Route publique avec authentification API Key (lecture produits)
+	r.With(middl.APIKeyAuth(middl.APIKeyAuthConfig{
+		APIKeyRepo:    apiKeyRepo,
+		RequiredScope: entity.ScopeReadProducts,
+	})).Get("/v1/public/products", func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"message":  "API Key authentifiée avec succès",
+			"scope":    "read:products",
+			"endpoint": "/v1/public/products",
+		})
+	})
+
+	// Route publique avec authentification API Key (lecture shops)
+	r.With(middl.APIKeyAuth(middl.APIKeyAuthConfig{
+		APIKeyRepo:    apiKeyRepo,
+		RequiredScope: entity.ScopeReadShops,
+	})).Get("/v1/public/shops", func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"message":  "API Key authentifiée avec succès",
+			"scope":    "read:shops",
+			"endpoint": "/v1/public/shops",
+		})
+	})
+
 	// ============ 🆕 v4.3.0 : PUBLIC COLLABORATOR INVITATION ROUTES ============
 	r.Route("/api/collaborators/invitations", func(r chi.Router) {
 		r.Use(middl.RateLimiter)
@@ -901,13 +976,11 @@ func (a *App) setupRouter() {
 	})
 
 	// ============ 4. ROUTE PROTÉGÉE (user authentifié) ============
-	// 🆕 v4.4.2 : Utilise authMiddlewareWithSession pour vérifier la session
 	r.With(authMiddlewareWithSession).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
-		// 🆕 v4.4.2 : Utilise authMiddlewareWithSession pour vérifier la session
 		r.Use(authMiddlewareWithSession)
 
 		// Routes de gestion des shops (SANS TenantResolver)
@@ -1072,6 +1145,12 @@ func (a *App) setupRouter() {
 			r.Use(middl.RequireRoles("super_admin", "admin"))
 			sessionHandler.RegisterRoutes(r)
 		})
+
+		// ============ 🆕 v4.4.3 : API KEY MANAGEMENT ROUTES ============
+		r.Route("/admin/api-keys", func(r chi.Router) {
+			r.Use(middl.RequireRoles("super_admin", "admin"))
+			apiKeyHandler.RegisterRoutes(r)
+		})
 	})
 
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
@@ -1115,7 +1194,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.4.2 Commission schedulers started")
+			Msg("✅ v4.4.3 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1123,7 +1202,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.4.2: + Session Management)")
+		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1190,7 +1269,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.4.2",
+		Version:     "4.4.3", // 🆕 v4.4.3
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
