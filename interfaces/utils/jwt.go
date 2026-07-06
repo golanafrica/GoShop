@@ -22,17 +22,38 @@ func InitJWT(secret string) {
 
 // ============================================================
 // 🆕 v4.0.0 : GenerateAccessToken avec rôle
+// 🆕 v4.4.2 : + GenerateAccessTokenWithSession (avec jti)
 // ============================================================
 
 // GenerateAccessToken génère un token d'accès avec user_id ET role
 func GenerateAccessToken(userID, role string) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":  userID,
-		"role": role, // 🆕 v4.0.0 : rôle dans le JWT
+		"role": role,
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(15 * time.Minute).Unix(),
 		"type": "access",
 	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// 🆕 v4.4.2 : GenerateAccessTokenWithSession inclut le jti (session_id)
+// Utilisé lors du login pour lier le token à une session en base
+func GenerateAccessTokenWithSession(userID, role, sessionID string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":  userID,
+		"role": role,
+		"iat":  time.Now().Unix(),
+		"exp":  time.Now().Add(15 * time.Minute).Unix(),
+		"type": "access",
+	}
+
+	// 🆕 v4.4.2 : Ajouter le jti (session_id) si fourni
+	if sessionID != "" {
+		claims["jti"] = sessionID
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
 }
@@ -45,7 +66,7 @@ func GenerateAccessToken(userID, role string) (string, error) {
 func GenerateRefreshToken(userID, jti, role string) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":  userID,
-		"role": role, // 🆕 v4.0.0 : rôle dans le refresh token aussi
+		"role": role,
 		"iat":  time.Now().Unix(),
 		"exp":  time.Now().Add(7 * 24 * time.Hour).Unix(),
 		"jti":  jti,
@@ -106,7 +127,6 @@ func ValidateTokenAndExtractRole(tokenString string) (string, string, error) {
 
 	role, ok := claims["role"].(string)
 	if !ok || role == "" {
-		// Rétrocompatibilité : anciens tokens sans rôle → merchant
 		role = "merchant"
 	}
 

@@ -5,34 +5,44 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
 	userdto "Goshop/application/dto/user_dto"
 	userusecase "Goshop/application/usecase/user_usecase"
 	"Goshop/config/setupLogging"
+	"Goshop/domain/repository"
 	userrepository "Goshop/domain/repository/user_repository"
 	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
 )
 
+// ============================================================
+// 🆕 v4.0.0 : UserHandler avec support JWT + rôle
+// 🆕 v4.4.2 : + Intégration Session Management + Logout
+// ============================================================
+
 type UserHandler struct {
 	registerUc   *userusecase.RegisterUsecase
 	loginUc      *userusecase.LoginUsecase
 	getProfileUc *userusecase.GetProfileUsecase
-	//logger       *setupLogging.Logger
+	sessionRepo  repository.UserSessionRepository // 🆕 v4.4.2
 }
 
-// NewUserHandler — maintenant reçoit un logger
-// NewUserHandler — maintenant reçoit un logger et le passe aux use cases
-func NewUserHandler(repo userrepository.UserRepository, logger *setupLogging.Logger) *UserHandler {
+// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo
+func NewUserHandler(
+	repo userrepository.UserRepository,
+	sessionRepo repository.UserSessionRepository, // 🆕 v4.4.2
+	logger *setupLogging.Logger,
+) *UserHandler {
 	handlerLogger := logger.WithComponent("user_handler")
 	return &UserHandler{
 		registerUc:   userusecase.NewRegisterUsecase(repo, handlerLogger),
-		loginUc:      userusecase.NewLoginUsecase(repo, handlerLogger),
+		loginUc:      userusecase.NewLoginUsecase(repo, sessionRepo, handlerLogger),
 		getProfileUc: userusecase.NewGetProfileUsecase(repo),
-		//logger:       handlerLogger,
+		sessionRepo:  sessionRepo,
 	}
 }
 
@@ -53,7 +63,6 @@ func NewUserHandler(repo userrepository.UserRepository, logger *setupLogging.Log
 // @Router /register [post]
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	//logger := setupLogging.FromContext(ctx).WithOperation("register")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Msg("📝 Début inscription utilisateur")
@@ -129,10 +138,6 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 // LOGIN
 // -----------------------
 
-// -----------------------
-// LOGIN
-// -----------------------
-
 // @Summary User Login
 // @Description Authenticate user and return JWT tokens (access + refresh)
 // @Tags Authentication
@@ -146,7 +151,6 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 // @Router /login [post]
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Msg("🔐 Tentative de connexion")
@@ -190,9 +194,14 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 	logger.Info().Str("user_email", req.Email).Msg("🔑 Authentification en cours")
 
 	// ============================================================
-	// 🆕 v4.0.0 : Execute retourne maintenant 3 valeurs
+	// 🆕 v4.4.2 : Utiliser ExecuteWithContext avec IP + UserAgent
 	// ============================================================
-	accessToken, refreshToken, err := h.loginUc.Execute(ctx, req.Email, req.Password)
+	ipAddress := extractIPWithoutPort(r.RemoteAddr)
+	userAgent := r.UserAgent()
+
+	accessToken, refreshToken, err := h.loginUc.ExecuteWithContext(
+		ctx, req.Email, req.Password, ipAddress, userAgent,
+	)
 	if err != nil {
 		logger.Warn().
 			Err(err).
@@ -208,9 +217,6 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 		Int("refresh_token_length", len(refreshToken)).
 		Msg("✅ Connexion réussie, tokens générés")
 
-	// ============================================================
-	// 🆕 v4.0.0 : Retourner les 2 tokens + extraire le rôle
-	// ============================================================
 	// Extraire le rôle depuis l'access token pour le retourner au client
 	role := "merchant" // Valeur par défaut
 	if claims, err := utils.ValidateToken(accessToken); err == nil {
@@ -245,7 +251,6 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 // @Router /auth/me [get]
 func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	//logger := setupLogging.FromContext(ctx).WithOperation("get_profile")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Msg("👤 Récupération profil utilisateur")
@@ -291,7 +296,71 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// Helpers de masquage (inchangés)
+// ============================================================
+// 🆕 v4.4.2 : LOGOUT - Révoque la session courante
+// ============================================================
+
+// @Summary User Logout
+// @Description Revoke current session and invalidate token
+// @Tags Authentication
+// @Produce json
+// @Success 200 {object} map[string]string "{'message': 'logged out successfully'}"
+// @Failure 401 {object} utils.AppError "Unauthorized"
+// @Failure 500 {object} utils.AppError "Internal server error"
+// @Security ApiKeyAuth
+// @Router /logout [post]
+func (h *UserHandler) Logout(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	// Extraire les infos du contexte
+	userID, _ := utils.UserIDFromContext(ctx)
+	sessionID, _ := utils.SessionIDFromContext(ctx)
+
+	logger.Info().
+		Str("user_id", userID).
+		Str("session_id", sessionID).
+		Msg("🔐 Déconnexion utilisateur")
+
+	// Si pas de session ID, on retourne quand même un succès
+	if sessionID == "" {
+		logger.Warn().
+			Str("user_id", userID).
+			Msg("⚠️ Session ID manquant - déconnexion partielle")
+		utils.WriteJSON(w, http.StatusOK, map[string]string{
+			"message": "logged out (session ID not found)",
+		})
+		return nil
+	}
+
+	// Révoquer la session
+	if h.sessionRepo != nil {
+		if err := h.sessionRepo.RevokeSession(ctx, sessionID, userID); err != nil {
+			logger.Error().
+				Err(err).
+				Str("session_id", sessionID).
+				Str("user_id", userID).
+				Msg("❌ Erreur révocation session")
+			return err
+		}
+
+		logger.Info().
+			Str("user_id", userID).
+			Str("session_id", sessionID).
+			Msg("✅ Session révoquée avec succès")
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]string{
+		"message":    "logged out successfully",
+		"session_id": sessionID,
+	})
+	return nil
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
 func maskEmail(email string) string {
 	if email == "" {
 		return ""
@@ -313,4 +382,21 @@ func maskUserID(userID string) string {
 		return userID
 	}
 	return userID[:4] + "..." + userID[len(userID)-4:]
+}
+
+// 🆕 v4.4.2 : Extraction IP sans port
+// Gère les formats : "192.168.1.1:8080", "[::1]:8080", "192.168.1.1"
+func extractIPWithoutPort(addr string) string {
+	if addr == "" {
+		return ""
+	}
+
+	// Essayer de séparer host et port avec net.SplitHostPort
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Si erreur, retourner l'adresse telle quelle (pas de port)
+		return addr
+	}
+
+	return host
 }

@@ -8,16 +8,18 @@ import (
 
 	"Goshop/application/metrics"
 	"Goshop/config/setupLogging"
+	"Goshop/domain/entity"
+	"Goshop/domain/repository"
+	userrepository "Goshop/domain/repository/user_repository"
+	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/bcrypt"
-
-	userrepository "Goshop/domain/repository/user_repository"
-	"Goshop/interfaces/utils"
 )
 
 // ============================================================
 // 🆕 v4.0.0 : Types des générateurs de token mis à jour
+// 🆕 v4.4.2 : + Intégration Session Management
 // ============================================================
 
 type generateAccessFunc func(userID, role string) (string, error)
@@ -25,15 +27,22 @@ type generateRefreshFunc func(userID, jti, role string) (string, error)
 
 type LoginUsecase struct {
 	repo            userrepository.UserRepository
+	sessionRepo     repository.UserSessionRepository // 🆕 v4.4.2
 	generateAccess  generateAccessFunc
 	generateRefresh generateRefreshFunc
 }
 
-func NewLoginUsecase(repo userrepository.UserRepository, logger *setupLogging.Logger) *LoginUsecase {
+// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo
+func NewLoginUsecase(
+	repo userrepository.UserRepository,
+	sessionRepo repository.UserSessionRepository, // 🆕 v4.4.2
+	logger *setupLogging.Logger,
+) *LoginUsecase {
 	return &LoginUsecase{
 		repo:            repo,
-		generateAccess:  utils.GenerateAccessToken,  // 🆕 v4.0.0
-		generateRefresh: utils.GenerateRefreshToken, // 🆕 v4.0.0
+		sessionRepo:     sessionRepo,
+		generateAccess:  utils.GenerateAccessToken,
+		generateRefresh: utils.GenerateRefreshToken,
 	}
 }
 
@@ -65,10 +74,19 @@ func maskUsersID(id string) string {
 }
 
 // ============================================================
-// EXECUTE - Retourne maintenant (accessToken, refreshToken, error)
+// 🆕 v4.4.2 : ExecuteWithContext - Accepte IP et UserAgent
 // ============================================================
 
 func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (string, string, error) {
+	return uc.ExecuteWithContext(ctx, email, password, "", "")
+}
+
+// 🆕 v4.4.2 : Nouvelle méthode avec contexte complet
+func (uc *LoginUsecase) ExecuteWithContext(
+	ctx context.Context,
+	email, password string,
+	ipAddress, userAgent string,
+) (string, string, error) {
 	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
@@ -169,9 +187,7 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 			Dur("total_duration_ms", time.Since(start)).
 			Msg("❌ Mot de passe incorrect")
 
-		// 🆕 v4.0.0 : Enregistrer la tentative échouée
 		user.RecordFailedLogin()
-		// TODO: Sauvegarder en DB via repo.RecordFailedLogin()
 
 		metrics.AuthLoginFailedTotal.Inc()
 		return "", "", utils.ErrInvalidCredentials
@@ -188,7 +204,6 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 	// 🆕 v4.0.0 : Enregistrer la connexion réussie
 	// ============================================================
 	user.RecordSuccessfulLogin()
-	// TODO: Sauvegarder en DB via repo.UpdateLastLogin()
 
 	// 3. Génération du refresh token (JTI)
 	tokenStart := time.Now()
@@ -202,8 +217,10 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 	// 🆕 v4.0.0 : Générer un JTI pour le refresh token
 	jti := utils.GenerateUUID()
 
-	// 🆕 v4.0.0 : Passer le rôle aux générateurs de token
-	accessToken, err := uc.generateAccess(user.ID, user.Role)
+	// ============================================================
+	// 🆕 v4.4.2 : Générer l'access token AVEC le jti (session_id)
+	// ============================================================
+	accessToken, err := utils.GenerateAccessTokenWithSession(user.ID, user.Role, jti)
 	if err != nil {
 		logger.Error().
 			Err(err).
@@ -245,6 +262,50 @@ func (uc *LoginUsecase) Execute(ctx context.Context, email, password string) (st
 		Dur("token_gen_duration_ms", time.Since(tokenStart)).
 		Dur("total_duration_ms", time.Since(start)).
 		Msg("✅ Authentification réussie, tokens générés")
+
+	// ============================================================
+	// 🆕 v4.4.2 : CRÉATION DE LA SESSION
+	// ============================================================
+	if uc.sessionRepo != nil {
+		sessionStart := time.Now()
+
+		// Le session_id est le même que le jti du refresh token
+		accessSessionID := jti
+
+		session, err := entity.NewUserSession(
+			user.ID,
+			accessSessionID,
+			accessToken, // Le token complet sera hashé dans NewUserSession
+			ipAddress,
+			userAgent,
+			entity.DefaultSessionDuration,
+		)
+		if err != nil {
+			logger.Error().
+				Err(err).
+				Str("user_id", user.ID).
+				Msg("❌ Erreur création session")
+			// Non bloquant : on continue même si la session échoue
+		} else {
+			if err := uc.sessionRepo.Create(ctx, session); err != nil {
+				logger.Error().
+					Err(err).
+					Str("user_id", user.ID).
+					Str("session_id", accessSessionID).
+					Msg("❌ Erreur sauvegarde session")
+				// Non bloquant
+			} else {
+				logger.Info().
+					Str("user_id", user.ID).
+					Str("session_id", accessSessionID).
+					Str("ip_address", ipAddress).
+					Str("browser", session.DeviceInfo.Browser).
+					Str("os", session.DeviceInfo.OS).
+					Dur("session_creation_ms", time.Since(sessionStart)).
+					Msg("✅ Session créée avec succès")
+			}
+		}
+	}
 
 	metrics.AuthLoginTotal.Inc()
 

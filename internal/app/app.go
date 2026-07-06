@@ -38,6 +38,9 @@ import (
 	// 🆕 v4.4.0 : 2FA Usecases
 	twofausecase "Goshop/application/usecase/twofa_usecase"
 
+	// 🆕 v4.4.2 : Session Management Usecases
+	sessionusecase "Goshop/application/usecase/session_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -61,6 +64,9 @@ import (
 
 	// 🆕 v4.4.0 : 2FA Repository
 	user2fainfra "Goshop/infrastructure/postgres/user_2fa"
+
+	// 🆕 v4.4.2 : Session Management Repository
+	usersessioninfra "Goshop/infrastructure/postgres/user_session"
 
 	// 🆕 v3.0.0 : Repositories PostgreSQL
 	codinfra "Goshop/infrastructure/postgres/cod"
@@ -112,6 +118,9 @@ import (
 
 	// 🆕 v4.4.0 : 2FA Handler
 	twofahandler "Goshop/interfaces/handler/twofa_handler"
+
+	// 🆕 v4.4.2 : Session Management Handler
+	sessionhandler "Goshop/interfaces/handler/session_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -230,7 +239,10 @@ func (a *App) setupRouter() {
 	// 🆕 v4.4.0 : Repository 2FA
 	user2faRepo := user2fainfra.NewUser2FARepository(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.4.0 repositories initialized (all + user_2fa)")
+	// 🆕 v4.4.2 : Repository Session Management
+	userSessionRepo := usersessioninfra.NewUserSessionRepository(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.4.2 repositories initialized (all + user_2fa + user_sessions)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -279,7 +291,6 @@ func (a *App) setupRouter() {
 	smtpService, err := notification.NewSMTPService(emailConfig, a.Logger.Logger)
 	if err != nil {
 		a.Logger.Warn().Err(err).Msg("⚠️ Email service non disponible (mode dégradé)")
-		// Fallback : utiliser NoopEmailService (pas NoopNotificationService)
 		emailService = notification.NewNoopEmailService(a.Logger.Logger)
 	} else {
 		emailService = smtpService
@@ -291,8 +302,10 @@ func (a *App) setupRouter() {
 	}
 
 	// -- Usecases (existants)
+	// 🆕 v4.4.2 : Ajout de userSessionRepo comme 2ème paramètre
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
+		userSessionRepo, // 🆕 v4.4.2
 		utils.ValidateToken,
 		utils.GenerateAccessToken,
 		utils.GenerateRefreshToken,
@@ -331,7 +344,7 @@ func (a *App) setupRouter() {
 	)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
 
-	// 🆕 v2.9.0 : Process Tontine Webhook Usecase (doit être créé AVANT processWebhookUC)
+	// 🆕 v2.9.0 : Process Tontine Webhook Usecase
 	processTontineWebhookUC := paymentusecase.NewProcessTontineWebhookUsecase(
 		tontinePaymentRepo,
 		tontineGroupRepo,
@@ -346,7 +359,7 @@ func (a *App) setupRouter() {
 		paymentRegistry,
 		a.DB,
 		shopRepo,
-		processTontineWebhookUC, // 🆕 v2.9.0
+		processTontineWebhookUC,
 	)
 
 	// Withdrawal Usecases
@@ -539,12 +552,11 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
 
 	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
-	// 🆕 v4.3.2 : + emailService injecté pour envoi automatique des emails
 	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
 		platformCollabRepo,
 		invitationRepo,
 		postgresUserRepo,
-		emailService, // 🆕 v4.3.2
+		emailService,
 	)
 
 	inviteShopUC := collaboratorusecase.NewInviteShopCollaboratorUsecase(
@@ -552,7 +564,7 @@ func (a *App) setupRouter() {
 		invitationRepo,
 		shopRepo,
 		postgresUserRepo,
-		emailService, // 🆕 v4.3.2
+		emailService,
 	)
 
 	acceptInvitationUC := collaboratorusecase.NewAcceptInvitationUsecase(
@@ -606,6 +618,29 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ v4.4.0 2FA usecases initialized (setup, verify, disable, status, regenerate)")
+
+	// ============ 🆕 v4.4.2 : SESSION MANAGEMENT USECASES ============
+	listSessionsUC := sessionusecase.NewListSessionsUsecase(
+		userSessionRepo,
+	)
+
+	revokeSessionUC := sessionusecase.NewRevokeSessionUsecase(
+		userSessionRepo,
+	)
+
+	revokeAllSessionsUC := sessionusecase.NewRevokeAllSessionsUsecase(
+		userSessionRepo,
+	)
+
+	getSessionStatsUC := sessionusecase.NewGetSessionStatsUsecase(
+		userSessionRepo,
+	)
+
+	cleanupSessionsUC := sessionusecase.NewCleanupSessionsUsecase(
+		userSessionRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.2 Session Management usecases initialized (list, revoke, revoke-all, stats, cleanup)")
 
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
@@ -677,7 +712,7 @@ func (a *App) setupRouter() {
 		postgreProductRepo,
 		postgresCustomerRepo,
 		postgresOrderItem,
-		codProofRepo, // 🆕 v3.0.1
+		codProofRepo,
 	)
 
 	// Cash Order Handler
@@ -689,8 +724,10 @@ func (a *App) setupRouter() {
 		cancelOrderUC,
 	)
 
+	// 🆕 v4.4.2 : Ajout de userSessionRepo comme 2ème paramètre
 	userHandler := userhandler.NewUserHandler(
 		postgresUserRepo,
+		userSessionRepo, // 🆕 v4.4.2
 		a.Logger.WithComponent("user_handler"),
 	)
 
@@ -774,7 +811,7 @@ func (a *App) setupRouter() {
 		rateRepo,
 		onlinePaymentSched,
 		tontineSched,
-		creditSched, // 🆕 v3.4.0
+		creditSched,
 	)
 
 	// ============ 🆕 v4.1.0 : MERCHANT KYC HANDLER ============
@@ -813,7 +850,25 @@ func (a *App) setupRouter() {
 		regenerateCodesUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.4.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa)")
+	// ============ 🆕 v4.4.2 : SESSION MANAGEMENT HANDLER ============
+	sessionHandler := sessionhandler.NewSessionHandler(
+		listSessionsUC,
+		revokeSessionUC,
+		revokeAllSessionsUC,
+		getSessionStatsUC,
+		cleanupSessionsUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.2 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions)")
+
+	// ============================================================
+	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
+	// ============================================================
+	// Ce middleware vérifie que la session existe et est active dans la DB
+	// à chaque requête protégée. Si la session est révoquée, il retourne 401.
+	authMiddlewareWithSession := middleware.NewAuthMiddleware(middleware.AuthMiddlewareConfig{
+		SessionRepo: userSessionRepo,
+	})
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -824,6 +879,10 @@ func (a *App) setupRouter() {
 	r.Post("/auth/refresh", middl.ErrorHandler(refreshHandler.Refresh))
 	r.Post("/register", middl.ErrorHandler(userHandler.Register))
 	r.Post("/login", middl.ErrorHandler(userHandler.Login))
+
+	// 🆕 v4.4.2 : Logout route (nécessite auth + session active)
+	r.With(authMiddlewareWithSession).
+		Post("/logout", middl.ErrorHandler(userHandler.Logout))
 
 	r.Get("/help", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Goshop API est en ligne !"))
@@ -837,17 +896,19 @@ func (a *App) setupRouter() {
 
 	// ============ 🆕 v4.3.0 : PUBLIC COLLABORATOR INVITATION ROUTES ============
 	r.Route("/api/collaborators/invitations", func(r chi.Router) {
-		r.Use(middl.RateLimiter) // Rate limiting global (30 req/min)
+		r.Use(middl.RateLimiter)
 		collaboratorHandler.RegisterPublicRoutes(r)
 	})
 
 	// ============ 4. ROUTE PROTÉGÉE (user authentifié) ============
-	r.With(middleware.AuthMiddleware).
+	// 🆕 v4.4.2 : Utilise authMiddlewareWithSession pour vérifier la session
+	r.With(authMiddlewareWithSession).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
-		r.Use(middleware.AuthMiddleware)
+		// 🆕 v4.4.2 : Utilise authMiddlewareWithSession pour vérifier la session
+		r.Use(authMiddlewareWithSession)
 
 		// Routes de gestion des shops (SANS TenantResolver)
 		r.Route("/shops", func(r chi.Router) {
@@ -911,7 +972,7 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/complete", middl.ErrorHandler(paymentHandler.CompletePayment))
 			})
 
-			// Withdrawals (cash-out) - 🆕 v4.1.0 : KYC vérification ajoutée dans usecase
+			// Withdrawals (cash-out)
 			r.Route("/withdrawals", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(withdrawalHandler.CreateWithdrawal))
 				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
@@ -926,14 +987,13 @@ func (a *App) setupRouter() {
 				r.Get("/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
 			})
 
-			// 🆕 v2.9.0 : Merchant KYC routes (côté marchand - revue par le marchand)
+			// 🆕 v2.9.0 : Merchant KYC routes
 			r.Route("/merchant/kyc", func(r chi.Router) {
 				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
 				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
 			})
 
-			// ============ 🆕 v4.1.0 : MERCHANT KYC ROUTES (KYC Marchand) ============
-			// Le marchand soumet ses documents KYC et consulte son statut
+			// ============ 🆕 v4.1.0 : MERCHANT KYC ROUTES ============
 			r.Route("/merchant-kyc", func(r chi.Router) {
 				merchantKYCHandler.RegisterMerchantRoutes(r)
 			})
@@ -958,18 +1018,18 @@ func (a *App) setupRouter() {
 		// 🆕 v4.0.0 : ADMIN ROUTES - PROTÉGÉES PAR RBAC
 		// ============================================================
 
-		// ============ ADMIN SCHEDULER ROUTES (super_admin + admin uniquement) ============
+		// ============ ADMIN SCHEDULER ROUTES ============
 		r.Route("/admin/scheduler", func(r chi.Router) {
-			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
+			r.Use(middl.RequireRoles("super_admin", "admin"))
 			r.Post("/trigger", middl.ErrorHandler(schedulerHandler.TriggerManualCollection))
 			r.Get("/batches", middl.ErrorHandler(schedulerHandler.GetRecentBatches))
 			r.Get("/batches/{id}", middl.ErrorHandler(schedulerHandler.GetBatchDetails))
 			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
 		})
 
-		// ============ COMMISSION RATES ROUTES (super_admin + admin uniquement) ============
+		// ============ COMMISSION RATES ROUTES ============
 		r.Route("/admin/commission-rates", func(r chi.Router) {
-			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.0.0 : Protection RBAC
+			r.Use(middl.RequireRoles("super_admin", "admin"))
 			r.Put("/", middl.ErrorHandler(commissionRateHandler.UpdateRate))
 			r.Get("/", middl.ErrorHandler(commissionRateHandler.GetRates))
 			r.Post("/trigger-online", middl.ErrorHandler(commissionRateHandler.TriggerOnlineCollection))
@@ -977,17 +1037,15 @@ func (a *App) setupRouter() {
 			r.Post("/trigger-credit", middl.ErrorHandler(commissionRateHandler.TriggerCreditCollection))
 		})
 
-		// ============ 🆕 v4.1.0 : ADMIN MERCHANT KYC ROUTES (super_admin + admin uniquement) ============
-		// L'admin liste les shops en attente et approuve/rejette leur KYC
+		// ============ 🆕 v4.1.0 : ADMIN MERCHANT KYC ROUTES ============
 		r.Route("/admin/merchant-kyc", func(r chi.Router) {
-			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.1.0 : Protection RBAC
+			r.Use(middl.RequireRoles("super_admin", "admin"))
 			merchantKYCHandler.RegisterAdminRoutes(r)
 		})
 
-		// ============ 🆕 v4.2.0 : ADMIN SHOP ROUTES (super_admin + admin uniquement) ============
-		// Gestion cross-tenant des shops : liste, détails, health score, suspend, activate
+		// ============ 🆕 v4.2.0 : ADMIN SHOP ROUTES ============
 		r.Route("/admin/shops", func(r chi.Router) {
-			r.Use(middl.RequireRoles("super_admin", "admin")) // 🆕 v4.2.0 : Protection RBAC
+			r.Use(middl.RequireRoles("super_admin", "admin"))
 			adminShopHandler.RegisterRoutes(r)
 		})
 
@@ -1003,32 +1061,38 @@ func (a *App) setupRouter() {
 			collaboratorHandler.RegisterShopRoutes(r)
 		})
 
-		// ============ 🆕 v4.4.0 : 2FA ROUTES (super_admin + admin uniquement) ============
+		// ============ 🆕 v4.4.0 : 2FA ROUTES ============
 		r.Route("/admin/2fa", func(r chi.Router) {
 			r.Use(middl.RequireRoles("super_admin", "admin"))
 			twoFAHandler.RegisterRoutes(r)
+		})
+
+		// ============ 🆕 v4.4.2 : SESSION MANAGEMENT ROUTES ============
+		r.Route("/admin/sessions", func(r chi.Router) {
+			r.Use(middl.RequireRoles("super_admin", "admin"))
+			sessionHandler.RegisterRoutes(r)
 		})
 	})
 
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
 	cronSchedule := os.Getenv("COMMISSION_SCHEDULE")
 	if cronSchedule == "" {
-		cronSchedule = "0 2 * * *" // Défaut : 2h du matin
+		cronSchedule = "0 2 * * *"
 	}
 
 	onlinePaymentSchedule := os.Getenv("ONLINE_PAYMENT_SCHEDULE")
 	if onlinePaymentSchedule == "" {
-		onlinePaymentSchedule = "0 */1 * * *" // Défaut : toutes les heures
+		onlinePaymentSchedule = "0 */1 * * *"
 	}
 
 	tontineSchedule := os.Getenv("TONTINE_SCHEDULE")
 	if tontineSchedule == "" {
-		tontineSchedule = "*/30 * * * *" // Défaut : toutes les 30 min
+		tontineSchedule = "*/30 * * * *"
 	}
 
 	creditSchedule := os.Getenv("CREDIT_SCHEDULE")
 	if creditSchedule == "" {
-		creditSchedule = "0 3 * * *" // Défaut : 3h du matin
+		creditSchedule = "0 3 * * *"
 	}
 
 	a.Scheduler = infscheduler.NewCronScheduler(
@@ -1051,7 +1115,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.4.0 Commission schedulers started")
+			Msg("✅ v4.4.2 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1059,7 +1123,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.4.0: + 2FA System)")
+		Msg("✅ Router configuré avec succès (v4.4.2: + Session Management)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1126,7 +1190,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.4.0", // 🆕 v4.4.0
+		Version:     "4.4.2",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

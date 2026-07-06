@@ -8,6 +8,7 @@ import (
 
 	"Goshop/config/setupLogging"
 	authentity "Goshop/domain/auth_entity"
+	"Goshop/domain/repository"
 	authrepository "Goshop/domain/repository/auth_repository"
 	"Goshop/interfaces/utils"
 
@@ -17,30 +18,35 @@ import (
 
 // ============================================================
 // 🆕 v4.0.0 : Signature mise à jour avec rôle
+// 🆕 v4.4.2 : + Intégration Session Management
 // ============================================================
 
 type RefreshUsecase struct {
 	repo               authrepository.RefreshSessionRepository
+	sessionRepo        repository.UserSessionRepository // 🆕 v4.4.2
 	validateToken      func(string) (jwt.MapClaims, error)
-	generateAccess     func(string, string) (string, error)         // 🆕 v4.0.0 : (userID, role)
-	generateRefresh    func(string, string, string) (string, error) // 🆕 v4.0.0 : (userID, jti, role)
+	generateAccess     func(string, string) (string, error)
+	generateRefresh    func(string, string, string) (string, error)
 	now                func() time.Time
 	newJTI             func() string
 	refreshExpiryDelta time.Duration
 	logger             *setupLogging.Logger
 }
 
+// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo
 func NewRefreshUsecase(
 	repo authrepository.RefreshSessionRepository,
+	sessionRepo repository.UserSessionRepository, // 🆕 v4.4.2
 	validateToken func(string) (jwt.MapClaims, error),
-	generateAccess func(string, string) (string, error), // 🆕 v4.0.0
-	generateRefresh func(string, string, string) (string, error), // 🆕 v4.0.0
+	generateAccess func(string, string) (string, error),
+	generateRefresh func(string, string, string) (string, error),
 	now func() time.Time,
 	newJTI func() string,
 	refreshExpiry time.Duration,
 ) *RefreshUsecase {
 	return &RefreshUsecase{
 		repo:               repo,
+		sessionRepo:        sessionRepo,
 		validateToken:      validateToken,
 		generateAccess:     generateAccess,
 		generateRefresh:    generateRefresh,
@@ -104,21 +110,19 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	// ============================================================
 	role, ok := claims["role"].(string)
 	if !ok || role == "" {
-		// Rétrocompatibilité : anciens tokens sans rôle → merchant
 		role = "merchant"
 		logger.Debug().
 			Str("role", role).
 			Msg("Role not found in refresh token, using default 'merchant'")
 	}
 
-	// Masque les données sensibles pour les logs suivants
 	maskedUserID := maskUserID(sub)
 	maskedJTI := maskJTI(jti)
 
 	logger.Debug().
 		Str("user_id", maskedUserID).
 		Str("jti", maskedJTI).
-		Str("role", role). // 🆕 v4.0.0 : log du rôle
+		Str("role", role).
 		Msg("Token claims validated successfully")
 
 	// 5. Charge la session
@@ -175,6 +179,22 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 
 	logger.Info().Msg("Old refresh token revoked successfully")
 
+	// ============================================================
+	// 🆕 v4.4.2 : RÉVOCATION DE L'ANCIENNE SESSION
+	// ============================================================
+	if uc.sessionRepo != nil {
+		if err := uc.sessionRepo.RevokeSession(ctx, jti, sub); err != nil {
+			logger.Debug().
+				Err(err).
+				Str("old_session_id", jti).
+				Msg("⚠️ Erreur révocation ancienne session (non bloquant)")
+		} else {
+			logger.Debug().
+				Str("old_session_id", jti).
+				Msg("✅ Ancienne session révoquée")
+		}
+	}
+
 	// 8. Crée la nouvelle session
 	newJti := uc.newJTI()
 	expiresAt := now.Add(uc.refreshExpiryDelta)
@@ -208,7 +228,7 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	logger.Debug().
 		Str("role", role).
 		Msg("Generating new access token")
-	access, err := uc.generateAccess(sub, role) // 🆕 v4.0.0 : avec rôle
+	access, err := uc.generateAccess(sub, role)
 	if err != nil {
 		logger.Error().
 			Err(err).
@@ -219,7 +239,7 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 	logger.Debug().
 		Str("role", role).
 		Msg("Generating new refresh token")
-	refresh, err := uc.generateRefresh(sub, newJti, role) // 🆕 v4.0.0 : avec rôle
+	refresh, err := uc.generateRefresh(sub, newJti, role)
 	if err != nil {
 		logger.Error().
 			Err(err).
@@ -227,10 +247,17 @@ func (uc *RefreshUsecase) Execute(ctx context.Context, oldRefreshToken string) (
 		return "", "", utils.ErrInternalServer
 	}
 
+	// ============================================================
+	// 🆕 v4.4.2 : EXTENSION DE LA SESSION (optionnel)
+	// ============================================================
+	// Note : On ne crée pas une nouvelle session ici, car la session
+	// est liée au login initial. Le refresh ne fait que prolonger.
+	// Si nécessaire, on peut ajouter : uc.sessionRepo.ExtendSession()
+
 	logger.Info().
 		Str("old_jti", maskedJTI).
 		Str("new_jti", maskedNewJTI).
-		Str("role", role). // 🆕 v4.0.0 : log du rôle
+		Str("role", role).
 		Dur("duration_ms", time.Since(start)).
 		Int("access_token_length", len(access)).
 		Int("refresh_token_length", len(refresh)).

@@ -51,8 +51,9 @@ func TestLoginUsecase_Success(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger (DERNIER)
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil (non testé ici)
+		setupLogging.GetTestLogger(),
 	)
 
 	fakeUser := createFakeUser("123", "test@example.com", "password")
@@ -82,8 +83,9 @@ func TestLoginUsecase_EmailNotFound(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
 	)
 
 	repo.EXPECT().
@@ -109,8 +111,9 @@ func TestLoginUsecase_InvalidPassword(t *testing.T) {
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
-		repo,                         // 1er paramètre: repo
-		setupLogging.GetTestLogger(), // 2ème paramètre: logger
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
 	)
 
 	fakeUser := createFakeUser("123", "test@example.com", "correctpassword")
@@ -143,6 +146,7 @@ func TestLoginUsecase_InactiveUser(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
 		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -179,6 +183,7 @@ func TestLoginUsecase_BannedUser(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	uc := userusecase.NewLoginUsecase(
 		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
 		setupLogging.GetTestLogger(),
 	)
 

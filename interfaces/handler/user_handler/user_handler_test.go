@@ -11,7 +11,7 @@ import (
 	mockrepo "Goshop/mocks/repository"
 
 	userentity "Goshop/domain/entity/user_entity"
-	userrepository "Goshop/domain/repository/user_repository" // IMPORT AJOUTÉ
+	userrepository "Goshop/domain/repository/user_repository"
 	userhandler "Goshop/interfaces/handler/user_handler"
 	"Goshop/interfaces/utils"
 
@@ -25,7 +25,11 @@ func TestRegister_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(mockRepo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		mockRepo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// GIVEN: payload
 	body := map[string]string{
@@ -38,11 +42,11 @@ func TestRegister_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	// MOCK: user n’existe pas encore
+	// MOCK: user n'existe pas encore
 	mockRepo.
 		EXPECT().
 		FindUserByEmail("test@example.com").
-		Return(nil, userrepository.ErrUserNotFound) // ⚠️ PAS DE POINT ICI !
+		Return(nil, userrepository.ErrUserNotFound)
 
 	// MOCK: création OK
 	mockRepo.
@@ -71,7 +75,11 @@ func TestLoginHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// 1. Préparation du mot de passe hashé
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("pwd123"), bcrypt.DefaultCost)
@@ -82,7 +90,10 @@ func TestLoginHandler_Success(t *testing.T) {
 		Return(&userentity.UserEntity{
 			ID:       "123",
 			Email:    "test@example.com",
-			Password: string(hashedPassword), // Hash réel
+			Password: string(hashedPassword),
+			Role:     userentity.RoleMerchant,
+			Active:   true,
+			Status:   userentity.StatusActive,
 		}, nil)
 
 	// 3. Requête HTTP
@@ -116,7 +127,11 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// Mock : utilisateur non trouvé
 	repo.EXPECT().
@@ -139,8 +154,6 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 
 	// Doit retourner une erreur
 	assert.Error(t, err)
-	// Vérifie que c'est bien une erreur d'authentification
-	// (dépend de comment tu gères les erreurs dans ton handler)
 }
 
 func TestMeHandler_Success(t *testing.T) {
@@ -148,7 +161,11 @@ func TestMeHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// GIVEN: Un utilisateur existant
 	expectedUser := &userentity.UserEntity{
@@ -191,7 +208,11 @@ func TestMeHandler_Unauthorized(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// GIVEN: Requête SANS userID dans le contexte
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
@@ -210,7 +231,11 @@ func TestMeHandler_UserNotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// GIVEN: UserID existe mais utilisateur pas en base
 	repo.EXPECT().
@@ -230,7 +255,6 @@ func TestMeHandler_UserNotFound(t *testing.T) {
 
 	// THEN: Erreur car utilisateur non trouvé
 	assert.Error(t, err)
-	// Selon ton GetProfileUsecase, devrait être utils.ErrUserNotFound
 }
 
 func TestMeHandler_InternalServerError(t *testing.T) {
@@ -238,7 +262,11 @@ func TestMeHandler_InternalServerError(t *testing.T) {
 	defer ctrl.Finish()
 
 	repo := mockrepo.NewMockUserRepository(ctrl)
-	handler := userhandler.NewUserHandler(repo, setupLogging.GetTestLogger())
+	handler := userhandler.NewUserHandler(
+		repo,
+		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		setupLogging.GetTestLogger(),
+	)
 
 	// GIVEN: Erreur interne du repository
 	repo.EXPECT().
@@ -258,11 +286,5 @@ func TestMeHandler_InternalServerError(t *testing.T) {
 
 	// THEN: Erreur interne
 	assert.Error(t, err)
-
-	// 🔥 ADAPTÉ à ton implémentation :
-	// Si ton GetProfileUsecase retourne l'erreur brute :
-	// assert.Equal(t, userrepository.ErrUserCreateFailed, err)
-
-	// Si ton GetProfileUsecase transforme en utils.ErrInternalServer :
 	assert.Equal(t, utils.ErrInternalServer, err)
 }
