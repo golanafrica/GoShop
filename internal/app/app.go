@@ -35,6 +35,9 @@ import (
 	// 🆕 v4.3.0 : Collaborator Usecases
 	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
 
+	// 🆕 v4.4.0 : 2FA Usecases
+	twofausecase "Goshop/application/usecase/twofa_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -55,6 +58,9 @@ import (
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
+
+	// 🆕 v4.4.0 : 2FA Repository
+	user2fainfra "Goshop/infrastructure/postgres/user_2fa"
 
 	// 🆕 v3.0.0 : Repositories PostgreSQL
 	codinfra "Goshop/infrastructure/postgres/cod"
@@ -103,6 +109,9 @@ import (
 
 	// 🆕 v4.1.0 : Merchant KYC Handler
 	merchantkyhandler "Goshop/interfaces/handler/merchant_kyc_handler"
+
+	// 🆕 v4.4.0 : 2FA Handler
+	twofahandler "Goshop/interfaces/handler/twofa_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -218,7 +227,10 @@ func (a *App) setupRouter() {
 	shopCollabRepo := collaborator.NewShopCollaboratorRepositoryInfrastructure(a.DB)
 	invitationRepo := collaborator.NewCollaboratorInvitationRepositoryInfrastructure(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.3.0 repositories initialized (credit, escrow, wallet, cod, freeze, commission_batch, commission_rate, shop_kyc_documents, shop_admin_actions, platform_collaborators, shop_collaborators, invitations)")
+	// 🆕 v4.4.0 : Repository 2FA
+	user2faRepo := user2fainfra.NewUser2FARepository(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.4.0 repositories initialized (all + user_2fa)")
 
 	// Mock Orange Money Provider
 	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
@@ -571,6 +583,30 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.3.2 Collaborator usecases initialized (invite, accept, list, update, remove) + emailService")
 
+	// ============ 🆕 v4.4.0 : 2FA USECASES ============
+	setup2FAUC := twofausecase.NewSetup2FAUsecase(
+		user2faRepo,
+		postgresUserRepo,
+	)
+
+	verifyEnable2FAUC := twofausecase.NewVerifyAndEnable2FAUsecase(
+		user2faRepo,
+	)
+
+	disable2FAUC := twofausecase.NewDisable2FAUsecase(
+		user2faRepo,
+	)
+
+	getStatus2FAUC := twofausecase.NewGet2FAStatusUsecase(
+		user2faRepo,
+	)
+
+	regenerateCodesUC := twofausecase.NewRegenerateRecoveryCodesUsecase(
+		user2faRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.0 2FA usecases initialized (setup, verify, disable, status, regenerate)")
+
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
 		codProofRepo,
@@ -768,7 +804,16 @@ func (a *App) setupRouter() {
 		removeCollabUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.3.2 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator)")
+	// ============ 🆕 v4.4.0 : 2FA HANDLER ============
+	twoFAHandler := twofahandler.NewTwoFAHandler(
+		setup2FAUC,
+		verifyEnable2FAUC,
+		disable2FAUC,
+		getStatus2FAUC,
+		regenerateCodesUC,
+	)
+
+	a.Logger.Info().Msg("✅ v4.4.0 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa)")
 
 	// ============ 3. ROUTES PUBLIQUES ============
 	r.Use(middl.PrometheusMiddleware)
@@ -957,6 +1002,12 @@ func (a *App) setupRouter() {
 			r.Use(middl.RequireRoles("merchant", "super_admin"))
 			collaboratorHandler.RegisterShopRoutes(r)
 		})
+
+		// ============ 🆕 v4.4.0 : 2FA ROUTES (super_admin + admin uniquement) ============
+		r.Route("/admin/2fa", func(r chi.Router) {
+			r.Use(middl.RequireRoles("super_admin", "admin"))
+			twoFAHandler.RegisterRoutes(r)
+		})
 	})
 
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
@@ -1000,7 +1051,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.3.2 Commission schedulers started")
+			Msg("✅ v4.4.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1008,7 +1059,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.3.2: + Email Notifications)")
+		Msg("✅ Router configuré avec succès (v4.4.0: + 2FA System)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1075,7 +1126,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.3.2", // 🆕 v4.3.2
+		Version:     "4.4.0", // 🆕 v4.4.0
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
