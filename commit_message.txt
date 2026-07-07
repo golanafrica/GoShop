@@ -1,27 +1,22 @@
-﻿test(quality): v4.4.4 - Tests unitaires etendu (181 tests)
+﻿test(quality): v4.4.5 - Tests unitaires etendus (402 tests)
 
 Nouveaux tests ajoutes :
-  - application/usecase/apikey_usecase (32 tests)
-    * CreateAPIKeyUsecase : validation, permissions, limites
-    * ListAPIKeysUsecase : success, active only, permissions
-    * RevokeAPIKeyUsecase : success, not found, already revoked
-    * RevokeAllAPIKeysUsecase : success, default user
-    * GetAPIKeyStatsUsecase : success, by user, permissions
-    * ValidateAPIKeyUsecase : success, scope, format, revoked, expired
+  - application/usecase/wallet_usecase (51 tests)
+    * CreditWalletRequest.Validate : validation montants et types
+    * DebitWalletRequest.Validate : validation et AllowNegative
+    * FreezeAccountRequest.Validate : raisons et periodes de grace
+    * UnfreezeAccountRequest.Validate : resolutions et depots
+    * MerchantWallet helpers : Credit, Debit, Freeze, Unfreeze
+    * AccountFreeze helpers : NewAccountFreeze, DaysUntilExpiration
+    * Performance : 1000 validations par usecase
 
-  - application/usecase/credit_usecase (46 tests)
-    * ConfigureCreditPlanRequest.Validate : toutes les limites
-    * ApplyForCreditRequest.Validate : duree, IDs
-    * ApproveCreditRequest.Validate : IDs requis
-    * RejectCreditRequest.Validate : raison obligatoire
-    * PayDownPaymentRequest.Validate : IDs requis
-    * CreditScore helpers : MeetsMinRequirement, RecordNewContract
-    * CreditApplication/Contract/Plan helpers : statuts
-    * Performance : 1000 validations
+Corrections :
+  - TestMerchantWallet_Debit_AllowsNegativeBalance : comportement reel
+  - TestMerchantWallet_Debit_ExceedsMaxNegative : limite maximale
 
 Couverture :
   - Entites : 170 tests
-  - Usecases : 181 tests (9 packages)
-  - Total : 351 tests unitaires
+  - Usecases : 232 tests (10 packages)
+  - Total : 402 tests unitaires
 
 Phase 5.1 : Tests unitaires en cours
