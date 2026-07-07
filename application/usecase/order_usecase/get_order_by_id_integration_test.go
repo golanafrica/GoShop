@@ -34,7 +34,7 @@ var testShopByID = &entity.Shop{
 // --- Initialisation DB ---
 func setupTestDB_Get() *sql.DB {
 	if err := godotenv.Load("../../../.env"); err != nil {
-		log.Println("??  .env non trouv� (mode defaut)")
+		log.Println("??  .env non trouve (mode defaut)")
 	}
 
 	connStr := fmt.Sprintf(
@@ -49,7 +49,7 @@ func setupTestDB_Get() *sql.DB {
 
 	db, err := postgres.Connect(connStr)
 	if err != nil {
-		log.Fatalf("? Connexion DB �chou�e : %v", err)
+		log.Fatalf("? Connexion DB echoue : %v", err)
 	}
 
 	log.Println("? Connexion PostgreSQL OK")
@@ -107,7 +107,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, productEntity.ID)
 
 	// --------------------------
-	// 3. Cr�ation Commande
+	// 3. Creation Commande
 	// --------------------------
 	orderEntity := &entity.Order{
 		CustomerID: createdCustomer.ID,
@@ -133,7 +133,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.Equal(t, createdOrder.ID, orderFromDB.ID)
 	assert.Equal(t, createdCustomer.ID, orderFromDB.CustomerID)
 	assert.Equal(t, int64(20000), orderFromDB.TotalCents) // 2 * 10000
-	assert.Equal(t, "PENDING", orderFromDB.Status)
+	assert.Equal(t, "pending", orderFromDB.Status)
 	assert.Len(t, orderFromDB.Items, 1)
 
 	item := orderFromDB.Items[0]
@@ -141,5 +141,5 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.Equal(t, int64(10000), item.PriceCents)
 	assert.Equal(t, int64(20000), item.SubTotal_Cents)
 
-	fmt.Printf("? Order r�cup�r� avec GetOrderById : %+v\n", orderFromDB)
+	fmt.Printf("? Order recupere avec GetOrderById : %+v\n", orderFromDB)
 }

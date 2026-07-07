@@ -147,7 +147,7 @@ func TestCreateOrderUsecase_Integration(t *testing.T) {
 	createdOrder, err := usecase.Execute(ctx, orderEntity)
 	assert.NoError(t, err, "la commande doit être créée sans erreur")
 	assert.NotEmpty(t, createdOrder.ID, "un ID de commande doit être généré")
-	assert.Equal(t, "PENDING", createdOrder.Status)
+	assert.Equal(t, "pending", createdOrder.Status)
 	assert.Equal(t, int64(30000), createdOrder.TotalCents)
 
 	// --- Étape 4 : Vérifier le stock mis à jour ---

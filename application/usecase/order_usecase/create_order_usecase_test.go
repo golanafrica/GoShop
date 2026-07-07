@@ -48,7 +48,7 @@ func TestCreateOrderUsecase_Success(t *testing.T) {
 		ID:         "order-123",
 		CustomerID: "cust-1",
 		TotalCents: 100000,
-		Status:     "PENDING",
+		Status:     "pending",
 		Items:      order.Items,
 	}
 

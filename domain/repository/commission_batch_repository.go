@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_commission_batch_repository.go -package=repository . CommissionBatchRepository
+
 import (
 	"context"
 	"time"

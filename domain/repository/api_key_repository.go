@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_api_key_repository.go -package=repository . APIKeyRepository
+
 import (
 	"context"
 	"errors"

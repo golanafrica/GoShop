@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_cod_proof_repository.go -package=repository . CODProofRepository
+
 import (
 	"context"
 

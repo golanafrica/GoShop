@@ -1,16 +1,16 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_tontine_group_repository.go -package=repository . TontineGroupRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_tontine_participant_repository.go -package=repository . TontineParticipantRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_tontine_payment_repository.go -package=repository . TontinePaymentRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_tontine_voucher_repository.go -package=repository . TontineVoucherRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_product_tontine_settings_repository.go -package=repository . ProductTontineSettingsRepository
+
 import (
 	"context"
 
 	"Goshop/domain/entity"
 )
-
-//go:generate mockgen -destination=../../mocks/repository/mock_product_tontine_settings_repository.go -package=repository . ProductTontineSettingsRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_tontine_group_repository.go -package=repository . TontineGroupRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_tontine_participant_repository.go -package=repository . TontineParticipantRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_tontine_payment_repository.go -package=repository . TontinePaymentRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_tontine_voucher_repository.go -package=repository . TontineVoucherRepository
 
 // ============================================================
 // ProductTontineSettingsRepository

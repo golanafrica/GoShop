@@ -11,6 +11,7 @@ import (
 
 // ============================================================
 // 🆕 v4.4.2 : USER SESSION ENTITY
+// 🆕 v4.4.3 : ParseUserAgent amélioré (ordre de priorité corrigé)
 // ============================================================
 //
 // 🎯 Objectif :
@@ -259,10 +260,11 @@ func (s *UserSession) ValidateToken(token string) bool {
 }
 
 // ============================================================
-// MÉTHODES UTILITAIRES
+// 🆕 v4.4.3 : MÉTHODES UTILITAIRES - ParseUserAgent AMÉLIORÉ
 // ============================================================
 
 // ParseUserAgent parse le user agent pour extraire les infos device
+// 🆕 v4.4.3 : Ordre de priorité corrigé pour une détection plus précise
 func ParseUserAgent(userAgent string) DeviceInfo {
 	info := DeviceInfo{
 		UserAgent: userAgent,
@@ -277,58 +279,72 @@ func ParseUserAgent(userAgent string) DeviceInfo {
 
 	ua := strings.ToLower(userAgent)
 
-	// Détecter le navigateur
+	// ============================================================
+	// 🆕 v4.4.3 : NAVIGATEURS - Ordre de priorité corrigé
+	// ============================================================
+	// Les navigateurs basés sur Chromium (Opera, Edge, Brave) contiennent
+	// "chrome" dans leur UA. Il faut les détecter AVANT Chrome.
+	// Ordre : Opera → Edge → Chrome → Firefox → Safari → IE
 	switch {
-	case strings.Contains(ua, "chrome") && !strings.Contains(ua, "edg"):
+	case strings.Contains(ua, "opr") || strings.Contains(ua, "opera"):
+		info.Browser = "Opera"
+	case strings.Contains(ua, "edg"):
+		info.Browser = "Edge"
+	case strings.Contains(ua, "chrome") || strings.Contains(ua, "crios"):
 		info.Browser = "Chrome"
-	case strings.Contains(ua, "firefox"):
+	case strings.Contains(ua, "firefox") || strings.Contains(ua, "fxios"):
 		info.Browser = "Firefox"
 	case strings.Contains(ua, "safari") && !strings.Contains(ua, "chrome"):
 		info.Browser = "Safari"
-	case strings.Contains(ua, "edg"):
-		info.Browser = "Edge"
 	case strings.Contains(ua, "msie") || strings.Contains(ua, "trident"):
 		info.Browser = "Internet Explorer"
-	case strings.Contains(ua, "opera") || strings.Contains(ua, "opr"):
-		info.Browser = "Opera"
 	}
 
-	// Détecter l'OS
+	// ============================================================
+	// 🆕 v4.4.3 : OS - Ordre de priorité corrigé
+	// ============================================================
+	// iPad/iPhone contiennent "Mac OS X" dans leur UA moderne.
+	// Il faut détecter iOS AVANT macOS.
+	// Ordre : iOS → Android → Windows → macOS → Linux
 	switch {
+	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad") || strings.Contains(ua, "ipod"):
+		info.OS = "iOS"
+	case strings.Contains(ua, "android"):
+		info.OS = "Android"
 	case strings.Contains(ua, "windows"):
 		info.OS = "Windows"
 	case strings.Contains(ua, "mac os") || strings.Contains(ua, "macintosh"):
 		info.OS = "macOS"
-	case strings.Contains(ua, "linux") && !strings.Contains(ua, "android"):
+	case strings.Contains(ua, "linux"):
 		info.OS = "Linux"
-	case strings.Contains(ua, "android"):
-		info.OS = "Android"
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
-		info.OS = "iOS"
 	}
 
-	// Détecter le device
+	// ============================================================
+	// 🆕 v4.4.3 : DEVICE - Ordre de priorité corrigé
+	// ============================================================
+	// iPad contient "Mobile" dans son UA. Il faut détecter Tablet AVANT Mobile.
+	// Ordre : Tablet → Mobile → Desktop
 	switch {
-	case strings.Contains(ua, "mobile"):
-		info.Device = "Mobile"
-	case strings.Contains(ua, "tablet") || strings.Contains(ua, "ipad"):
+	case strings.Contains(ua, "tablet") || strings.Contains(ua, "ipad") || strings.Contains(ua, "sm-t") || strings.Contains(ua, "kindle"):
 		info.Device = "Tablet"
+	case strings.Contains(ua, "mobile") || strings.Contains(ua, "iphone") || strings.Contains(ua, "pixel") || strings.Contains(ua, "sm-"):
+		info.Device = "Mobile"
 	default:
 		info.Device = "Desktop"
 	}
 
-	// Détecter la plateforme
+	// ============================================================
+	// PLATEFORME
+	// ============================================================
 	switch {
 	case strings.Contains(ua, "windows"):
 		info.Platform = "Windows"
-	case strings.Contains(ua, "mac"):
+	case strings.Contains(ua, "mac") || strings.Contains(ua, "ipad") || strings.Contains(ua, "iphone"):
 		info.Platform = "Mac"
-	case strings.Contains(ua, "linux"):
+	case strings.Contains(ua, "linux") && !strings.Contains(ua, "android"):
 		info.Platform = "Linux"
 	case strings.Contains(ua, "android"):
 		info.Platform = "Android"
-	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
-		info.Platform = "iOS"
 	}
 
 	return info

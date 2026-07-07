@@ -7,6 +7,8 @@ import (
 	"Goshop/domain/entity"
 )
 
+//go:generate mockgen -destination=../../mocks/repository/mock_user_2fa_repository.go -package=repository . User2FARepository
+
 // ============================================================
 // 🆕 v4.4.0 : USER 2FA REPOSITORY INTERFACE
 // ============================================================

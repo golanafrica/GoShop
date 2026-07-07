@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_order_repository.go -package=repository . OrderRepository
+
 import (
 	orderdto "Goshop/application/dto/order_dto"
 	"Goshop/domain/entity"
@@ -7,8 +9,6 @@ import (
 
 	"github.com/google/uuid"
 )
-
-//go:generate mockgen -destination=../../mocks/repository/mock_order_repository.go -package=repository . OrderRepository
 
 type OrderRepository interface {
 	Create(ctx context.Context, order *entity.Order) (*entity.Order, error)

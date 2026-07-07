@@ -1,13 +1,13 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_account_freeze_repository.go -package=repository . AccountFreezeRepository
+
 import (
 	"context"
 	"time"
 
 	"Goshop/domain/entity"
 )
-
-//go:generate mockgen -destination=../../mocks/repository/mock_account_freeze_repository.go -package=repository . AccountFreezeRepository
 
 // ============================================================
 // ACCOUNT FREEZE REPOSITORY

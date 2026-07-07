@@ -1,16 +1,16 @@
 package repository
 
-import (
-	"context"
-
-	"Goshop/domain/entity"
-)
-
 //go:generate mockgen -destination=../../mocks/repository/mock_credit_plan_repository.go -package=repository . CreditPlanRepository
 //go:generate mockgen -destination=../../mocks/repository/mock_credit_application_repository.go -package=repository . CreditApplicationRepository
 //go:generate mockgen -destination=../../mocks/repository/mock_credit_contract_repository.go -package=repository . CreditContractRepository
 //go:generate mockgen -destination=../../mocks/repository/mock_credit_installment_repository.go -package=repository . CreditInstallmentRepository
 //go:generate mockgen -destination=../../mocks/repository/mock_credit_score_repository.go -package=repository . CreditScoreRepository
+
+import (
+	"context"
+
+	"Goshop/domain/entity"
+)
 
 // ============================================================
 // CREDIT PLAN REPOSITORY

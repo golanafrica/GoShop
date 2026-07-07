@@ -1,65 +1,27 @@
-﻿feat(security): v4.4.3 - API Keys Management complet
+﻿test(quality): v4.4.4 - Tests unitaires etendu (181 tests)
 
-Objectif :
-  Permettre l'acces programmatique a l'API via des cles API
-  securisees avec scopes granulaires et audit trail.
+Nouveaux tests ajoutes :
+  - application/usecase/apikey_usecase (32 tests)
+    * CreateAPIKeyUsecase : validation, permissions, limites
+    * ListAPIKeysUsecase : success, active only, permissions
+    * RevokeAPIKeyUsecase : success, not found, already revoked
+    * RevokeAllAPIKeysUsecase : success, default user
+    * GetAPIKeyStatsUsecase : success, by user, permissions
+    * ValidateAPIKeyUsecase : success, scope, format, revoked, expired
 
-Architecture :
-  - Migrations 026 + 026b + 026c : Tables api_keys + api_key_usage_logs
-  - Entite APIKey : Hash SHA-256, scopes, generation crypto/rand
-  - Repository : 30 methodes (CRUD, securite, audit, stats)
-  - 6 Usecases : create, list, revoke, revoke-all, stats, validate
-  - Handler HTTP : 5 endpoints REST admin
-  - Middleware APIKeyAuth : Authentification par cle API
+  - application/usecase/credit_usecase (46 tests)
+    * ConfigureCreditPlanRequest.Validate : toutes les limites
+    * ApplyForCreditRequest.Validate : duree, IDs
+    * ApproveCreditRequest.Validate : IDs requis
+    * RejectCreditRequest.Validate : raison obligatoire
+    * PayDownPaymentRequest.Validate : IDs requis
+    * CreditScore helpers : MeetsMinRequirement, RecordNewContract
+    * CreditApplication/Contract/Plan helpers : statuts
+    * Performance : 1000 validations
 
-Endpoints admin (JWT + RBAC) :
-  - POST   /api/admin/api-keys           - Creer une cle
-  - GET    /api/admin/api-keys           - Lister les cles
-  - POST   /api/admin/api-keys/revoke    - Revoquer une cle
-  - POST   /api/admin/api-keys/revoke-all - Revoquer toutes
-  - GET    /api/admin/api-keys/stats     - Statistiques
+Couverture :
+  - Entites : 170 tests
+  - Usecases : 181 tests (9 packages)
+  - Total : 351 tests unitaires
 
-Endpoints publics (API Key Auth) :
-  - GET    /v1/public/products           - Scope: read:products
-  - GET    /v1/public/shops              - Scope: read:shops
-
-Securite :
-  - Cles API prefixees (gsk_live_, gsk_test_)
-  - Hash SHA-256 en base (jamais stockees en clair)
-  - Affichage complet UNE SEULE FOIS a la creation
-  - 18 scopes granulaires (read/write par domaine)
-  - Revocation immediate avec HTTP 410 Gone
-  - Rate limiting configurable (60/min, 10000/jour)
-  - Limite 10 cles actives par utilisateur
-  - Audit trail complet (usage logs)
-  - Expiration configurable (defaut 1 an, max 5 ans)
-
-Tests valides (10/10) :
-   0. Verification prealable : OK (migration 026c)
-   1. Login admin (JWT) : OK (544ms)
-   2. Creation cle API : OK (367ms)
-   3. Lister cles API : OK (300ms)
-   4. Auth API Key /products : OK (1.8ms)
-   5. Auth API Key /shops : OK (1.8ms)
-   6. Mauvaise cle rejetee : OK (401, 1.4ms)
-   7. Sans cle rejetee : OK (401, 0.5ms)
-   8. Statistiques : OK (192ms)
-   9. Revocation cle : OK (59ms)
-  10. Cle revoquee rejetee : OK (410, 1.3ms)
-
-Performance :
-  - Auth API Key : ~1.8ms (index sur key_hash)
-  - Creation cle : ~367ms
-  - Revocation : ~59ms
-  - Rejet cle revoquee : ~1.3ms
-
-Hotfix :
-  - Migration 026b : Correction vue v_api_key_statistics
-  - Migration 026c : key_prefix VARCHAR(20) -> VARCHAR(50)
-
-Impact :
-  - Aucune breaking change
-  - Middleware retro-compatible
-  - Compatible avec v4.4.2 (migrations additives)
-
-Phase 4 completee : Securite avancee 100%
+Phase 5.1 : Tests unitaires en cours

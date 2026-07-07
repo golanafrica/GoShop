@@ -1,13 +1,13 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_escrow_account_repository.go -package=repository . EscrowAccountRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_delivery_proof_repository.go -package=repository . DeliveryProofRepository
+
 import (
 	"context"
 
 	"Goshop/domain/entity"
 )
-
-//go:generate mockgen -destination=../../mocks/repository/mock_escrow_account_repository.go -package=repository . EscrowAccountRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_delivery_proof_repository.go -package=repository . DeliveryProofRepository
 
 // ============================================================
 // ESCROW ACCOUNT REPOSITORY

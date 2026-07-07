@@ -105,7 +105,7 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		assert.NotEmpty(t, o.ID)
 		assert.Equal(t, createdCustomer.ID, o.CustomerID,
 			"la commande doit appartenir au customer du test")
-		assert.Equal(t, "PENDING", o.Status,
+		assert.Equal(t, "pending", o.Status,
 			"la commande doit �tre en PENDING (pas encore pay�e)")
 		assert.Equal(t, int64(20000), o.TotalCents,
 			"le total doit �tre 20000")

@@ -1,14 +1,14 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_merchant_wallet_repository.go -package=repository . MerchantWalletRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_wallet_transaction_repository.go -package=repository . WalletTransactionRepository
+
 import (
 	"context"
 	"time"
 
 	"Goshop/domain/entity"
 )
-
-//go:generate mockgen -destination=../../mocks/repository/mock_merchant_wallet_repository.go -package=repository . MerchantWalletRepository
-//go:generate mockgen -destination=../../mocks/repository/mock_wallet_transaction_repository.go -package=repository . WalletTransactionRepository
 
 // ============================================================
 // MERCHANT WALLET REPOSITORY

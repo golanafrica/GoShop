@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_commission_rate_repository.go -package=repository . CommissionRateRepository
+
 import (
 	"Goshop/domain/entity"
 	"context"

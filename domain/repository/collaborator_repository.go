@@ -1,5 +1,9 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_platform_collaborator_repository.go -package=repository . PlatformCollaboratorRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_shop_collaborator_repository.go -package=repository . ShopCollaboratorRepository
+//go:generate mockgen -destination=../../mocks/repository/mock_collaborator_invitation_repository.go -package=repository . CollaboratorInvitationRepository
+
 import (
 	"context"
 
