@@ -1,4 +1,4 @@
-﻿test(quality): v4.4.5 - Tests unitaires etendus (402 tests)
+﻿test(quality): v4.4.5 - Tests unitaires etendus (445 tests)
 
 Nouveaux tests ajoutes :
   - application/usecase/wallet_usecase (51 tests)
@@ -8,15 +8,24 @@ Nouveaux tests ajoutes :
     * UnfreezeAccountRequest.Validate : resolutions et depots
     * MerchantWallet helpers : Credit, Debit, Freeze, Unfreeze
     * AccountFreeze helpers : NewAccountFreeze, DaysUntilExpiration
-    * Performance : 1000 validations par usecase
+
+  - application/usecase/payment_usecase (43 tests)
+    * IsTontineReference : detection references tontine
+    * ParseTontineReference : parsing format TONTINE:group:cycle:participant
+    * Payment.IsTerminal : statuts terminaux (success, failed, refunded, etc.)
+    * Payment.IsValidStatusTransition : machine a etats
+    * NewPayment : creation avec validation montant
+    * Payment state transitions : MarkProcessing, MarkSuccess, etc.
+    * Payment.IsExpired : verification expiration
+    * Payment metadata : gestion metadata, phone, description
 
 Corrections :
-  - TestMerchantWallet_Debit_AllowsNegativeBalance : comportement reel
-  - TestMerchantWallet_Debit_ExceedsMaxNegative : limite maximale
+  - TestIsTontineReference_Invalid : HasPrefix matche TONTINE:
+  - TestPayment_IsTerminal_Success : transition pending->processing->success
 
 Couverture :
   - Entites : 170 tests
-  - Usecases : 232 tests (10 packages)
-  - Total : 402 tests unitaires
+  - Usecases : 275 tests (11 packages)
+  - Total : 445 tests unitaires
 
 Phase 5.1 : Tests unitaires en cours
