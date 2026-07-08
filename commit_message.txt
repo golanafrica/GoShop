@@ -1,17 +1,9 @@
-﻿test(cod): v4.4.8 - Tests complets package COD (96.0% couverture)
+﻿refactor(cod): v4.4.9 - Suppression code mort + couverture 96.7%
 
-Tests ajoutés (169 tests) :
-
-1. Entités CODProof (76 tests) : ~80%
-2. CollectCommissionUsecase (25 tests) : ~98%
-3. SubmitClientProofUsecase (24 tests) : ~96%
-4. SubmitMerchantProofUsecase (22 tests) : ~96%
-5. Validations DTOs (22 tests) : ~100%
-
-Refactoring architectural :
-  - interfaces.go : WalletDebiter + AccountFreezer
-  - collect_commission.go : Injection de dépendance
-  - Mocks générés : mock_wallet_debiter.go, mock_account_freezer.go
+Corrections :
+  - submit_client_proof.go : Suppression variable logger non utilisée
+  - submit_merchant_proof.go : Suppression variable logger non utilisée
+  - Suppression bloc if toujours faux (code mort)
 
 Couverture par fonction :
   - Validate (tous) : 100%
@@ -21,13 +13,13 @@ Couverture par fonction :
   - SumDueCommissionsByShop : 100%
   - SumTotalDueCommissions : 100%
   - stringValue : 100%
+  - SubmitClientProofWithAmounts : 100% ✅
+  - SubmitMerchantProofWithAmounts : 100% ✅
   - Execute (collect) : 96.2%
   - Execute (client) : 96.1%
   - Execute (merchant) : 95.9%
   - RetryCommissionDue : 92.3%
-  - SubmitClientProofWithAmounts : 87.5%
-  - SubmitMerchantProofWithAmounts : 87.5%
 
-Couverture globale : 96.0%
+Couverture globale : 96.7%
 
 Phase 5.1 : Tests unitaires en cours

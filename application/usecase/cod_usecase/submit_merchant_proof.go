@@ -239,6 +239,7 @@ func (uc *SubmitMerchantProofUsecase) Execute(ctx context.Context, req *SubmitMe
 // ============================================================
 
 // SubmitMerchantProofWithAmounts soumet la preuve en vérifiant le montant de la commande
+// SubmitMerchantProofWithAmounts soumet la preuve en utilisant le montant de la commande
 func (uc *SubmitMerchantProofUsecase) SubmitMerchantProofWithAmounts(
 	ctx context.Context,
 	orderID string,
@@ -246,7 +247,7 @@ func (uc *SubmitMerchantProofUsecase) SubmitMerchantProofWithAmounts(
 	receiptDate time.Time,
 	notes *string,
 ) (*SubmitMerchantProofResponse, error) {
-	logger := zerolog.Ctx(ctx)
+	//logger := zerolog.Ctx(ctx)
 
 	// 1. Récupérer la commande pour connaître le montant
 	order, err := uc.orderRepo.FindByID(ctx, orderID)
@@ -258,19 +259,14 @@ func (uc *SubmitMerchantProofUsecase) SubmitMerchantProofWithAmounts(
 	req := &SubmitMerchantProofRequest{
 		OrderID:     orderID,
 		ProofURL:    proofURL,
-		AmountCents: order.TotalCents, // Utiliser le montant de la commande
+		AmountCents: order.TotalCents,
 		ReceiptDate: receiptDate,
 		Notes:       notes,
 	}
 
-	// 3. Logger si le montant diffère
-	if proofAmount := req.AmountCents; proofAmount != order.TotalCents {
-		logger.Warn().
-			Str("order_id", orderID).
-			Int64("order_total", order.TotalCents).
-			Int64("proof_amount", proofAmount).
-			Msg("Merchant declared amount differs from order total")
-	}
+	// 3. Logger si le montant diffère (code mort supprimé - toujours faux)
+	// Note: Cette condition était toujours fausse car req.AmountCents = order.TotalCents
+	// Pour tester un montant différent, utiliser directement Execute() avec une requête manuelle
 
 	return uc.Execute(ctx, req)
 }
