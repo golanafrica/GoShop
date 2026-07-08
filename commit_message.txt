@@ -1,22 +1,33 @@
-﻿test(cod): v4.4.5 - Tests complets CollectCommissionUsecase
+﻿test(cod): v4.4.8 - Tests complets package COD (96.0% couverture)
 
-Refactoring :
+Tests ajoutés (169 tests) :
+
+1. Entités CODProof (76 tests) : ~80%
+2. CollectCommissionUsecase (25 tests) : ~98%
+3. SubmitClientProofUsecase (24 tests) : ~96%
+4. SubmitMerchantProofUsecase (22 tests) : ~96%
+5. Validations DTOs (22 tests) : ~100%
+
+Refactoring architectural :
   - interfaces.go : WalletDebiter + AccountFreezer
   - collect_commission.go : Injection de dépendance
   - Mocks générés : mock_wallet_debiter.go, mock_account_freezer.go
 
-Tests ajoutés (15 tests) :
-  - Validation : EmptyOrderID, EmptyCollectedBy
-  - Multi-tenant : No tenant, Shop mismatch
-  - Transaction : BeginTx error, Commit error, Rollback
-  - Repository : ProofNotFound
-  - Métier : ProofIncomplete, ProofIncoherent, AlreadyCollected
-  - Happy paths : Success, SuccessWithAutoFreeze, DebitFailed
-  - Cas limites : FreezeFailed
+Couverture par fonction :
+  - Validate (tous) : 100%
+  - New*Usecase (tous) : 100%
+  - CollectCommissionForced : 100%
+  - ListDueCommissions : 100%
+  - SumDueCommissionsByShop : 100%
+  - SumTotalDueCommissions : 100%
+  - stringValue : 100%
+  - Execute (collect) : 96.2%
+  - Execute (client) : 96.1%
+  - Execute (merchant) : 95.9%
+  - RetryCommissionDue : 92.3%
+  - SubmitClientProofWithAmounts : 87.5%
+  - SubmitMerchantProofWithAmounts : 87.5%
 
-Couverture :
-  - Avant : 11.7% (tests d'entités seulement)
-  - Après : 41.1% (package complet)
-  - Gain : +251%
+Couverture globale : 96.0%
 
 Phase 5.1 : Tests unitaires en cours

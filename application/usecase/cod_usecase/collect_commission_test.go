@@ -903,3 +903,459 @@ func TestCollectCommissionUsecase_RollbackCalledOnError(t *testing.T) {
 	assert.Nil(t, response)
 	// Le test échouera si Rollback n'est pas appelé exactement 1 fois
 }
+
+// ============================================================
+// TESTS : CollectCommissionUsecase - Erreurs métier internes
+// ============================================================
+
+func TestCollectCommissionUsecase_GetWalletError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := createMockTx(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx, validProof := createTestContextAndProof()
+	shop, _ := tenant.FromContext(ctx)
+
+	// Mock : Transaction
+	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+
+	mockCODProofRepo.EXPECT().WithTX(gomock.Any()).Return(mockCODProofRepo).AnyTimes()
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(validProof, nil)
+
+	// ✅ Mock : GetWallet ÉCHOUE
+	mockWalletUC.EXPECT().
+		GetWallet(gomock.Any(), shop.ID.String()).
+		Return(nil, errors.New("wallet service unavailable"))
+
+	req := &codusecase.CollectCommissionRequest{
+		OrderID:     "order-123",
+		CollectedBy: "merchant-123",
+	}
+
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "failed to get wallet")
+}
+
+func TestCollectCommissionUsecase_MarkCommissionDueError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := createMockTx(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx, validProof := createTestContextAndProof()
+	shop, _ := tenant.FromContext(ctx)
+
+	// ✅ Setup : Statut de commission déjà "Due" (pas Pending)
+	// Cela va faire échouer MarkCommissionDue() car le statut n'est pas Pending
+	validProof.CommissionStatus = entity.CODCommissionDue
+
+	// Mock : Transaction
+	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+
+	mockCODProofRepo.EXPECT().WithTX(gomock.Any()).Return(mockCODProofRepo).AnyTimes()
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(validProof, nil)
+
+	// Mock : GetWallet réussit
+	mockWalletUC.EXPECT().
+		GetWallet(gomock.Any(), shop.ID.String()).
+		Return(&entity.MerchantWallet{
+			ShopID:       shop.ID.String(),
+			BalanceCents: 100000,
+		}, nil)
+
+	// ✅ Mock : Execute échoue (déclenche MarkCommissionDue)
+	mockWalletUC.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("wallet is frozen"))
+
+	req := &codusecase.CollectCommissionRequest{
+		OrderID:     "order-123",
+		CollectedBy: "merchant-123",
+	}
+
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "failed to mark commission as due")
+}
+
+func TestCollectCommissionUsecase_MarkCommissionCollectedError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := createMockTx(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx := createTestContext()
+	shop, _ := tenant.FromContext(ctx)
+
+	// ✅ Setup : Preuve INCOHÉRENTE (pour faire échouer MarkCommissionCollected)
+	incoherentProof, _ := entity.NewCODProof("order-123", shop.ID.String(), "customer-123", 50000)
+	paymentDate := time.Now().Add(-1 * time.Hour)
+	incoherentProof.SubmitClientProof("https://example.com/client.jpg", 50000, paymentDate, "", "")
+	incoherentProof.SubmitMerchantProof("https://example.com/merchant.jpg", 40000, paymentDate, "")
+	// Preuve incohérente : MarkCommissionCollected va échouer sur !IsCoherent()
+
+	// Mock : Transaction
+	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+
+	mockCODProofRepo.EXPECT().WithTX(gomock.Any()).Return(mockCODProofRepo).AnyTimes()
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(incoherentProof, nil)
+
+	// Mock : GetWallet réussit
+	mockWalletUC.EXPECT().
+		GetWallet(gomock.Any(), shop.ID.String()).
+		Return(&entity.MerchantWallet{
+			ShopID:       shop.ID.String(),
+			BalanceCents: 100000,
+		}, nil)
+
+	// Mock : Débit réussit
+	mockWalletUC.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		Return(&walletusecase.DebitWalletResponse{
+			TransactionID:     "txn-123",
+			BalanceAfterCents: 98750,
+			ShouldFreeze:      false,
+		}, nil)
+
+	req := &codusecase.CollectCommissionRequest{
+		OrderID:      "order-123",
+		CollectedBy:  "admin-123",
+		ForceCollect: true, // ✅ Bypass la vérification de cohérence
+	}
+
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "failed to mark commission as collected")
+}
+
+// ============================================================
+// TESTS : CollectCommissionUsecase - Méthodes utilitaires
+// ============================================================
+
+func TestCollectCommissionUsecase_CollectCommissionForced_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := createMockTx(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx, validProof := createTestContextAndProof()
+	shop, _ := tenant.FromContext(ctx)
+
+	// Mock : Transaction
+	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+	mockTx.EXPECT().Commit().Return(nil)
+
+	mockCODProofRepo.EXPECT().WithTX(gomock.Any()).Return(mockCODProofRepo).AnyTimes()
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(validProof, nil)
+
+	mockWalletUC.EXPECT().
+		GetWallet(gomock.Any(), shop.ID.String()).
+		Return(&entity.MerchantWallet{
+			ShopID:       shop.ID.String(),
+			BalanceCents: 100000,
+		}, nil)
+
+	mockWalletUC.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		Return(&walletusecase.DebitWalletResponse{
+			TransactionID:     "txn-123",
+			BalanceAfterCents: 98750,
+			ShouldFreeze:      false,
+		}, nil)
+
+	mockCODProofRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
+
+	// Appel via la méthode utilitaire
+	response, err := uc.CollectCommissionForced(ctx, "order-123", "admin-123")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, response)
+	assert.Equal(t, entity.CODCommissionCollected, response.CommissionStatus)
+}
+
+func TestCollectCommissionUsecase_RetryCommissionDue_Success(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := createMockTx(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx, dueProof := createTestContextAndProof()
+	shop, _ := tenant.FromContext(ctx)
+
+	// ✅ Setup : Commission en statut "Due"
+	dueProof.CommissionStatus = entity.CODCommissionDue
+
+	// 1er appel : FindByOrderID pour RetryCommissionDue (hors TX)
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(dueProof, nil)
+
+	// Update pour reset statut
+	mockCODProofRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+
+	// 2ème appel : FindByOrderID pour Execute (dans TX)
+	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+	mockTx.EXPECT().Commit().Return(nil)
+
+	mockCODProofRepo.EXPECT().WithTX(gomock.Any()).Return(mockCODProofRepo).AnyTimes()
+	mockCODProofRepo.EXPECT().FindByOrderID(gomock.Any(), "order-123").Return(dueProof, nil)
+
+	mockWalletUC.EXPECT().
+		GetWallet(gomock.Any(), shop.ID.String()).
+		Return(&entity.MerchantWallet{
+			ShopID:       shop.ID.String(),
+			BalanceCents: 100000,
+		}, nil)
+
+	mockWalletUC.EXPECT().
+		Execute(gomock.Any(), gomock.Any()).
+		Return(&walletusecase.DebitWalletResponse{
+			TransactionID:     "txn-123",
+			BalanceAfterCents: 98750,
+			ShouldFreeze:      false,
+		}, nil)
+
+	response, err := uc.RetryCommissionDue(ctx, "order-123", "admin-123")
+
+	assert.NoError(t, err)
+	assert.NotNil(t, response)
+}
+
+func TestCollectCommissionUsecase_RetryCommissionDue_ProofNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx := createTestContext()
+
+	mockCODProofRepo.EXPECT().
+		FindByOrderID(gomock.Any(), "order-not-found").
+		Return(nil, errors.New("proof not found"))
+
+	response, err := uc.RetryCommissionDue(ctx, "order-not-found", "admin-123")
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "COD proof not found")
+}
+
+func TestCollectCommissionUsecase_RetryCommissionDue_NotDueStatus(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx, pendingProof := createTestContextAndProof()
+	// Statut = Pending (pas Due)
+	pendingProof.CommissionStatus = entity.CODCommissionPending
+
+	mockCODProofRepo.EXPECT().
+		FindByOrderID(gomock.Any(), "order-123").
+		Return(pendingProof, nil)
+
+	response, err := uc.RetryCommissionDue(ctx, "order-123", "admin-123")
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "commission is not in 'due' status")
+}
+
+func TestCollectCommissionUsecase_ListDueCommissions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx := createTestContext()
+
+	proof1, _ := entity.NewCODProof("order-1", "shop-1", "customer-1", 50000)
+	proof1.CommissionStatus = entity.CODCommissionDue
+	proof2, _ := entity.NewCODProof("order-2", "shop-1", "customer-2", 30000)
+	proof2.CommissionStatus = entity.CODCommissionDue
+
+	expectedProofs := []*entity.CODProof{proof1, proof2}
+
+	mockCODProofRepo.EXPECT().
+		FindCommissionDue(gomock.Any()).
+		Return(expectedProofs, nil)
+
+	result, err := uc.ListDueCommissions(ctx)
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 2)
+	assert.Equal(t, "order-1", result[0].OrderID)
+	assert.Equal(t, "order-2", result[1].OrderID)
+}
+
+func TestCollectCommissionUsecase_SumDueCommissionsByShop(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx := createTestContext()
+
+	mockCODProofRepo.EXPECT().
+		SumCommissionDueByShopID(gomock.Any(), "shop-123").
+		Return(int64(25000), nil)
+
+	result, err := uc.SumDueCommissionsByShop(ctx, "shop-123")
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(25000), result)
+}
+
+func TestCollectCommissionUsecase_SumTotalDueCommissions(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockCODProofRepo := mockrepo.NewMockCODProofRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockWalletUC := mockusecase.NewMockWalletDebiter(ctrl)
+	mockFreezeUC := mockusecase.NewMockAccountFreezer(ctrl)
+
+	uc := codusecase.NewCollectCommissionUsecase(
+		mockCODProofRepo,
+		mockOrderRepo,
+		mockWalletUC,
+		mockFreezeUC,
+		mockTxManager,
+	)
+
+	ctx := createTestContext()
+
+	mockCODProofRepo.EXPECT().
+		SumTotalCommissionDue(gomock.Any()).
+		Return(int64(150000), nil)
+
+	result, err := uc.SumTotalDueCommissions(ctx)
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(150000), result)
+}
