@@ -1,31 +1,22 @@
-﻿test(quality): v4.4.5 - Tests unitaires etendus (445 tests)
+﻿test(cod): v4.4.5 - Tests complets CollectCommissionUsecase
 
-Nouveaux tests ajoutes :
-  - application/usecase/wallet_usecase (51 tests)
-    * CreditWalletRequest.Validate : validation montants et types
-    * DebitWalletRequest.Validate : validation et AllowNegative
-    * FreezeAccountRequest.Validate : raisons et periodes de grace
-    * UnfreezeAccountRequest.Validate : resolutions et depots
-    * MerchantWallet helpers : Credit, Debit, Freeze, Unfreeze
-    * AccountFreeze helpers : NewAccountFreeze, DaysUntilExpiration
+Refactoring :
+  - interfaces.go : WalletDebiter + AccountFreezer
+  - collect_commission.go : Injection de dépendance
+  - Mocks générés : mock_wallet_debiter.go, mock_account_freezer.go
 
-  - application/usecase/payment_usecase (43 tests)
-    * IsTontineReference : detection references tontine
-    * ParseTontineReference : parsing format TONTINE:group:cycle:participant
-    * Payment.IsTerminal : statuts terminaux (success, failed, refunded, etc.)
-    * Payment.IsValidStatusTransition : machine a etats
-    * NewPayment : creation avec validation montant
-    * Payment state transitions : MarkProcessing, MarkSuccess, etc.
-    * Payment.IsExpired : verification expiration
-    * Payment metadata : gestion metadata, phone, description
-
-Corrections :
-  - TestIsTontineReference_Invalid : HasPrefix matche TONTINE:
-  - TestPayment_IsTerminal_Success : transition pending->processing->success
+Tests ajoutés (15 tests) :
+  - Validation : EmptyOrderID, EmptyCollectedBy
+  - Multi-tenant : No tenant, Shop mismatch
+  - Transaction : BeginTx error, Commit error, Rollback
+  - Repository : ProofNotFound
+  - Métier : ProofIncomplete, ProofIncoherent, AlreadyCollected
+  - Happy paths : Success, SuccessWithAutoFreeze, DebitFailed
+  - Cas limites : FreezeFailed
 
 Couverture :
-  - Entites : 170 tests
-  - Usecases : 275 tests (11 packages)
-  - Total : 445 tests unitaires
+  - Avant : 11.7% (tests d'entités seulement)
+  - Après : 41.1% (package complet)
+  - Gain : +251%
 
 Phase 5.1 : Tests unitaires en cours

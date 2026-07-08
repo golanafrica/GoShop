@@ -76,8 +76,8 @@ func (r *CollectCommissionRequest) Validate() error {
 type CollectCommissionUsecase struct {
 	codProofRepo repository.CODProofRepository
 	orderRepo    repository.OrderRepository
-	walletUC     *walletusecase.DebitWalletUsecase
-	freezeUC     *walletusecase.FreezeAccountUsecase
+	walletUC     WalletDebiter  // ✅ Interface
+	freezeUC     AccountFreezer // ✅ Interface
 	txManager    repository.TxManager
 }
 
@@ -85,8 +85,8 @@ type CollectCommissionUsecase struct {
 func NewCollectCommissionUsecase(
 	codProofRepo repository.CODProofRepository,
 	orderRepo repository.OrderRepository,
-	walletUC *walletusecase.DebitWalletUsecase,
-	freezeUC *walletusecase.FreezeAccountUsecase,
+	walletUC WalletDebiter, // ✅ Interface
+	freezeUC AccountFreezer, // ✅ Interface
 	txManager repository.TxManager,
 ) *CollectCommissionUsecase {
 	return &CollectCommissionUsecase{
