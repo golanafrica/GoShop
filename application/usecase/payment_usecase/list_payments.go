@@ -9,7 +9,6 @@ import (
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -71,6 +70,6 @@ func (uc *ListPaymentsUsecase) Execute(ctx context.Context, req *ListPaymentsReq
 }
 
 // Helper pour parser un UUID (utilisé par plusieurs usecases)
-func parseUUIDSafe(s string) (uuid.UUID, error) {
-	return uuid.Parse(s)
-}
+//func parseUUIDSafe(s string) (uuid.UUID, error) {
+//return uuid.Parse(s)
+//}

@@ -9,24 +9,24 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
-	"Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
 // CheckPaymentStatusUsecase vérifie le statut d'un paiement
+// CheckPaymentStatusUsecase vérifie le statut d'un paiement
 type CheckPaymentStatusUsecase struct {
 	paymentRepo repository.PaymentRepository
 	orderRepo   repository.OrderRepository
-	registry    *payment.Registry
+	registry    PaymentRegistry // ✅ Interface au lieu de *payment.Registry
 }
 
 // NewCheckPaymentStatusUsecase crée une nouvelle instance
 func NewCheckPaymentStatusUsecase(
 	paymentRepo repository.PaymentRepository,
 	orderRepo repository.OrderRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 ) *CheckPaymentStatusUsecase {
 	return &CheckPaymentStatusUsecase{
 		paymentRepo: paymentRepo,

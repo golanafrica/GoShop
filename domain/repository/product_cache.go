@@ -7,6 +7,7 @@ import (
 )
 
 //go:generate mockgen -destination=../../mocks/repository/mock_product_cache.go -package=repository . ProductCache
+//go:generate mockgen -destination=../../mocks/repository/mock_product_tontine_settings_repository.go -package=repository . ShopPaymentSettingsRepository
 
 // ProductCache définit les opérations de cache pour les produits
 type ProductCache interface {

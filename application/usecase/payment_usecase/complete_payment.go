@@ -15,15 +15,16 @@ import (
 )
 
 // CompletePaymentUsecase complète un paiement TWO_STEP avec un OTP
+// CompletePaymentUsecase complète un paiement TWO_STEP avec un OTP
 type CompletePaymentUsecase struct {
 	paymentRepo repository.PaymentRepository
-	registry    *payment.Registry
+	registry    PaymentRegistry // ✅ Interface
 }
 
 // NewCompletePaymentUsecase crée une nouvelle instance
 func NewCompletePaymentUsecase(
 	paymentRepo repository.PaymentRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 ) *CompletePaymentUsecase {
 	return &CompletePaymentUsecase{
 		paymentRepo: paymentRepo,

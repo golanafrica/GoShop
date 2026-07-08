@@ -5,6 +5,8 @@ import (
 	"database/sql"
 )
 
+//go:generate mockgen -destination=../../mocks/repository/mock_db_executor.go -package=repository . DBExecutor
+
 // DBExecutor définit l'interface minimale pour exécuter des requêtes SQL
 // C'est une abstraction qui permet d'utiliser *sql.DB ou repository.Tx
 // Votre Tx implémente déjà cette interface implicitement

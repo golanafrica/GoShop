@@ -8,7 +8,6 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
-	"Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -17,13 +16,13 @@ import (
 // RefundPaymentUsecase gère les remboursements
 type RefundPaymentUsecase struct {
 	paymentRepo repository.PaymentRepository
-	registry    *payment.Registry
+	registry    PaymentRegistry // ✅ Interface
 }
 
 // NewRefundPaymentUsecase crée une nouvelle instance
 func NewRefundPaymentUsecase(
 	paymentRepo repository.PaymentRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 ) *RefundPaymentUsecase {
 	return &RefundPaymentUsecase{
 		paymentRepo: paymentRepo,

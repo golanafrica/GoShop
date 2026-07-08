@@ -23,26 +23,26 @@ var (
 // ProcessWebhookUsecase traite les webhooks reçus des providers
 type ProcessWebhookUsecase struct {
 	paymentRepo      repository.PaymentRepository
-	registry         *payment.Registry
+	registry         PaymentRegistry // ✅ Interface (pas *payment.Registry)
 	db               repository.DBExecutor
 	shopRepo         repository.ShopRepository
-	tontineWebhookUC *ProcessTontineWebhookUsecase // 🆕 v2.9.0
+	tontineWebhookUC *ProcessTontineWebhookUsecase
 }
 
 // NewProcessWebhookUsecase crée une nouvelle instance
 func NewProcessWebhookUsecase(
 	paymentRepo repository.PaymentRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 	db repository.DBExecutor,
 	shopRepo repository.ShopRepository,
-	tontineWebhookUC *ProcessTontineWebhookUsecase, // 🆕 v2.9.0
+	tontineWebhookUC *ProcessTontineWebhookUsecase,
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
 		registry:         registry,
 		db:               db,
 		shopRepo:         shopRepo,
-		tontineWebhookUC: tontineWebhookUC, // 🆕 v2.9.0
+		tontineWebhookUC: tontineWebhookUC,
 	}
 }
 

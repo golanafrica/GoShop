@@ -24,15 +24,15 @@ type ShopPaymentSettingsRepository interface {
 type InitiatePaymentUsecase struct {
 	paymentRepo     repository.PaymentRepository
 	orderRepo       repository.OrderRepository
-	registry        *payment.Registry
-	shopPaymentRepo ShopPaymentSettingsRepository // 🆕 Pour config par boutique
+	registry        PaymentRegistry // ✅ Interface
+	shopPaymentRepo ShopPaymentSettingsRepository
 }
 
 // NewInitiatePaymentUsecase crée une nouvelle instance
 func NewInitiatePaymentUsecase(
 	paymentRepo repository.PaymentRepository,
 	orderRepo repository.OrderRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 ) *InitiatePaymentUsecase {
 	return &InitiatePaymentUsecase{
 		paymentRepo: paymentRepo,
@@ -45,7 +45,7 @@ func NewInitiatePaymentUsecase(
 func NewInitiatePaymentUsecaseWithShopSettings(
 	paymentRepo repository.PaymentRepository,
 	orderRepo repository.OrderRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry, // ✅ Interface
 	shopPaymentRepo ShopPaymentSettingsRepository,
 ) *InitiatePaymentUsecase {
 	return &InitiatePaymentUsecase{
