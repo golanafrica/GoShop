@@ -1,64 +1,33 @@
-﻿test(payment): v4.4.9 - Tests complets package payment (118 tests, 86.8%)
+﻿test(withdrawal): v4.4.10 - Tests complets package withdrawal (32 tests, 97.1%)
 
-Tests ajoutés pour les 7 usecases :
+Tests ajoutés pour les 2 usecases :
 
-1. ListPaymentsUsecase (10 tests) : 100%
-   - Multi-tenant, repository errors
-   - Filtres (status, provider, pagination)
-   - DTO mapping complet
+1. ListWithdrawalsUsecase (11 tests) : 100%
+   - Multi-tenant validation
+   - Repository errors
+   - Happy paths (liste vide, pagination, succès)
+   - GetWithdrawal (validation, shop mismatch)
 
-2. RefundPaymentUsecase (11 tests) : 89.5%
-   - Validation, multi-tenant
-   - Règles métier (statut, montant, propriétaire)
-   - Provider errors
-   - Happy paths (full/partial refund)
+2. CreateWithdrawalUsecase (16 tests) : 94.7%
+   - KYC Verification (4 statuts)
+   - Entity creation errors
+   - Repository errors (save, update)
+   - Provider errors (factory, cash-out)
+   - Shop settings (error, disabled, shop-specific)
+   - Happy paths (processing, immediate success, optional fields)
 
-3. CheckPaymentStatusUsecase (14 tests) : 100%
-   - Validation, multi-tenant
-   - Terminal states (success, failed, refunded)
-   - Provider interactions (sync status)
-   - Status transitions
-
-4. ProcessTontineWebhookUsecase (14 tests) : 88.2%
-   - Parsing de référence tontine
-   - Payment/group/shop not found
-   - Status transitions
-   - Cycle completion (partial, full, last cycle)
-   - Voucher generation + collision
-
-5. ProcessWebhookUsecase (12 tests) : 77.6%
-   - Provider errors
-   - Webhook validation
-   - Status transitions (success, failed, cancelled)
-   - Tontine webhook delegation
-   - Record webhook audit errors
-
-6. InitiatePaymentUsecase (15 tests) : 77.5%
-   - Multi-tenant, validation
-   - Order errors (not found, active payment, zero total)
-   - Provider errors (not available, initiation failed)
-   - Database failures (create/update)
-   - Happy paths (standard, with email, with metadata)
-   - Empty provider ref
-
-7. CompletePaymentUsecase (14 tests) : 90.7%
-   - Multi-tenant, validation
-   - Règles métier (statut, propriétaire)
-   - Missing fields (metadata, operator, phone, ref)
-   - Provider errors
-   - Happy paths (success, unexpected status)
-
-+ Tests entités Payment (28 tests)
-+ Tests helpers (IsTontineReference, ParseTontineReference)
+3. Tests helpers (5 tests) : 100%
+   - NewCreateWithdrawalUsecase (constructeur production)
+   - NewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing
+   - getEnvOrDefault (variable présente/absente)
+   - toResponse (tous les champs optionnels)
 
 Refactoring architectural :
-  - interfaces.go : PaymentRegistry (pour testabilité)
-  - Mocks générés : mock_payment_registry.go, mock_provider_completable.go
-  - Mocks manuels : mockProviderAndCompletable, mockProviderOnly
-  - Suppression code mort : parseUUIDSafe
+  - interfaces.go : PaymentRegistry, CashOutProvider, YengaPayProviderFactory
+  - Factory pattern pour mocker payment.NewYengaPayProvider
+  - Mocks générés : mock_cashout_provider.go, mock_shop_payment_settings.go
 
-Couverture globale : 86.8%
-Fonctions à 100% : 17/24 (71%)
-Fonctions à 0% : 0 ✅
+Couverture globale : 97.1%
+Fonctions à 100% : 8/9 (89%)
 
 Phase 5.1 : Tests unitaires en cours

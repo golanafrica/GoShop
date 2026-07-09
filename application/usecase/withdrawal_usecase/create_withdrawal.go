@@ -11,31 +11,46 @@ import (
 	"Goshop/domain/tenant"
 	"Goshop/infrastructure/payment"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
-// ShopPaymentSettingsRepository pour récupérer la config boutique
-type ShopPaymentSettingsRepository interface {
-	GetPaymentSettings(ctx context.Context, shopID uuid.UUID) (*entity.ShopPaymentSettings, error)
-}
-
-// CreateWithdrawalUsecase crée un retrait
 type CreateWithdrawalUsecase struct {
 	withdrawalRepo  repository.WithdrawalRepository
 	shopPaymentRepo ShopPaymentSettingsRepository
-	registry        *payment.Registry
+	registry        PaymentRegistry
+	yengaPayFactory YengaPayProviderFactory
 }
 
 func NewCreateWithdrawalUsecase(
 	withdrawalRepo repository.WithdrawalRepository,
 	shopPaymentRepo ShopPaymentSettingsRepository,
-	registry *payment.Registry,
+	registry PaymentRegistry,
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
 		shopPaymentRepo: shopPaymentRepo,
 		registry:        registry,
+		yengaPayFactory: defaultYengaPayFactory, // ✅ Factory par défaut
+	}
+}
+
+// defaultYengaPayFactory est la factory par défaut qui crée un vrai provider
+func defaultYengaPayFactory(config payment.YengaPayConfig) (CashOutProvider, error) {
+	return payment.NewYengaPayProvider(config)
+}
+
+// NewCreateWithdrawalUsecaseWithFactory crée une instance avec factory personnalisée (pour tests)
+func NewCreateWithdrawalUsecaseWithFactory(
+	withdrawalRepo repository.WithdrawalRepository,
+	shopPaymentRepo ShopPaymentSettingsRepository,
+	registry PaymentRegistry,
+	yengaPayFactory YengaPayProviderFactory,
+) *CreateWithdrawalUsecase {
+	return &CreateWithdrawalUsecase{
+		withdrawalRepo:  withdrawalRepo,
+		shopPaymentRepo: shopPaymentRepo,
+		registry:        registry,
+		yengaPayFactory: yengaPayFactory,
 	}
 }
 
@@ -150,7 +165,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	}
 
 	// 5. Créer un provider Yenga Pay avec la config
-	yengaProvider, err := payment.NewYengaPayProvider(providerConfig)
+	yengaProvider, err := uc.yengaPayFactory(providerConfig)
 	if err != nil {
 		if markErr := withdrawal.MarkFailed(err.Error()); markErr == nil {
 			_ = uc.withdrawalRepo.Update(ctx, withdrawal)
