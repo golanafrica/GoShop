@@ -1,55 +1,42 @@
-﻿test(collaborator): v4.4.12 - Tests complets package collaborator (133 tests, 84.9%)
+﻿test(merchant-kyc): v4.4.13 - Tests complets package merchant_kyc (32 tests, 86.5%)
 
-Tests ajoutés pour les 6 usecases :
+Tests ajoutés pour les 4 usecases :
 
-1. ListCollaboratorsUsecase (18 tests) : ~85%
-   - Validation (type, shop_id, sort_order)
-   - Permissions (super_admin, admin, merchant, shop_admin)
-   - Happy paths (platform, shop, role filter, pagination)
-   - Erreurs non bloquantes (CountByRole, CountActive, CountByShopID)
+1. GetMerchantKYCStatusUsecase (5 tests) :
+   - Multi-tenant validation
+   - Repository errors (FindByShopID)
+   - Happy paths (no docs, with docs, verified shop)
+   - Vérification DocumentsSummary (total/pending/approved/rejected)
 
-2. RemoveCollaboratorUsecase (22 tests) : ~85%
-   - Validation (collaborator_id, type, reason min 10/max 1000)
-   - Permissions (super_admin, admin, shop_admin)
-   - Règles métier (déjà supprimé, se supprimer, dernier shop_admin, shop mismatch)
-   - Happy paths (platform, shop)
+2. ReviewMerchantKYCUsecase (8 tests) :
+   - Validation (shop_id, admin_id, action, rejection_reason, UUID format)
+   - Repository errors (shop not found, not pending, update KYC status)
+   - Happy paths (approve, reject, with document reviews)
 
-3. UpdateCollaboratorRoleUsecase (19 tests) : ~85%
-   - Validation (collaborator_id, type, new_role, shop_id)
-   - Permissions (super_admin, admin, shop_admin)
-   - Règles métier (se rétrograder, rôle invalide, shop mismatch)
-   - Happy paths (platform, shop)
+3. ListPendingMerchantKYCUsecase (3 tests) :
+   - Auto-correction pagination (limit <= 0, offset < 0)
+   - Repository errors (FindByKYCStatus)
+   - Happy path (liste avec shops, DocumentsCount, DaysWaiting)
 
-4. AcceptInvitationUsecase (27 tests) : ~85%
-   - Validation token (vide, format, longueur, hex)
-   - Invitation errors (not found, already used, cancelled, expired)
-   - User errors (not found, already collaborator)
-   - Repository errors (IsPlatformCollaborator, InvalidPermissionsJSON, Create)
-   - Happy paths (platform, shop)
-   - GetInvitationPreview (5 tests : invalid, not found, already used, expired, success)
+4. SubmitMerchantKYCUsecase (13 tests) :
+   - Multi-tenant validation
+   - Règles métier (shop inactif, KYC déjà vérifié)
+   - Validation documents :
+     * Vide (at least one required)
+     * Trop (max 10)
+     * Type invalide
+     * Taille > 5 MB
+     * MIME type non autorisé
+     * Identity document manquant
+     * Business registry manquant
+   - Repository errors (UpdateKYCStatus)
+   - Happy paths (first submission, resubmission avec DeleteByShopID)
 
-5. InvitePlatformCollaboratorUsecase (17 tests) : ~85%
-   - Validation (email, format, rôle, message max 500)
-   - Permissions (can_invite_collaborators, super_admin bypass)
-   - Règles métier (user not found, déjà collab, invitation pending)
-   - Email service (configuré, non configuré, debug)
-   - Happy path
-
-6. InviteShopCollaboratorUsecase (19 tests) : ~85%
-   - Validation (shop_id, email, format, rôle, message)
-   - Règles métier (shop non trouvé/inactif, pas shop_admin, user not found, déjà collab, invitation pending)
-   - Email service (configuré, non configuré, debug)
-   - Happy path
-
-7. Helpers communs (6 tests) : 100%
-   - NormalizeToken (5 tests)
-   - AdminContext (1 test)
-   - GetPlatformRoleDisplayName (6 sous-tests)
-   - GetShopRoleDisplayName (5 sous-tests)
+5. Interface test (1 test) :
+   - Vérification ShopRepository.WithTX
 
 Refactoring :
-  - Suppression code mort : boolPtr, intPtr (non utilisés)
-  - Mock EmailService généré : mock_email_service.go
+  - Aucun (package propre, pas de code mort)
 
-Couverture globale : 84.9%
+Couverture globale : 86.5%
 Phase 5.1 : Tests unitaires en cours
