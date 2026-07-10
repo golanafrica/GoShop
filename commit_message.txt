@@ -1,42 +1,35 @@
-﻿test(merchant-kyc): v4.4.13 - Tests complets package merchant_kyc (32 tests, 86.5%)
+﻿test(auth): v4.4.14 - Tests complets package auth_usecase (15 tests, 96.2%)
 
-Tests ajoutés pour les 4 usecases :
+Tests ajoutés pour RefreshUsecase :
 
-1. GetMerchantKYCStatusUsecase (5 tests) :
-   - Multi-tenant validation
-   - Repository errors (FindByShopID)
-   - Happy paths (no docs, with docs, verified shop)
-   - Vérification DocumentsSummary (total/pending/approved/rejected)
+1. Validation token (4 tests) :
+   - Token invalide (validateToken error)
+   - Type invalide (access au lieu de refresh)
+   - Sub manquant
+   - JTI manquant
 
-2. ReviewMerchantKYCUsecase (8 tests) :
-   - Validation (shop_id, admin_id, action, rejection_reason, UUID format)
-   - Repository errors (shop not found, not pending, update KYC status)
-   - Happy paths (approve, reject, with document reviews)
+2. Session validation (4 tests) :
+   - Session non trouvée
+   - Session révoquée
+   - Session expirée
+   - User ID mismatch
 
-3. ListPendingMerchantKYCUsecase (3 tests) :
-   - Auto-correction pagination (limit <= 0, offset < 0)
-   - Repository errors (FindByKYCStatus)
-   - Happy path (liste avec shops, DocumentsCount, DaysWaiting)
+3. Repository errors (2 tests) :
+   - Revoke error
+   - Create session error
 
-4. SubmitMerchantKYCUsecase (13 tests) :
-   - Multi-tenant validation
-   - Règles métier (shop inactif, KYC déjà vérifié)
-   - Validation documents :
-     * Vide (at least one required)
-     * Trop (max 10)
-     * Type invalide
-     * Taille > 5 MB
-     * MIME type non autorisé
-     * Identity document manquant
-     * Business registry manquant
-   - Repository errors (UpdateKYCStatus)
-   - Happy paths (first submission, resubmission avec DeleteByShopID)
+4. Token generation errors (2 tests) :
+   - GenerateAccess error
+   - GenerateRefresh error
 
-5. Interface test (1 test) :
-   - Vérification ShopRepository.WithTX
+5. Happy paths (3 tests) :
+   - Succès avec rôle custom (merchant)
+   - Succès avec rôle par défaut (merchant fallback)
+   - Succès avec SessionRepo nil (non bloquant)
 
 Refactoring :
-  - Aucun (package propre, pas de code mort)
+  - Mock RefreshSessionRepository généré : mock_refresh_session_repository.go
+  - Helper createRefreshUsecase (sans paramètre ctrl inutile)
 
-Couverture globale : 86.5%
+Couverture globale : 96.2%
 Phase 5.1 : Tests unitaires en cours
