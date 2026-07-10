@@ -1,33 +1,45 @@
-﻿test(withdrawal): v4.4.10 - Tests complets package withdrawal (32 tests, 97.1%)
+﻿test(admin-shop): v4.4.11 - Tests complets package admin_shop (53 tests, 95.3%)
 
-Tests ajoutés pour les 2 usecases :
+Tests ajoutés pour les 5 usecases admin :
 
-1. ListWithdrawalsUsecase (11 tests) : 100%
-   - Multi-tenant validation
-   - Repository errors
-   - Happy paths (liste vide, pagination, succès)
-   - GetWithdrawal (validation, shop mismatch)
+1. ListShopsUsecase (8 tests) :
+   - Repository errors (FindAll, GetHealthStats non bloquant)
+   - Happy paths (liste vide, multiples shops)
+   - Auto-correction pagination (limit, offset, sort)
 
-2. CreateWithdrawalUsecase (16 tests) : 94.7%
-   - KYC Verification (4 statuts)
-   - Entity creation errors
-   - Repository errors (save, update)
-   - Provider errors (factory, cash-out)
-   - Shop settings (error, disabled, shop-specific)
-   - Happy paths (processing, immediate success, optional fields)
+2. SuspendShopUsecase (13 tests) :
+   - Validation complète (shop_id, reason min 10/max 1000 chars)
+   - Repository errors (find, suspend, reload)
+   - Règles métier (déjà suspendu, shop not found)
+   - Non-blocking errors (health score, audit log)
+   - Happy path complet
 
-3. Tests helpers (5 tests) : 100%
-   - NewCreateWithdrawalUsecase (constructeur production)
-   - NewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing
-   - getEnvOrDefault (variable présente/absente)
-   - toResponse (tous les champs optionnels)
+3. ActivateShopUsecase (10 tests) :
+   - Validation (shop_id)
+   - Repository errors (find, activate, reload)
+   - Règles métier (pas suspendu, shop not found)
+   - Non-blocking errors (health score, audit log)
+   - Happy path avec PreviousSuspension info
 
-Refactoring architectural :
-  - interfaces.go : PaymentRegistry, CashOutProvider, YengaPayProviderFactory
-  - Factory pattern pour mocker payment.NewYengaPayProvider
-  - Mocks générés : mock_cashout_provider.go, mock_shop_payment_settings.go
+4. GetShopDetailsUsecase (10 tests) :
+   - Validation (shop_id)
+   - Repository errors (find, KYC non bloquant)
+   - Happy paths (minimal, avec KYC documents, suspension, notes, review)
+   - Test des builders (KYC, Health, Suspension, AdminNotes, Review)
 
-Couverture globale : 97.1%
-Fonctions à 100% : 8/9 (89%)
+5. GetShopHealthUsecase (13 tests) :
+   - Validation (shop_id)
+   - Repository errors (find, stats non bloquant)
+   - Happy paths par état :
+     * Excellent shop (score 1000)
+     * KYC unverified (-200 points)
+     * Inactive shop (-300 points)
+     * Suspended shop (-500 points)
+     * Critical score (< 400)
+     * Warning score (400-599)
+     * Never reviewed
+     * Old review (> 30 jours)
+     * Score recalculated (différent du stocké)
 
+Couverture globale : 95.3%
 Phase 5.1 : Tests unitaires en cours
