@@ -33,13 +33,3 @@ type AdminContext struct {
 func strPtr(s string) *string {
 	return &s
 }
-
-// boolPtr crée un pointeur vers un bool
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-// intPtr crée un pointeur vers un int
-func intPtr(i int) *int {
-	return &i
-}

@@ -1,5 +1,7 @@
 package service
 
+//go:generate mockgen -destination=../../mocks/service/mock_email_service.go -package=service . EmailService
+
 import (
 	"errors"
 	"time"

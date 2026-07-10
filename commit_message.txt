@@ -1,45 +1,55 @@
-﻿test(admin-shop): v4.4.11 - Tests complets package admin_shop (53 tests, 95.3%)
+﻿test(collaborator): v4.4.12 - Tests complets package collaborator (133 tests, 84.9%)
 
-Tests ajoutés pour les 5 usecases admin :
+Tests ajoutés pour les 6 usecases :
 
-1. ListShopsUsecase (8 tests) :
-   - Repository errors (FindAll, GetHealthStats non bloquant)
-   - Happy paths (liste vide, multiples shops)
-   - Auto-correction pagination (limit, offset, sort)
+1. ListCollaboratorsUsecase (18 tests) : ~85%
+   - Validation (type, shop_id, sort_order)
+   - Permissions (super_admin, admin, merchant, shop_admin)
+   - Happy paths (platform, shop, role filter, pagination)
+   - Erreurs non bloquantes (CountByRole, CountActive, CountByShopID)
 
-2. SuspendShopUsecase (13 tests) :
-   - Validation complète (shop_id, reason min 10/max 1000 chars)
-   - Repository errors (find, suspend, reload)
-   - Règles métier (déjà suspendu, shop not found)
-   - Non-blocking errors (health score, audit log)
-   - Happy path complet
+2. RemoveCollaboratorUsecase (22 tests) : ~85%
+   - Validation (collaborator_id, type, reason min 10/max 1000)
+   - Permissions (super_admin, admin, shop_admin)
+   - Règles métier (déjà supprimé, se supprimer, dernier shop_admin, shop mismatch)
+   - Happy paths (platform, shop)
 
-3. ActivateShopUsecase (10 tests) :
-   - Validation (shop_id)
-   - Repository errors (find, activate, reload)
-   - Règles métier (pas suspendu, shop not found)
-   - Non-blocking errors (health score, audit log)
-   - Happy path avec PreviousSuspension info
+3. UpdateCollaboratorRoleUsecase (19 tests) : ~85%
+   - Validation (collaborator_id, type, new_role, shop_id)
+   - Permissions (super_admin, admin, shop_admin)
+   - Règles métier (se rétrograder, rôle invalide, shop mismatch)
+   - Happy paths (platform, shop)
 
-4. GetShopDetailsUsecase (10 tests) :
-   - Validation (shop_id)
-   - Repository errors (find, KYC non bloquant)
-   - Happy paths (minimal, avec KYC documents, suspension, notes, review)
-   - Test des builders (KYC, Health, Suspension, AdminNotes, Review)
+4. AcceptInvitationUsecase (27 tests) : ~85%
+   - Validation token (vide, format, longueur, hex)
+   - Invitation errors (not found, already used, cancelled, expired)
+   - User errors (not found, already collaborator)
+   - Repository errors (IsPlatformCollaborator, InvalidPermissionsJSON, Create)
+   - Happy paths (platform, shop)
+   - GetInvitationPreview (5 tests : invalid, not found, already used, expired, success)
 
-5. GetShopHealthUsecase (13 tests) :
-   - Validation (shop_id)
-   - Repository errors (find, stats non bloquant)
-   - Happy paths par état :
-     * Excellent shop (score 1000)
-     * KYC unverified (-200 points)
-     * Inactive shop (-300 points)
-     * Suspended shop (-500 points)
-     * Critical score (< 400)
-     * Warning score (400-599)
-     * Never reviewed
-     * Old review (> 30 jours)
-     * Score recalculated (différent du stocké)
+5. InvitePlatformCollaboratorUsecase (17 tests) : ~85%
+   - Validation (email, format, rôle, message max 500)
+   - Permissions (can_invite_collaborators, super_admin bypass)
+   - Règles métier (user not found, déjà collab, invitation pending)
+   - Email service (configuré, non configuré, debug)
+   - Happy path
 
-Couverture globale : 95.3%
+6. InviteShopCollaboratorUsecase (19 tests) : ~85%
+   - Validation (shop_id, email, format, rôle, message)
+   - Règles métier (shop non trouvé/inactif, pas shop_admin, user not found, déjà collab, invitation pending)
+   - Email service (configuré, non configuré, debug)
+   - Happy path
+
+7. Helpers communs (6 tests) : 100%
+   - NormalizeToken (5 tests)
+   - AdminContext (1 test)
+   - GetPlatformRoleDisplayName (6 sous-tests)
+   - GetShopRoleDisplayName (5 sous-tests)
+
+Refactoring :
+  - Suppression code mort : boolPtr, intPtr (non utilisés)
+  - Mock EmailService généré : mock_email_service.go
+
+Couverture globale : 84.9%
 Phase 5.1 : Tests unitaires en cours
