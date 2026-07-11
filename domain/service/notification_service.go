@@ -1,5 +1,7 @@
 package service
 
+//go:generate mockgen -destination=../../mocks/service/mock_notification_service.go -package=service . NotificationService
+
 import (
 	"context"
 

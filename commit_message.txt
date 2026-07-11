@@ -1,46 +1,57 @@
-﻿test(credit): v4.4.17 - Tests complets package credit_usecase (136 tests, 92.1%)
+﻿test(order): v4.4.18 - Tests complets package order_usecase (70 tests, 93.4%)
 
-Tests ajoutés pour les 5 usecases + helpers :
+Tests ajoutés pour les 8 usecases :
 
-1. ApplyForCreditUsecase (19 tests) :
-   - Multi-tenant, validation, BeginTx errors
-   - Product/Plan not found, credit not enabled
-   - Duration limits, existing applications
-   - Credit score validation (too low, default creation)
-   - Score update error (continues anyway)
-   - Success paths, simulation helpers
+1. GetAllOrderUsecase (5 tests) :
+   - BeginTx, FindAll, Commit errors
+   - Success paths (empty, with orders)
 
-2. ApproveCreditUsecase (11 tests) :
-   - Multi-tenant, validation, BeginTx errors
-   - Application not found, shop mismatch, not pending
-   - Update application/save contract/save installments/commit errors
-   - Success path with contract & installments generation
+2. GetOrderByIdUsecase (6 tests) :
+   - Empty ID, BeginTx, Order not found, Commit errors
+   - Success path
 
-3. RejectCreditUsecase (4 tests) :
-   - Validation, shop mismatch, application not found
-   - Commit error, update application error
+3. AcceptOrderUsecase (12 tests) :
+   - Multi-tenant, BeginTx, Order not found errors
+   - Not cash on delivery, expired, invalid transition
+   - Update order, commit errors, success
+   - RestoreStock errors (FindByID, Update)
+   - Notification error (non-blocking)
 
-4. PayDownPaymentUsecase (8 tests) :
-   - Multi-tenant, validation, contract not found/not active
-   - Down payment already paid, score create error
-   - Find installments error, update contract error, commit error, success
+4. RejectOrderUsecase (10 tests) :
+   - Multi-tenant, BeginTx, Order not found errors
+   - Not cash on delivery, invalid transition
+   - Restore stock errors (ProductNotFound, UpdateError)
+   - Commit error, update order error, success
+   - Notification error (non-blocking)
 
-5. ConfigureCreditPlanUsecase (15 tests) :
-   - Multi-tenant, validation, BeginTx, product not found
-   - Create/Update plan errors, wallet frozen continues anyway
-   - Enable/Disable helpers, get/list helpers, validation errors
-   - Commit error, plan validation error
+5. OutForDeliveryUsecase (8 tests) :
+   - Multi-tenant, BeginTx, Order not found errors
+   - Not cash on delivery, invalid transition
+   - Update order, commit errors, success
 
-6. Query/Helper Methods (13 tests) :
-   - GetContract, GetContractInstallments, GetPendingApplications
-   - GetActiveContractsByShop/Customer, GetOverdueInstallments
-   - GetContractStats, ListEnabledCreditPlansByShop
-   - CanApplyForCredit branches, determineScoreLevel levels
+6. CancelOrderUsecase (9 tests) :
+   - Multi-tenant, BeginTx, Order not found errors
+   - Invalid transition, update order, commit errors
+   - Success (Mobile Money, Cash with/without restore stock)
+
+7. DeliverOrderUsecase (8 tests) :
+   - Multi-tenant, BeginTx, Order not found errors
+   - Not cash on delivery, invalid transition
+   - Success (with GetPaymentSettings + COD commission)
+   - Update order error, commit error
+
+8. CreateOrderUsecase (12 tests) :
+   - Customer not found, product not found, insufficient stock
+   - Update stock, create order, order item errors
+   - BeginTx, commit errors, success
+   - CashOnDelivery with COD proof creation
+   - Tenant error skips proof creation
 
 Refactoring :
-  - Pattern DoAndReturn pour simulation d'IDs et stats
-  - Helpers communs pour réduire la duplication
-  - Correction des mocks WithTX avec .AnyTimes()
+  - Mock NotificationService généré via go:generate
+  - Mock ShopOwnerVerifier généré via go:generate
+  - Pattern DoAndReturn pour restore stock et COD proof
+  - Tests d'intégration PostgreSQL conservés
 
-Couverture globale : 92.1%
+Couverture globale : 93.4%
 Phase 5.1 : Tests unitaires en cours
