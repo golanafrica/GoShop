@@ -1,41 +1,60 @@
-﻿test(tontine): v4.4.15 - Tests complets package tontine_usecase (64 tests, 94.9%)
+﻿test(wallet): v4.4.16 - Tests complets package wallet_usecase (99 tests, 92.2%)
 
 Tests ajoutés pour les 4 usecases + helpers :
 
-1. CreateTontineGroupUsecase (18 tests) :
-   - Validation requête (product_id, circle_type, total_cycles)
+1. CreditWalletUsecase (14 tests Execute) :
+   - Multi-tenant validation (sans tenant, shop_id mismatch)
+   - Transaction errors (BeginTx, FindWallet, Create, Update, Commit)
+   - Wallet errors (frozen, not found auto-create)
+   - Success paths (existing wallet, new wallet)
+
+2. DebitWalletUsecase (17 tests Execute) :
    - Multi-tenant validation
-   - Product/Settings errors (not found, disabled, circle not allowed)
-   - Customer validation (not found, KYC not verified)
-   - Repository errors (save group, add participant)
-   - Happy paths (merchant creator, customer creator)
+   - Transaction errors (BeginTx, FindWallet, Update, Create, Commit)
+   - Wallet errors (frozen, exceeds max negative)
+   - Success paths (not negative, becomes negative, already negative)
+   - ShouldFreeze flag logic
 
-2. JoinTontineGroupUsecase (17 tests) :
-   - Validation requête (invite_code, customer_id)
+3. FreezeAccountUsecase (13 tests Execute) :
    - Multi-tenant validation
-   - Group validation (not found, shop mismatch, not pending)
-   - Customer validation (not found, KYC not verified)
-   - Participant checks (already member, group full)
-   - Repository errors (count, add participant, start group)
-   - Happy paths (not full, becomes full → starts group)
+   - Transaction errors (BeginTx, FindActive, FindWallet, Update, Create, Commit)
+   - Business rules (existing active freeze, wallet already frozen)
+   - Success paths (default grace period, custom grace period)
 
-3. PayCycleUsecase (19 tests) :
-   - Validation requête (group_id, customer_id, operator, phone, flow)
+4. UnfreezeAccountUsecase (11 tests Execute) :
    - Multi-tenant validation
-   - Group/Participant validation (not found, shop mismatch, not active)
-   - Payment checks (already paid, existing not done)
-   - Transaction management (BeginTx, Save, Commit, Rollback)
-   - Happy paths (success, existing payment not done)
+   - Transaction errors (BeginTx, FindActive, FindWallet, Update, Resolve, Commit)
+   - Business rules (no active freeze, wallet not frozen)
+   - Resolution types (paid with deposit, suspended)
 
-4. ListCustomerPaymentsUsecase (5 tests) :
-   - Multi-tenant validation
-   - Group validation (not found, shop mismatch)
-   - Repository errors
-   - Happy path
+5. DebitWithAutoFreeze (2 tests) :
+   - No freeze when ShouldFreeze=false
+   - Debit fails, no freeze attempted
 
-5. Helpers (5 tests) :
-   - GenerateTontineReference (valid/invalid UUIDs)
-   - ParseTontineReference (success/invalid format)
+6. Helpers CreditFrom* (6 tests) :
+   - CreditFromSale, CreditFromCOD
+   - CreditFromTontine, CreditFromCreditPlan
+   - CreditFromDeposit, CreditFromUnfreeze
 
-Couverture globale : 94.9%
-Phase 5.1 : Tests unitaires terminés pour tous les packages critiques
+7. Helpers Debit* (4 tests) :
+   - DebitCommission, DebitRefund
+   - DebitPayout, DebitPenalty
+
+8. Helpers Freeze* (4 tests) :
+   - FreezeForNegativeBalance
+   - FreezeForUnpaidCommission
+   - FreezeForFraud
+   - FreezeByAdmin
+
+9. Validation (50 tests existants) :
+   - CreditWalletRequest, DebitWalletRequest
+   - FreezeAccountRequest, UnfreezeAccountRequest
+   - MerchantWallet helpers, AccountFreeze helpers
+   - Performance tests
+
+Refactoring :
+  - Pattern DoAndReturn pour simuler l'assignation d'ID par la DB
+  - Helpers communs pour réduire la duplication (simulateSuccessfulCredit/Debit)
+
+Couverture globale : 92.2%
+Phase 5.1 : Tests unitaires en cours
