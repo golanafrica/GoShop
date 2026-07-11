@@ -1,6 +1,8 @@
 package shopusecase
 
 //go:generate mockgen -destination=../../../mocks/usecase/mock_shop_owner_verifier.go -package=usecase . ShopOwnerVerifier
+//go:generate mockgen -destination=../../../mocks/usecase/mock_shop_payment_settings.go -package=usecase . ShopPaymentSettingsRepository
+
 import (
 	"context"
 	"fmt"

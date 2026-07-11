@@ -1,57 +1,34 @@
-﻿test(order): v4.4.18 - Tests complets package order_usecase (70 tests, 93.4%)
+﻿test(shop): v4.4.19 - Tests complets package shop_usecase (50 tests, 91.7%)
 
-Tests ajoutés pour les 8 usecases :
+Tests ajoutés pour les 5 usecases :
 
-1. GetAllOrderUsecase (5 tests) :
-   - BeginTx, FindAll, Commit errors
-   - Success paths (empty, with orders)
+1. ConfigureTontineUsecase (15 tests) :
+   - Request validation (8 tests) : EmptyProductID, EmptyShopID, MinParticipantsTooLow,
+     MaxParticipantsTooHigh, MinGreaterThanMax, NoCircleTypeAllowed, AllCirclesAllowed
+   - Execute errors : ValidationError, UpsertError, FindByProductIDError
+   - Execute success with validation
+   - GetTontineSettings : NotFound, Success
 
-2. GetOrderByIdUsecase (6 tests) :
-   - Empty ID, BeginTx, Order not found, Commit errors
-   - Success path
+2. ConfigurePaymentUsecase (11 tests) :
+   - Request validation (6 tests) : EmptyShopID, InvalidShopID, InvalidOperator,
+     InvalidEnv, ValidEnv
+   - Execute errors : InvalidShopID, IsOwnerError, NotOwner, GetSettingsError, UpsertError
+   - Execute success : basic, with YengaPay configuration
+   - GetPaymentSettings : InvalidShopID, NotOwner, RepoError, Success
 
-3. AcceptOrderUsecase (12 tests) :
-   - Multi-tenant, BeginTx, Order not found errors
-   - Not cash on delivery, expired, invalid transition
-   - Update order, commit errors, success
-   - RestoreStock errors (FindByID, Update)
-   - Notification error (non-blocking)
+3. CreateShopUsecase (3 tests supplémentaires) :
+   - FindBySlugError, FindByCustomDomainError
+   - Success with custom domain
 
-4. RejectOrderUsecase (10 tests) :
-   - Multi-tenant, BeginTx, Order not found errors
-   - Not cash on delivery, invalid transition
-   - Restore stock errors (ProductNotFound, UpdateError)
-   - Commit error, update order error, success
-   - Notification error (non-blocking)
-
-5. OutForDeliveryUsecase (8 tests) :
-   - Multi-tenant, BeginTx, Order not found errors
-   - Not cash on delivery, invalid transition
-   - Update order, commit errors, success
-
-6. CancelOrderUsecase (9 tests) :
-   - Multi-tenant, BeginTx, Order not found errors
-   - Invalid transition, update order, commit errors
-   - Success (Mobile Money, Cash with/without restore stock)
-
-7. DeliverOrderUsecase (8 tests) :
-   - Multi-tenant, BeginTx, Order not found errors
-   - Not cash on delivery, invalid transition
-   - Success (with GetPaymentSettings + COD commission)
-   - Update order error, commit error
-
-8. CreateOrderUsecase (12 tests) :
-   - Customer not found, product not found, insufficient stock
-   - Update stock, create order, order item errors
-   - BeginTx, commit errors, success
-   - CashOnDelivery with COD proof creation
-   - Tenant error skips proof creation
+4. UpdateShopUsecase (6 tests supplémentaires) :
+   - FindByIDError, CustomDomainAlreadyTaken, CustomDomainCheckError
+   - UpdateError, ActivateShop, ClearCustomDomain
 
 Refactoring :
-  - Mock NotificationService généré via go:generate
+  - Mock ShopPaymentSettingsRepository régénéré avec UpsertPaymentSettings
   - Mock ShopOwnerVerifier généré via go:generate
-  - Pattern DoAndReturn pour restore stock et COD proof
-  - Tests d'intégration PostgreSQL conservés
+  - Helpers contextWithUser et newTestShop réutilisés
+  - Pattern DoAndReturn pour assertions complexes
 
-Couverture globale : 93.4%
+Couverture globale : 91.7%
 Phase 5.1 : Tests unitaires en cours
