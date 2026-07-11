@@ -1,34 +1,64 @@
-﻿test(shop): v4.4.19 - Tests complets package shop_usecase (50 tests, 91.7%)
+﻿test(customer): v4.4.20 - Tests complets package customer_usecase (96 tests, 92.4%)
 
-Tests ajoutés pour les 5 usecases :
+Tests ajoutés pour les 7 usecases :
 
-1. ConfigureTontineUsecase (15 tests) :
-   - Request validation (8 tests) : EmptyProductID, EmptyShopID, MinParticipantsTooLow,
-     MaxParticipantsTooHigh, MinGreaterThanMax, NoCircleTypeAllowed, AllCirclesAllowed
-   - Execute errors : ValidationError, UpsertError, FindByProductIDError
-   - Execute success with validation
-   - GetTontineSettings : NotFound, Success
+1. CreateCustomerUsecase (10 tests) :
+   - Email already exists, FindByEmail error, Create error, Commit error
+   - Invalid email, Empty last name, validation errors
+   - Success, BeginTx error
 
-2. ConfigurePaymentUsecase (11 tests) :
-   - Request validation (6 tests) : EmptyShopID, InvalidShopID, InvalidOperator,
-     InvalidEnv, ValidEnv
-   - Execute errors : InvalidShopID, IsOwnerError, NotOwner, GetSettingsError, UpsertError
-   - Execute success : basic, with YengaPay configuration
-   - GetPaymentSettings : InvalidShopID, NotOwner, RepoError, Success
+2. GetCustomerByIdUsecase (6 tests) :
+   - BeginTx, FindByID, Commit errors
+   - Success, NotFound
 
-3. CreateShopUsecase (3 tests supplémentaires) :
-   - FindBySlugError, FindByCustomDomainError
-   - Success with custom domain
+3. GetAllCustomersUsecase (6 tests) :
+   - BeginTx, Commit errors
+   - Success, Error, Empty list
 
-4. UpdateShopUsecase (6 tests supplémentaires) :
-   - FindByIDError, CustomDomainAlreadyTaken, CustomDomainCheckError
-   - UpdateError, ActivateShop, ClearCustomDomain
+4. UpdateCustomerUsecase (12 tests) :
+   - BeginTx, FindByID, Update, Commit errors
+   - Invalid email, Empty ID, validation errors
+   - Success, NotFound
+
+5. DeleteCustomerUsecase (6 tests) :
+   - BeginTx, FindByID, Delete, Commit errors
+   - Success, NotFound
+
+6. ReviewKYCUsecase (11 tests) :
+   - Validation (5 tests) : EmptyCustomerID, InvalidAction, RejectWithoutReason
+   - Execute errors : MultiTenant, BeginTx, CustomerNotFound, NoPendingDocuments
+   - Success : Approve, Reject
+   - Additional errors : Commit, UpdateDocument, UpdateCustomer, FindByCustomerID
+
+7. UploadKYCDocumentUsecase (13 tests) :
+   - Validation (6 tests) : EmptyCustomerID, InvalidDocumentType, EmptyFilePath
+   - Execute errors : MultiTenant, BeginTx, CustomerNotFound, CountByCustomer
+   - FindPendingByCustomer, CreateDocument, UpdateCustomer, Commit errors
+   - Success, MaxDocumentsReached, DuplicatePendingDocument
+
+8. ListPendingKYCUsecase (3 tests) :
+   - MultiTenant, Success (Empty, WithPendingDocs)
+
+9. GetKYCStatusUsecase (3 tests) :
+   - MultiTenant, CustomerNotFound, Success
+
+10. GenerateKYCFilePath (3 tests) :
+    - JPEG, PNG, PDF
+
+11. Internal functions (23 tests) :
+    - maskEmail (4 tests) : Empty, InvalidFormat, ShortUsername, LongUsername
+    - isValidEmails (5 tests) : Empty, NoAtSymbol, NoDot, Valid, EmptyParts
+    - normalizeCustomerData (2 tests) : WithChanges, NoChanges
+    - logChanges (2 tests) : AllFields, NoChanges
+    - applyUpdates (2 tests) : AllFields, EmptyFields
+    - validateCustomerData (4 tests) : EmptyLastName, LastNameTooShort, InvalidEmail, Valid
+    - validateUpdateData (4 tests) : FirstNameTooShort, LastNameTooShort, InvalidEmail, Valid
 
 Refactoring :
-  - Mock ShopPaymentSettingsRepository régénéré avec UpsertPaymentSettings
-  - Mock ShopOwnerVerifier généré via go:generate
-  - Helpers contextWithUser et newTestShop réutilisés
+  - Package customerusecase pour tests internes (accès aux fonctions privées)
   - Pattern DoAndReturn pour assertions complexes
+  - Mock NotificationService dans mocks/service
+  - Helpers createTestShopForKYC, createTestCustomerForKYC
 
-Couverture globale : 91.7%
+Couverture globale : 92.4%
 Phase 5.1 : Tests unitaires en cours
