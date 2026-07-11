@@ -1,60 +1,46 @@
-﻿test(wallet): v4.4.16 - Tests complets package wallet_usecase (99 tests, 92.2%)
+﻿test(credit): v4.4.17 - Tests complets package credit_usecase (136 tests, 92.1%)
 
-Tests ajoutés pour les 4 usecases + helpers :
+Tests ajoutés pour les 5 usecases + helpers :
 
-1. CreditWalletUsecase (14 tests Execute) :
-   - Multi-tenant validation (sans tenant, shop_id mismatch)
-   - Transaction errors (BeginTx, FindWallet, Create, Update, Commit)
-   - Wallet errors (frozen, not found auto-create)
-   - Success paths (existing wallet, new wallet)
+1. ApplyForCreditUsecase (19 tests) :
+   - Multi-tenant, validation, BeginTx errors
+   - Product/Plan not found, credit not enabled
+   - Duration limits, existing applications
+   - Credit score validation (too low, default creation)
+   - Score update error (continues anyway)
+   - Success paths, simulation helpers
 
-2. DebitWalletUsecase (17 tests Execute) :
-   - Multi-tenant validation
-   - Transaction errors (BeginTx, FindWallet, Update, Create, Commit)
-   - Wallet errors (frozen, exceeds max negative)
-   - Success paths (not negative, becomes negative, already negative)
-   - ShouldFreeze flag logic
+2. ApproveCreditUsecase (11 tests) :
+   - Multi-tenant, validation, BeginTx errors
+   - Application not found, shop mismatch, not pending
+   - Update application/save contract/save installments/commit errors
+   - Success path with contract & installments generation
 
-3. FreezeAccountUsecase (13 tests Execute) :
-   - Multi-tenant validation
-   - Transaction errors (BeginTx, FindActive, FindWallet, Update, Create, Commit)
-   - Business rules (existing active freeze, wallet already frozen)
-   - Success paths (default grace period, custom grace period)
+3. RejectCreditUsecase (4 tests) :
+   - Validation, shop mismatch, application not found
+   - Commit error, update application error
 
-4. UnfreezeAccountUsecase (11 tests Execute) :
-   - Multi-tenant validation
-   - Transaction errors (BeginTx, FindActive, FindWallet, Update, Resolve, Commit)
-   - Business rules (no active freeze, wallet not frozen)
-   - Resolution types (paid with deposit, suspended)
+4. PayDownPaymentUsecase (8 tests) :
+   - Multi-tenant, validation, contract not found/not active
+   - Down payment already paid, score create error
+   - Find installments error, update contract error, commit error, success
 
-5. DebitWithAutoFreeze (2 tests) :
-   - No freeze when ShouldFreeze=false
-   - Debit fails, no freeze attempted
+5. ConfigureCreditPlanUsecase (15 tests) :
+   - Multi-tenant, validation, BeginTx, product not found
+   - Create/Update plan errors, wallet frozen continues anyway
+   - Enable/Disable helpers, get/list helpers, validation errors
+   - Commit error, plan validation error
 
-6. Helpers CreditFrom* (6 tests) :
-   - CreditFromSale, CreditFromCOD
-   - CreditFromTontine, CreditFromCreditPlan
-   - CreditFromDeposit, CreditFromUnfreeze
-
-7. Helpers Debit* (4 tests) :
-   - DebitCommission, DebitRefund
-   - DebitPayout, DebitPenalty
-
-8. Helpers Freeze* (4 tests) :
-   - FreezeForNegativeBalance
-   - FreezeForUnpaidCommission
-   - FreezeForFraud
-   - FreezeByAdmin
-
-9. Validation (50 tests existants) :
-   - CreditWalletRequest, DebitWalletRequest
-   - FreezeAccountRequest, UnfreezeAccountRequest
-   - MerchantWallet helpers, AccountFreeze helpers
-   - Performance tests
+6. Query/Helper Methods (13 tests) :
+   - GetContract, GetContractInstallments, GetPendingApplications
+   - GetActiveContractsByShop/Customer, GetOverdueInstallments
+   - GetContractStats, ListEnabledCreditPlansByShop
+   - CanApplyForCredit branches, determineScoreLevel levels
 
 Refactoring :
-  - Pattern DoAndReturn pour simuler l'assignation d'ID par la DB
-  - Helpers communs pour réduire la duplication (simulateSuccessfulCredit/Debit)
+  - Pattern DoAndReturn pour simulation d'IDs et stats
+  - Helpers communs pour réduire la duplication
+  - Correction des mocks WithTX avec .AnyTimes()
 
-Couverture globale : 92.2%
+Couverture globale : 92.1%
 Phase 5.1 : Tests unitaires en cours
