@@ -53,6 +53,7 @@ func TestLoginUsecase_Success(t *testing.T) {
 	uc := userusecase.NewLoginUsecase(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil (non testé ici)
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -85,6 +86,7 @@ func TestLoginUsecase_EmailNotFound(t *testing.T) {
 	uc := userusecase.NewLoginUsecase(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -113,6 +115,7 @@ func TestLoginUsecase_InvalidPassword(t *testing.T) {
 	uc := userusecase.NewLoginUsecase(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -147,6 +150,7 @@ func TestLoginUsecase_InactiveUser(t *testing.T) {
 	uc := userusecase.NewLoginUsecase(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -184,6 +188,7 @@ func TestLoginUsecase_BannedUser(t *testing.T) {
 	uc := userusecase.NewLoginUsecase(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 

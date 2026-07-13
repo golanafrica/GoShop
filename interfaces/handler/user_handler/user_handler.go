@@ -14,6 +14,7 @@ import (
 	"Goshop/config/setupLogging"
 	"Goshop/domain/repository"
 	userrepository "Goshop/domain/repository/user_repository"
+	"Goshop/domain/service"
 	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
@@ -22,6 +23,7 @@ import (
 // ============================================================
 // 🆕 v4.0.0 : UserHandler avec support JWT + rôle
 // 🆕 v4.4.2 : + Intégration Session Management + Logout
+// 🆕 v4.4.21 : + Rate Limiting pour le login
 // ============================================================
 
 type UserHandler struct {
@@ -31,16 +33,17 @@ type UserHandler struct {
 	sessionRepo  repository.UserSessionRepository // 🆕 v4.4.2
 }
 
-// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo
+// 🆕 v4.4.21 : Nouveau constructeur avec rateLimiter
 func NewUserHandler(
 	repo userrepository.UserRepository,
 	sessionRepo repository.UserSessionRepository, // 🆕 v4.4.2
+	rateLimiter service.LoginRateLimiter, // 🆕 v4.4.21
 	logger *setupLogging.Logger,
 ) *UserHandler {
 	handlerLogger := logger.WithComponent("user_handler")
 	return &UserHandler{
 		registerUc:   userusecase.NewRegisterUsecase(repo, handlerLogger),
-		loginUc:      userusecase.NewLoginUsecase(repo, sessionRepo, handlerLogger),
+		loginUc:      userusecase.NewLoginUsecase(repo, sessionRepo, rateLimiter, handlerLogger), // 🆕 v4.4.21
 		getProfileUc: userusecase.NewGetProfileUsecase(repo),
 		sessionRepo:  sessionRepo,
 	}
@@ -147,6 +150,7 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 // @Success 200 {object} map[string]string "{'access_token': 'jwt', 'refresh_token': 'jwt', 'role': 'merchant'}"
 // @Failure 400 {object} utils.AppError "Invalid request payload"
 // @Failure 401 {object} utils.AppError "Invalid credentials"
+// @Failure 429 {object} utils.AppError "Too many attempts"
 // @Failure 500 {object} utils.AppError "Internal server error"
 // @Router /login [post]
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {

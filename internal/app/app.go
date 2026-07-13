@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"os"
@@ -54,6 +55,7 @@ import (
 	"Goshop/infrastructure/payment/mock"
 	"Goshop/infrastructure/postgres/collaborator"
 	paymentpostgres "Goshop/infrastructure/postgres/payment"
+	ratelimit "Goshop/infrastructure/rate_limit"
 
 	authrefreshrepositoryinfra "Goshop/infrastructure/postgres/auth_refresh_repository_infra"
 	"Goshop/infrastructure/postgres/customer"
@@ -760,10 +762,27 @@ func (a *App) setupRouter() {
 		cancelOrderUC,
 	)
 
-	// 🆕 v4.4.2 : Ajout de userSessionRepo comme 2ème paramètre
+	// 🆕 v4.4.21 : Initialisation du Rate Limiter pour le login
+	var loginRateLimiter service.LoginRateLimiter
+	redisAvailable := false
+	if utils.Rdb != nil {
+		// Tester la connexion Redis avec un ping
+		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
+			redisAvailable = true
+			loginRateLimiter = ratelimit.NewLoginRateLimiterRedis(utils.Rdb)
+			a.Logger.Info().Msg("✅ v4.4.21 Login rate limiter initialisé (Redis)")
+		}
+	}
+	if !redisAvailable {
+		loginRateLimiter = ratelimit.NewLoginRateLimiterMemory()
+		a.Logger.Warn().Msg("⚠️ v4.4.21 Login rate limiter initialisé (mémoire - fallback)")
+	}
+
+	// 🆕 v4.4.21 : Ajout de rateLimiter comme 3ème paramètre
 	userHandler := userhandler.NewUserHandler(
 		postgresUserRepo,
-		userSessionRepo, // 🆕 v4.4.2
+		userSessionRepo,  // 🆕 v4.4.2
+		loginRateLimiter, // 🆕 v4.4.21
 		a.Logger.WithComponent("user_handler"),
 	)
 

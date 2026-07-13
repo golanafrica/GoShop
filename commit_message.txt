@@ -1,64 +1,21 @@
-﻿test(customer): v4.4.20 - Tests complets package customer_usecase (96 tests, 92.4%)
+﻿feat(security): v4.4.21 - Rate Limiting sur l'authentification (Login)
 
-Tests ajoutés pour les 7 usecases :
+Implémentation d'un système de rate limiting pour prévenir les attaques par force brute sur le endpoint /login.
 
-1. CreateCustomerUsecase (10 tests) :
-   - Email already exists, FindByEmail error, Create error, Commit error
-   - Invalid email, Empty last name, validation errors
-   - Success, BeginTx error
+Fonctionnalités ajoutées :
+1. Interface LoginRateLimiter (domain/service)
+2. Implémentation Redis avec fallback mémoire (infrastructure/rate_limit)
+   - Limite par email : 5 tentatives / 15 min
+   - Limite par IP : 20 tentatives / 15 min
+   - Réinitialisation automatique après une connexion réussie
+3. Intégration dans LoginUsecase.ExecuteWithContext
+4. Nouvelle erreur utils.ErrTooManyAttempts (HTTP 429)
+5. Mise à jour des tests unitaires (mocks + cas de test rate limit)
 
-2. GetCustomerByIdUsecase (6 tests) :
-   - BeginTx, FindByID, Commit errors
-   - Success, NotFound
+Comportement :
+- Si Redis est disponible, utilise Redis pour un rate limit distribué.
+- Si Redis est indisponible, fallback automatique sur un rate limiter en mémoire (thread-safe).
+- Les tentatives échouées (user not found, invalid password, locked, inactive) incrémentent le compteur.
+- Une connexion réussie réinitialise les compteurs pour cet email/IP.
 
-3. GetAllCustomersUsecase (6 tests) :
-   - BeginTx, Commit errors
-   - Success, Error, Empty list
-
-4. UpdateCustomerUsecase (12 tests) :
-   - BeginTx, FindByID, Update, Commit errors
-   - Invalid email, Empty ID, validation errors
-   - Success, NotFound
-
-5. DeleteCustomerUsecase (6 tests) :
-   - BeginTx, FindByID, Delete, Commit errors
-   - Success, NotFound
-
-6. ReviewKYCUsecase (11 tests) :
-   - Validation (5 tests) : EmptyCustomerID, InvalidAction, RejectWithoutReason
-   - Execute errors : MultiTenant, BeginTx, CustomerNotFound, NoPendingDocuments
-   - Success : Approve, Reject
-   - Additional errors : Commit, UpdateDocument, UpdateCustomer, FindByCustomerID
-
-7. UploadKYCDocumentUsecase (13 tests) :
-   - Validation (6 tests) : EmptyCustomerID, InvalidDocumentType, EmptyFilePath
-   - Execute errors : MultiTenant, BeginTx, CustomerNotFound, CountByCustomer
-   - FindPendingByCustomer, CreateDocument, UpdateCustomer, Commit errors
-   - Success, MaxDocumentsReached, DuplicatePendingDocument
-
-8. ListPendingKYCUsecase (3 tests) :
-   - MultiTenant, Success (Empty, WithPendingDocs)
-
-9. GetKYCStatusUsecase (3 tests) :
-   - MultiTenant, CustomerNotFound, Success
-
-10. GenerateKYCFilePath (3 tests) :
-    - JPEG, PNG, PDF
-
-11. Internal functions (23 tests) :
-    - maskEmail (4 tests) : Empty, InvalidFormat, ShortUsername, LongUsername
-    - isValidEmails (5 tests) : Empty, NoAtSymbol, NoDot, Valid, EmptyParts
-    - normalizeCustomerData (2 tests) : WithChanges, NoChanges
-    - logChanges (2 tests) : AllFields, NoChanges
-    - applyUpdates (2 tests) : AllFields, EmptyFields
-    - validateCustomerData (4 tests) : EmptyLastName, LastNameTooShort, InvalidEmail, Valid
-    - validateUpdateData (4 tests) : FirstNameTooShort, LastNameTooShort, InvalidEmail, Valid
-
-Refactoring :
-  - Package customerusecase pour tests internes (accès aux fonctions privées)
-  - Pattern DoAndReturn pour assertions complexes
-  - Mock NotificationService dans mocks/service
-  - Helpers createTestShopForKYC, createTestCustomerForKYC
-
-Couverture globale : 92.4%
-Phase 5.1 : Tests unitaires en cours
+Couverture de test maintenue à 91.0% sur user_usecase.

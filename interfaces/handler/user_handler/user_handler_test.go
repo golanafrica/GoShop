@@ -28,6 +28,7 @@ func TestRegister_Success(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		mockRepo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -78,6 +79,7 @@ func TestLoginHandler_Success(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -130,6 +132,7 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -164,6 +167,7 @@ func TestMeHandler_Success(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -211,6 +215,7 @@ func TestMeHandler_Unauthorized(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -234,6 +239,7 @@ func TestMeHandler_UserNotFound(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 
@@ -265,6 +271,7 @@ func TestMeHandler_InternalServerError(t *testing.T) {
 	handler := userhandler.NewUserHandler(
 		repo,
 		nil, // 🆕 v4.4.2 : sessionRepo = nil
+		nil, // 🆕 v4.4.21 : rateLimiter = nil
 		setupLogging.GetTestLogger(),
 	)
 

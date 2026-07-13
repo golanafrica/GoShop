@@ -143,3 +143,9 @@ var (
 	ErrShopNotOwner    = NewAppError("SHOP_NOT_OWNER", "you are not the owner of this shop", http.StatusForbidden)
 	ErrShopInvalidID   = NewAppError("SHOP_INVALID_ID", "invalid shop ID", http.StatusBadRequest)
 )
+
+// User errors
+var (
+	// 🆕 Rate limiting
+	ErrTooManyAttempts = NewAppError("TOO_MANY_ATTEMPTS", "too many login attempts, please try again later", http.StatusTooManyRequests)
+)

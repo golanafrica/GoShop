@@ -11,6 +11,7 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	userrepository "Goshop/domain/repository/user_repository"
+	"Goshop/domain/service"
 	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
@@ -20,6 +21,7 @@ import (
 // ============================================================
 // 🆕 v4.0.0 : Types des générateurs de token mis à jour
 // 🆕 v4.4.2 : + Intégration Session Management
+// 🆕 v4.4.21 : + Rate Limiting pour le login
 // ============================================================
 
 type generateAccessFunc func(userID, role string) (string, error)
@@ -28,19 +30,22 @@ type generateRefreshFunc func(userID, jti, role string) (string, error)
 type LoginUsecase struct {
 	repo            userrepository.UserRepository
 	sessionRepo     repository.UserSessionRepository // 🆕 v4.4.2
+	rateLimiter     service.LoginRateLimiter         // 🆕 v4.4.21
 	generateAccess  generateAccessFunc
 	generateRefresh generateRefreshFunc
 }
 
-// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo
+// 🆕 v4.4.2 : Nouveau constructeur avec sessionRepo et rateLimiter
 func NewLoginUsecase(
 	repo userrepository.UserRepository,
 	sessionRepo repository.UserSessionRepository, // 🆕 v4.4.2
+	rateLimiter service.LoginRateLimiter, // 🆕 v4.4.21
 	logger *setupLogging.Logger,
 ) *LoginUsecase {
 	return &LoginUsecase{
 		repo:            repo,
 		sessionRepo:     sessionRepo,
+		rateLimiter:     rateLimiter, // 🆕
 		generateAccess:  utils.GenerateAccessToken,
 		generateRefresh: utils.GenerateRefreshToken,
 	}
@@ -96,6 +101,27 @@ func (uc *LoginUsecase) ExecuteWithContext(
 		Str("email", maskedEmail).
 		Msg("🔐 Début authentification utilisateur")
 
+	// 🆕 v4.4.21 : ÉTAPE 0 - Vérifier le rate limiting
+	if uc.rateLimiter != nil {
+		if err := uc.rateLimiter.CheckEmailLimit(ctx, email); err != nil {
+			logger.Warn().
+				Str("operation", "login").
+				Str("email", maskedEmail).
+				Str("error_type", "email_rate_limit").
+				Msg("⛔ Email rate limit exceeded")
+			return "", "", utils.ErrTooManyAttempts
+		}
+
+		if err := uc.rateLimiter.CheckIPLimit(ctx, ipAddress); err != nil {
+			logger.Warn().
+				Str("operation", "login").
+				Str("ip", ipAddress).
+				Str("error_type", "ip_rate_limit").
+				Msg("⛔ IP rate limit exceeded")
+			return "", "", utils.ErrTooManyAttempts
+		}
+	}
+
 	// 1. Recherche de l'utilisateur
 	logger.Debug().
 		Str("operation", "login").
@@ -111,6 +137,11 @@ func (uc *LoginUsecase) ExecuteWithContext(
 				Str("error_type", "user_not_found").
 				Dur("duration_ms", time.Since(start)).
 				Msg("❌ Utilisateur non trouvé")
+
+			// 🆕 v4.4.21 : Enregistrer la tentative échouée
+			if uc.rateLimiter != nil {
+				_ = uc.rateLimiter.RecordFailedAttempt(ctx, email, ipAddress)
+			}
 
 			metrics.AuthLoginFailedTotal.Inc()
 			return "", "", utils.ErrInvalidCredentials
@@ -149,6 +180,11 @@ func (uc *LoginUsecase) ExecuteWithContext(
 			Str("error_type", "account_not_allowed").
 			Msg("❌ Compte non autorisé à se connecter")
 
+		// 🆕 v4.4.21 : Enregistrer la tentative échouée
+		if uc.rateLimiter != nil {
+			_ = uc.rateLimiter.RecordFailedAttempt(ctx, email, ipAddress)
+		}
+
 		metrics.AuthLoginFailedTotal.Inc()
 		return "", "", utils.ErrInvalidCredentials
 	}
@@ -164,6 +200,11 @@ func (uc *LoginUsecase) ExecuteWithContext(
 			Str("error_type", "account_locked").
 			Time("locked_until", *user.LockedUntil).
 			Msg("❌ Compte temporairement verrouillé")
+
+		// 🆕 v4.4.21 : Enregistrer la tentative échouée
+		if uc.rateLimiter != nil {
+			_ = uc.rateLimiter.RecordFailedAttempt(ctx, email, ipAddress)
+		}
 
 		metrics.AuthLoginFailedTotal.Inc()
 		return "", "", utils.ErrInvalidCredentials
@@ -188,6 +229,11 @@ func (uc *LoginUsecase) ExecuteWithContext(
 			Msg("❌ Mot de passe incorrect")
 
 		user.RecordFailedLogin()
+
+		// 🆕 v4.4.21 : Enregistrer la tentative échouée
+		if uc.rateLimiter != nil {
+			_ = uc.rateLimiter.RecordFailedAttempt(ctx, email, ipAddress)
+		}
 
 		metrics.AuthLoginFailedTotal.Inc()
 		return "", "", utils.ErrInvalidCredentials
@@ -305,6 +351,11 @@ func (uc *LoginUsecase) ExecuteWithContext(
 					Msg("✅ Session créée avec succès")
 			}
 		}
+	}
+
+	// 🆕 v4.4.21 : Réinitialiser le rate limiter après une connexion réussie
+	if uc.rateLimiter != nil {
+		_ = uc.rateLimiter.ResetOnSuccess(ctx, email, ipAddress)
 	}
 
 	metrics.AuthLoginTotal.Inc()

@@ -70,6 +70,16 @@ func main() {
 
 	appLogger.Info().Msg("✅ Connexion à la base de données établie")
 
+	// 🆕 v4.4.21 : Initialisation de Redis (pour rate limiting + cache)
+	appLogger.Info().Msg("Connexion à Redis...")
+	if err := utils.InitRedis(); err != nil {
+		appLogger.Warn().
+			Err(err).
+			Msg("⚠️ Redis non disponible - fallback sur mémoire pour le rate limiting")
+	} else {
+		appLogger.Info().Msg("✅ Connexion à Redis établie")
+	}
+
 	// 4. Créer l'application avec logging
 	appLogger.Info().Msg("Initialisation de l'application...")
 	appInstance := app.NewApp(db, appLogger)
