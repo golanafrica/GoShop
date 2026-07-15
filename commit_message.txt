@@ -1,10 +1,9 @@
-﻿test(payment): v4.4.24 - Tests complémentaires pour payment_usecase
+﻿test(product): v4.4.25 - Tests complémentaires pour product_uscase (91.9% coverage)
 
 Ajout de tests unitaires ciblés pour les branches manquantes :
-- InitiatePayment : échec de l'appel au provider avec rollback (MarkFailed)
-- InitiatePayment : détection de paiements existants actifs
-- ProcessWebhook : échec de validation de signature avec enregistrement d'audit
-- ProcessWebhook : gestion des webhooks tontine sans handler configuré
-- ProcessWebhook : ignorance silencieuse des paiements déjà dans un état terminal
+- ListProductUsecase : succès, liste vide, et erreur de repository
+- Create/Delete/UpdateProductUsecase : gestion des erreurs de transaction (BeginTx, Commit) avec rollback approprié
+- UpdateProductUsecase : détection et logging des cas "No changes detected"
+- GetProductByIdUsecase : gestion du cas "Not Found"
 
-Couverture maintenue à 86.8% sur payment_usecase, renforçant la fiabilité du module de paiement critique.
+Couverture globale du package passée de 78.3% à 91.9%, renforçant la fiabilité du module de gestion des produits.

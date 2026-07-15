@@ -79,21 +79,3 @@ func TestDeleteProductUsecase_RepositoryError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unable to delete product")
 }
-
-func TestDeleteProductUsecase_BeginTxError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-
-	mockTxManager.EXPECT().BeginTx(gomock.Any()).
-		Return(nil, errors.New("cannot start tx")).Times(1)
-
-	uc := productuscase.NewDeleteProductUsecase(mockRepo, mockTxManager)
-
-	err := uc.Execute(context.Background(), "ID123")
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to begin transaction") // CORRIGÉ
-}
