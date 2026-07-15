@@ -1,21 +1,18 @@
-﻿feat(security): v4.4.21 - Rate Limiting sur l'authentification (Login)
+﻿feat(security): v4.4.22 - Renforcement complet de la sécurité et mise à jour Go
 
-Implémentation d'un système de rate limiting pour prévenir les attaques par force brute sur le endpoint /login.
+1. Protection contre les attaques par force brute (Rate Limiting) :
+   - Implémentation de LoginRateLimiter (Redis avec fallback mémoire thread-safe).
+   - Limitation à 5 tentatives par email et 20 par IP toutes les 15 minutes.
+   - Réinitialisation automatique des compteurs après une connexion réussie.
+   - Nouvelle erreur utils.ErrTooManyAttempts (HTTP 429).
 
-Fonctionnalités ajoutées :
-1. Interface LoginRateLimiter (domain/service)
-2. Implémentation Redis avec fallback mémoire (infrastructure/rate_limit)
-   - Limite par email : 5 tentatives / 15 min
-   - Limite par IP : 20 tentatives / 15 min
-   - Réinitialisation automatique après une connexion réussie
-3. Intégration dans LoginUsecase.ExecuteWithContext
-4. Nouvelle erreur utils.ErrTooManyAttempts (HTTP 429)
-5. Mise à jour des tests unitaires (mocks + cas de test rate limit)
+2. Validation robuste des mots de passe :
+   - Critères stricts dans RegisterUserRequest (min. 8 caractères, 1 majuscule, 1 chiffre, 1 caractère spécial).
+   - Mise à jour des méthodes Validate() et ValidateWithLogging() avec journalisation structurée.
 
-Comportement :
-- Si Redis est disponible, utilise Redis pour un rate limit distribué.
-- Si Redis est indisponible, fallback automatique sur un rate limiter en mémoire (thread-safe).
-- Les tentatives échouées (user not found, invalid password, locked, inactive) incrémentent le compteur.
-- Une connexion réussie réinitialise les compteurs pour cet email/IP.
+3. Hygiène de sécurité et dépendances :
+   - Mise à jour de l'environnement Go vers la version 1.26.5 pour corriger les vulnérabilités de la bibliothèque standard.
+   - Mise à jour des modules externes (go-chi, golang.org/x/net) via go mod tidy.
+   - Scan de vulnérabilités (govulncheck) validé avec succès : 0 vulnérabilité affectant le code métier.
 
-Couverture de test maintenue à 91.0% sur user_usecase.
+Ces améliorations portent les pratiques de sécurité de l'application à un niveau professionnel, conforme aux standards de l'industrie pour les applications fintech/e-commerce.

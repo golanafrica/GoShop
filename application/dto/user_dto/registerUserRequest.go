@@ -2,10 +2,33 @@ package userdto
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog"
 )
+
+// ============================================================
+// 🆕 v4.4.22 : Validation de la force du mot de passe
+// ============================================================
+
+var (
+	hasUpper   = regexp.MustCompile(`[A-Z]`).MatchString
+	hasNumber  = regexp.MustCompile(`[0-9]`).MatchString
+	hasSpecial = regexp.MustCompile(`[^a-zA-Z0-9]`).MatchString // Tout caractère non alphanumérique
+)
+
+// isStrongPassword vérifie que le mot de passe respecte les critères de sécurité
+func isStrongPassword(password string) bool {
+	if len(password) < 8 {
+		return false
+	}
+	return hasUpper(password) && hasNumber(password) && hasSpecial(password)
+}
+
+// ============================================================
+// TYPES DE REQUÊTES
+// ============================================================
 
 type RegisterUserRequest struct {
 	Email    string `json:"email"`
@@ -23,13 +46,17 @@ type UpdateProfileRequest struct {
 	Email *string `json:"email,omitempty"`
 }
 
+// ============================================================
+// VALIDATION : REGISTER
+// ============================================================
+
 // Validate valide la requête d'inscription avec messages basiques
 func (r *RegisterUserRequest) Validate() error {
 	if !strings.Contains(r.Email, "@") {
 		return errors.New("invalid email")
 	}
-	if len(r.Password) < 6 {
-		return errors.New("password must be at least 6 chars")
+	if !isStrongPassword(r.Password) {
+		return errors.New("password must be at least 8 characters long and contain at least one uppercase letter, one number, and one special character")
 	}
 	return nil
 }
@@ -60,19 +87,19 @@ func (r *RegisterUserRequest) ValidateWithLogging(logger zerolog.Logger) error {
 			Msg("Validation failed: email too long")
 	}
 
-	// Validation du mot de passe
+	// 🆕 v4.4.22 : Validation renforcée du mot de passe
 	password := strings.TrimSpace(r.Password)
 	if password == "" {
 		validationErrors = append(validationErrors, "password is required")
 		logger.Debug().
 			Str("field", "password").
 			Msg("Validation failed: password is required")
-	} else if len(password) < 6 {
-		validationErrors = append(validationErrors, "password must be at least 6 characters")
+	} else if !isStrongPassword(password) {
+		validationErrors = append(validationErrors, "password is too weak (min 8 chars, 1 uppercase, 1 number, 1 special char)")
 		logger.Debug().
 			Str("field", "password").
 			Int("length", len(password)).
-			Msg("Validation failed: password too short")
+			Msg("Validation failed: password is too weak")
 	} else if len(password) > 100 {
 		validationErrors = append(validationErrors, "password too long")
 		logger.Debug().
@@ -128,6 +155,10 @@ func (r *RegisterUserRequest) ValidateWithLogging(logger zerolog.Logger) error {
 
 	return nil
 }
+
+// ============================================================
+// VALIDATION : LOGIN
+// ============================================================
 
 // Validate valide la requête de connexion
 func (r *LoginRequest) Validate() error {
@@ -189,6 +220,10 @@ func (r *LoginRequest) ValidateWithLogging(logger zerolog.Logger) error {
 
 	return nil
 }
+
+// ============================================================
+// VALIDATION : UPDATE PROFILE
+// ============================================================
 
 // Validate valide la requête de mise à jour de profil
 func (r *UpdateProfileRequest) Validate() error {
@@ -278,7 +313,10 @@ func (r *UpdateProfileRequest) ValidateWithLogging(logger zerolog.Logger) error 
 	return nil
 }
 
-// Normalize normalise les données
+// ============================================================
+// NORMALISATION
+// ============================================================
+
 func (r *RegisterUserRequest) Normalize() {
 	r.Email = strings.ToLower(strings.TrimSpace(r.Email))
 	r.Password = strings.TrimSpace(r.Password)
@@ -303,7 +341,10 @@ func (r *UpdateProfileRequest) Normalize() {
 	}
 }
 
-// Helper functions
+// ============================================================
+// HELPERS
+// ============================================================
+
 func maskEmail(email string) string {
 	if email == "" {
 		return ""

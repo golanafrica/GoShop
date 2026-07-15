@@ -462,3 +462,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Run govulncheck
+          run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...    
