@@ -1,20 +1,10 @@
-﻿test(twofa): v4.4.23 - Couverture de tests du module 2FA à 88.2%
+﻿test(payment): v4.4.24 - Tests complémentaires pour payment_usecase
 
-Ajout de tests unitaires exhaustifs pour le package twofa_usecase, couvrant les chemins de succès et les cas d'erreur critiques :
+Ajout de tests unitaires ciblés pour les branches manquantes :
+- InitiatePayment : échec de l'appel au provider avec rollback (MarkFailed)
+- InitiatePayment : détection de paiements existants actifs
+- ProcessWebhook : échec de validation de signature avec enregistrement d'audit
+- ProcessWebhook : gestion des webhooks tontine sans handler configuré
+- ProcessWebhook : ignorance silencieuse des paiements déjà dans un état terminal
 
-1. Protection anti-replay (RFC 6238) :
-   - Tests de détection de réutilisation de code TOTP dans Verify, Disable et Regenerate.
-
-2. Gestion des erreurs de chiffrement/déchiffrement :
-   - Tests d'échec de crypto.Decrypt sur des secrets ou codes de récupération corrompus.
-   - Tests d'échec de json.Unmarshal sur des payloads de récupération invalides.
-
-3. Erreurs de persistance intermédiaires :
-   - Échec de Disable2FA en base après validation réussie du code.
-   - Échec de UpdateRecoveryCodes et Enable2FA.
-   - Utilisation correcte des sentinel errors (userrepository.ErrUserNotFound).
-
-4. Chemins de succès (Happy Paths) :
-   - Génération dynamique de vrais codes TOTP valides pour tester les flux complets d'activation, de désactivation et de régénération.
-
-Résultat : Couverture globale du package passée de 32.6% à 88.2%, renforçant considérablement la fiabilité du module d'authentification à deux facteurs.
+Couverture maintenue à 86.8% sur payment_usecase, renforçant la fiabilité du module de paiement critique.
