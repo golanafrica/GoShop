@@ -1,18 +1,20 @@
-﻿feat(security): v4.4.22 - Renforcement complet de la sécurité et mise à jour Go
+﻿test(twofa): v4.4.23 - Couverture de tests du module 2FA à 88.2%
 
-1. Protection contre les attaques par force brute (Rate Limiting) :
-   - Implémentation de LoginRateLimiter (Redis avec fallback mémoire thread-safe).
-   - Limitation à 5 tentatives par email et 20 par IP toutes les 15 minutes.
-   - Réinitialisation automatique des compteurs après une connexion réussie.
-   - Nouvelle erreur utils.ErrTooManyAttempts (HTTP 429).
+Ajout de tests unitaires exhaustifs pour le package twofa_usecase, couvrant les chemins de succès et les cas d'erreur critiques :
 
-2. Validation robuste des mots de passe :
-   - Critères stricts dans RegisterUserRequest (min. 8 caractères, 1 majuscule, 1 chiffre, 1 caractère spécial).
-   - Mise à jour des méthodes Validate() et ValidateWithLogging() avec journalisation structurée.
+1. Protection anti-replay (RFC 6238) :
+   - Tests de détection de réutilisation de code TOTP dans Verify, Disable et Regenerate.
 
-3. Hygiène de sécurité et dépendances :
-   - Mise à jour de l'environnement Go vers la version 1.26.5 pour corriger les vulnérabilités de la bibliothèque standard.
-   - Mise à jour des modules externes (go-chi, golang.org/x/net) via go mod tidy.
-   - Scan de vulnérabilités (govulncheck) validé avec succès : 0 vulnérabilité affectant le code métier.
+2. Gestion des erreurs de chiffrement/déchiffrement :
+   - Tests d'échec de crypto.Decrypt sur des secrets ou codes de récupération corrompus.
+   - Tests d'échec de json.Unmarshal sur des payloads de récupération invalides.
 
-Ces améliorations portent les pratiques de sécurité de l'application à un niveau professionnel, conforme aux standards de l'industrie pour les applications fintech/e-commerce.
+3. Erreurs de persistance intermédiaires :
+   - Échec de Disable2FA en base après validation réussie du code.
+   - Échec de UpdateRecoveryCodes et Enable2FA.
+   - Utilisation correcte des sentinel errors (userrepository.ErrUserNotFound).
+
+4. Chemins de succès (Happy Paths) :
+   - Génération dynamique de vrais codes TOTP valides pour tester les flux complets d'activation, de désactivation et de régénération.
+
+Résultat : Couverture globale du package passée de 32.6% à 88.2%, renforçant considérablement la fiabilité du module d'authentification à deux facteurs.
