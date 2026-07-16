@@ -1,9 +1,0 @@
-﻿test(product): v4.4.25 - Tests complémentaires pour product_uscase (91.9% coverage)
-
-Ajout de tests unitaires ciblés pour les branches manquantes :
-- ListProductUsecase : succès, liste vide, et erreur de repository
-- Create/Delete/UpdateProductUsecase : gestion des erreurs de transaction (BeginTx, Commit) avec rollback approprié
-- UpdateProductUsecase : détection et logging des cas "No changes detected"
-- GetProductByIdUsecase : gestion du cas "Not Found"
-
-Couverture globale du package passée de 78.3% à 91.9%, renforçant la fiabilité du module de gestion des produits.

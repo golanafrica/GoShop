@@ -32,10 +32,10 @@ func TestRegister_Success(t *testing.T) {
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: payload
+	// GIVEN: payload avec un mot de passe VALIDE (respecte la politique de mot de passe fort)
 	body := map[string]string{
 		"email":    "test@example.com",
-		"password": "123456",
+		"password": "ValidPassword123!", // ✅ Corrigé : contient majuscule, chiffre et caractère spécial
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -57,18 +57,17 @@ func TestRegister_Success(t *testing.T) {
 			ID:       "test-id",
 			Email:    "test@example.com",
 			Password: "hashed-password",
+			Role:     userentity.RoleMerchant,
+			Active:   true,
+			Status:   userentity.StatusActive,
 		}, nil)
 
 	// WHEN: appel handler
 	err := handler.Register(w, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
 
-	// THEN
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d", http.StatusCreated, w.Code)
-	}
+	// THEN: Pas d'erreur et statut 201 Created
+	assert.NoError(t, err, "L'inscription ne doit pas retourner d'erreur")
+	assert.Equal(t, http.StatusCreated, w.Code, "Le code HTTP doit être 201 Created")
 }
 
 func TestLoginHandler_Success(t *testing.T) {
@@ -117,7 +116,7 @@ func TestLoginHandler_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Vérifie la réponse JSON
-	var response map[string]string
+	var response map[string]interface{}
 	err = json.NewDecoder(w.Body).Decode(&response)
 	assert.NoError(t, err)
 	assert.Contains(t, response, "token")
@@ -176,6 +175,9 @@ func TestMeHandler_Success(t *testing.T) {
 		ID:       "user-123",
 		Email:    "test@example.com",
 		Password: "hashed-password",
+		Role:     userentity.RoleMerchant,
+		Active:   true,
+		Status:   userentity.StatusActive,
 	}
 
 	// 🔥 CORRECTION: Mock FindUserByID, pas FindUserByEmail

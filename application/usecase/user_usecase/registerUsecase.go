@@ -1,4 +1,3 @@
-// application/usecase/user_usecase/register_usecase.go
 package userusecase
 
 import (
@@ -19,17 +18,14 @@ import (
 
 type RegisterUsecase struct {
 	repo userrepository.UserRepository
-	//logger *setupLogging.Logger
 }
 
 func NewRegisterUsecase(repo userrepository.UserRepository, logger *setupLogging.Logger) *RegisterUsecase {
 	return &RegisterUsecase{
 		repo: repo,
-		//logger: logger.WithComponent("register_usecase"),
 	}
 }
 
-// Helpers (inchangés)
 func maskEmail(email string) string {
 	if len(email) > 3 && len(email) < 100 {
 		return email[:3] + "***@" + email[strings.Index(email, "@")+1:]
@@ -50,18 +46,12 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 
 	maskedEmail := maskEmail(email)
 
-	// ✅ Pas de logger local — utilise uc.logger directement
 	logger.Info().
 		Str("operation", "register").
 		Str("email", maskedEmail).
 		Msg("🚀 Début création utilisateur")
 
 	// 1. Vérifier si l'utilisateur existe déjà
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Msg("🔍 Vérification existence utilisateur")
-
 	_, err := uc.repo.FindUserByEmail(email)
 	if err == nil {
 		logger.Warn().
@@ -79,23 +69,12 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 			Str("operation", "register").
 			Str("email", maskedEmail).
 			Str("error_type", "database_error").
-			Str("operation", "FindUserByEmail").
 			Dur("duration_ms", time.Since(start)).
 			Msg("❌ Erreur base de données lors de la vérification email")
 		return nil, utils.ErrInternalServer
 	}
 
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Msg("✅ Email disponible")
-
 	// 2. Hash du mot de passe
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Msg("🔒 Hash du mot de passe")
-
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		logger.Error().
@@ -108,32 +87,22 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 		return nil, utils.ErrInternalServer
 	}
 
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Msg("✅ Mot de passe hashé")
-
-	// 3. Création de l'entité
+	// 3. Création de l'entité (VALEURS EN DUR POUR ÊTRE 100% SÛR)
 	user := &userentity.UserEntity{
-		ID:       uuid.NewString(),
-		Email:    email,
-		Password: string(hashed),
+		ID:                  uuid.NewString(),
+		Email:               email,
+		Password:            string(hashed),
+		Role:                "merchant", // ✅ Valeur en dur
+		Active:              true,       // ✅ Valeur en dur
+		Status:              "active",   // ✅ Valeur en dur (c'est ce qui corrige l'erreur)
+		FailedLoginAttempts: 0,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
 	}
 
 	maskedUserID := maskUserID(user.ID)
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Str("user_id", maskedUserID).
-		Msg("📝 Création entité utilisateur")
 
 	// 4. Sauvegarde en base
-	logger.Debug().
-		Str("operation", "register").
-		Str("email", maskedEmail).
-		Str("user_id", maskedUserID).
-		Msg("💾 Sauvegarde en base de données")
-
 	created, err := uc.repo.CreateUser(user)
 	if err != nil {
 		if err == userrepository.ErrUserAlreadyExists {
@@ -152,7 +121,6 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 			Str("email", maskedEmail).
 			Str("user_id", maskedUserID).
 			Str("error_type", "database_error").
-			Str("operation", "CreateUser").
 			Dur("duration_ms", time.Since(start)).
 			Msg("❌ Erreur base de données lors de la création")
 		return nil, utils.ErrInternalServer
@@ -162,8 +130,10 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 		Str("operation", "register").
 		Str("email", maskedEmail).
 		Str("user_id", maskUserID(created.ID)).
+		Str("role", created.Role).
 		Dur("duration_ms", time.Since(start)).
 		Msg("🎉 Utilisateur créé avec succès")
+
 	metrics.AuthRegisterTotal.Inc()
 
 	return created, nil

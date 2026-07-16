@@ -83,6 +83,10 @@ CREATE INDEX IF NOT EXISTS idx_commission_batch_items_status
 -- ============================================================
 -- VUE : statistiques quotidiennes (pour dashboard)
 -- ============================================================
+-- ✅ CORRECTION : On supprime la vue existante avant de la recréer 
+-- pour éviter l'erreur "cannot change name of view column"
+DROP VIEW IF EXISTS v_commission_daily_stats;
+
 CREATE OR REPLACE VIEW v_commission_daily_stats AS
 SELECT 
     DATE(started_at) as execution_date,

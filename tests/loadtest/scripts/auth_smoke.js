@@ -30,7 +30,7 @@ export default function () {
   // 1. Inscription
   const registerRes = http.post(
     `${BASE_URL}/register`,
-    JSON.stringify({ email, password }),
+    JSON.stringify({ email, password, role: "merchant" }),
     { headers: { 'Content-Type': 'application/json' } }
   );
 

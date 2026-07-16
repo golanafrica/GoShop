@@ -3,27 +3,6 @@
 -- Date: 2026-07-04
 -- Version: v4.3.0
 -- Description: Collaborateurs plateforme + boutique avec invitations
--- Inspiration: Amazon Seller Central + Stripe Team Management
--- ============================================================
---
--- 🎯 Objectifs :
---   1. Collaborateurs Plateforme (5 rôles)
---      - finance_manager, support_manager, kyc_reviewer
---      - marketing_manager, tech_admin
---
---   2. Collaborateurs Boutique (4 rôles)
---      - shop_admin, seller, support, accountant
---
---   3. Système d'invitation par email
---      - Token sécurisé (expire après 7 jours)
---      - Statuts : pending, accepted, expired, cancelled
---
---   4. Permissions granulaires JSONB (booléennes)
---
---   5. Soft delete avec audit trail
---      - is_active = false (pas de DELETE)
---      - deleted_at, deleted_by, deletion_reason
---
 -- ============================================================
 
 -- ============================================================
@@ -34,45 +13,31 @@ CREATE TABLE IF NOT EXISTS platform_collaborators (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
-    -- Rôle plateforme
     role VARCHAR(50) NOT NULL
         CHECK (role IN (
-            'finance_manager',    -- Finances + rapports BCEAO
-            'support_manager',    -- Tickets + litiges
-            'kyc_reviewer',       -- Validation KYC marchands
-            'marketing_manager',  -- Campagnes + promos
-            'tech_admin'          -- Config + maintenance
+            'finance_manager',
+            'support_manager',
+            'kyc_reviewer',
+            'marketing_manager',
+            'tech_admin'
         )),
     
-    -- Permissions granulaires (JSONB booléen)
     permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
-    
-    -- Invitation
     invited_by VARCHAR(36) NOT NULL REFERENCES users(id),
     invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     accepted_at TIMESTAMPTZ,
-    
-    -- Statut
     is_active BOOLEAN NOT NULL DEFAULT true,
-    
-    -- 🆕 v4.3.0 : Soft delete avec audit
     deleted_at TIMESTAMPTZ,
     deleted_by VARCHAR(36) REFERENCES users(id),
     deletion_reason TEXT,
-    
-    -- Activité
     last_login_at TIMESTAMPTZ,
     last_activity_at TIMESTAMPTZ,
-    
-    -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     
-    -- Contrainte unique : un user ne peut avoir qu'un seul rôle plateforme
     CONSTRAINT platform_collaborators_user_unique UNIQUE (user_id)
 );
 
--- Index pour performance
 CREATE INDEX IF NOT EXISTS idx_platform_collaborators_role ON platform_collaborators(role);
 CREATE INDEX IF NOT EXISTS idx_platform_collaborators_active ON platform_collaborators(is_active) WHERE is_active = true;
 CREATE INDEX IF NOT EXISTS idx_platform_collaborators_user ON platform_collaborators(user_id);
@@ -87,44 +52,30 @@ CREATE TABLE IF NOT EXISTS shop_collaborators (
     shop_id UUID NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
     user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
-    -- Rôle boutique
     role VARCHAR(50) NOT NULL
         CHECK (role IN (
-            'shop_admin',    -- Gère boutique complète
-            'seller',        -- Produits + commandes
-            'support',       -- Support client
-            'accountant'     -- Finances seulement
+            'shop_admin',
+            'seller',
+            'support',
+            'accountant'
         )),
     
-    -- Permissions granulaires (JSONB booléen)
     permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
-    
-    -- Invitation
     invited_by VARCHAR(36) NOT NULL REFERENCES users(id),
     invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     accepted_at TIMESTAMPTZ,
-    
-    -- Statut
     is_active BOOLEAN NOT NULL DEFAULT true,
-    
-    -- 🆕 v4.3.0 : Soft delete avec audit
     deleted_at TIMESTAMPTZ,
     deleted_by VARCHAR(36) REFERENCES users(id),
     deletion_reason TEXT,
-    
-    -- Activité
     last_login_at TIMESTAMPTZ,
     last_activity_at TIMESTAMPTZ,
-    
-    -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     
-    -- Contrainte unique : un user ne peut avoir qu'un seul rôle par boutique
     CONSTRAINT shop_collaborators_shop_user_unique UNIQUE (shop_id, user_id)
 );
 
--- Index pour performance
 CREATE INDEX IF NOT EXISTS idx_shop_collaborators_shop ON shop_collaborators(shop_id);
 CREATE INDEX IF NOT EXISTS idx_shop_collaborators_user ON shop_collaborators(user_id);
 CREATE INDEX IF NOT EXISTS idx_shop_collaborators_role ON shop_collaborators(role);
@@ -137,49 +88,25 @@ CREATE INDEX IF NOT EXISTS idx_shop_collaborators_deleted ON shop_collaborators(
 
 CREATE TABLE IF NOT EXISTS collaborator_invitations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    
-    -- Type d'invitation
     invitation_type VARCHAR(20) NOT NULL
         CHECK (invitation_type IN ('platform', 'shop')),
-    
-    -- Pour plateforme : pas de shop_id
-    -- Pour boutique : shop_id requis
     shop_id UUID REFERENCES shops(id) ON DELETE CASCADE,
-    
-    -- Email de l'invité
     email VARCHAR(255) NOT NULL,
-    
-    -- Rôle proposé
     role VARCHAR(50) NOT NULL,
-    
-    -- Permissions proposées (JSONB booléen)
     permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
-    
-    -- Token d'invitation (UUID sécurisé)
     token VARCHAR(255) NOT NULL UNIQUE,
-    
-    -- Qui a invité
     invited_by VARCHAR(36) NOT NULL REFERENCES users(id),
-    
-    -- Statut
     status VARCHAR(20) NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'accepted', 'expired', 'cancelled')),
-    
-    -- Timestamps
     invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     accepted_at TIMESTAMPTZ,
     cancelled_at TIMESTAMPTZ,
-    
-    -- Message personnalisé (optionnel)
     message TEXT,
-    
-    -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index pour performance
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON collaborator_invitations(token);
 CREATE INDEX IF NOT EXISTS idx_invitations_email ON collaborator_invitations(email);
 CREATE INDEX IF NOT EXISTS idx_invitations_status ON collaborator_invitations(status);
@@ -226,7 +153,6 @@ SELECT
     pc.id,
     pc.user_id,
     u.email,
-    u.full_name,
     pc.role,
     pc.permissions,
     pc.is_active,
@@ -252,7 +178,6 @@ SELECT
     s.slug as shop_slug,
     sc.user_id,
     u.email,
-    u.full_name,
     sc.role,
     sc.permissions,
     sc.is_active,
@@ -334,7 +259,6 @@ FROM (VALUES ('shop_admin'), ('seller'), ('support'), ('accountant')) AS roles(r
 -- PARTIE 6 : FONCTIONS UTILITAIRES
 -- ============================================================
 
--- 6.1 Fonction pour vérifier si un user a une permission plateforme
 CREATE OR REPLACE FUNCTION user_has_platform_permission(
     p_user_id VARCHAR(36),
     p_permission VARCHAR(100)
@@ -354,7 +278,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.2 Fonction pour vérifier si un user a une permission sur une boutique
 CREATE OR REPLACE FUNCTION user_has_shop_permission(
     p_user_id VARCHAR(36),
     p_shop_id UUID,
@@ -379,16 +302,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.3 Fonction pour générer un token d'invitation sécurisé
 CREATE OR REPLACE FUNCTION generate_invitation_token()
 RETURNS VARCHAR(255) AS $$
 BEGIN
-    -- Génère un token UUID sécurisé (64 caractères hex)
     RETURN encode(gen_random_bytes(32), 'hex');
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.4 Fonction pour nettoyer les invitations expirées
 CREATE OR REPLACE FUNCTION cleanup_expired_invitations()
 RETURNS INTEGER AS $$
 DECLARE
@@ -411,25 +331,13 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================================
 
 COMMENT ON TABLE platform_collaborators IS 
-    'Collaborateurs plateforme avec 5 rôles. Soft delete avec audit trail (deleted_at, deleted_by, deletion_reason)';
+    'Collaborateurs plateforme avec 5 rôles. Soft delete avec audit trail';
 
 COMMENT ON TABLE shop_collaborators IS 
     'Collaborateurs boutique avec 4 rôles. Soft delete avec audit trail';
 
 COMMENT ON TABLE collaborator_invitations IS 
-    'Invitations en attente (plateforme ou boutique) avec token sécurisé (64 caractères hex)';
-
-COMMENT ON COLUMN platform_collaborators.permissions IS 
-    'Permissions granulaires JSONB booléen (ex: {"can_approve_kyc": true, "can_view_shops": false})';
-
-COMMENT ON COLUMN shop_collaborators.permissions IS 
-    'Permissions granulaires JSONB booléen (ex: {"can_manage_products": true})';
-
-COMMENT ON COLUMN platform_collaborators.deleted_at IS 
-    'Date de désactivation (soft delete). NULL si actif';
-
-COMMENT ON COLUMN platform_collaborators.deletion_reason IS 
-    'Raison de la désactivation (obligatoire pour audit trail)';
+    'Invitations en attente avec token sécurisé';
 
 -- ============================================================
 -- PARTIE 8 : VÉRIFICATION
@@ -445,20 +353,8 @@ BEGIN
     SELECT COUNT(*) INTO shop_count FROM shop_collaborators;
     SELECT COUNT(*) INTO invitation_count FROM collaborator_invitations;
     
-    RAISE NOTICE '═══════════════════════════════════════════════════════';
     RAISE NOTICE '✅ Migration 021 terminee avec succes';
-    RAISE NOTICE '═══════════════════════════════════════════════════════';
-    RAISE NOTICE '📊 Statistiques :';
     RAISE NOTICE '   - Collaborateurs plateforme : %', platform_count;
     RAISE NOTICE '   - Collaborateurs boutique   : %', shop_count;
     RAISE NOTICE '   - Invitations               : %', invitation_count;
-    RAISE NOTICE '═══════════════════════════════════════════════════════';
-    RAISE NOTICE '🎯 Prochaines etapes :';
-    RAISE NOTICE '   1. Creer entites PlatformCollaborator et ShopCollaborator';
-    RAISE NOTICE '   2. Creer Repository interfaces';
-    RAISE NOTICE '   3. Implementer infrastructure Postgres';
-    RAISE NOTICE '   4. Creer 6 Usecases';
-    RAISE NOTICE '   5. Creer Handler HTTP';
-    RAISE NOTICE '   6. Integrer dans app.go';
-    RAISE NOTICE '═══════════════════════════════════════════════════════';
 END $$;

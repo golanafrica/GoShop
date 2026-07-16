@@ -35,6 +35,7 @@ export default function () {
   const registerPayload = JSON.stringify({
     email: email,
     password: password,
+    role: "merchant"
   });
 
   // 1. Inscription

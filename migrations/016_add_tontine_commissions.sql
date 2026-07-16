@@ -28,7 +28,7 @@ INSERT INTO commission_rates (shop_id, transaction_type, rate_bps, min_commissio
 SELECT 
     s.id as shop_id,
     'tontine_commercial' as transaction_type,
-    200 as rate_bps, -- 2%
+    200 as rate_bps, -- 2%%
     0 as min_commission_cents,
     5000000 as max_commission_cents, -- 50 000 FCFA max
     'system' as created_by
@@ -39,7 +39,7 @@ INSERT INTO commission_rates (shop_id, transaction_type, rate_bps, min_commissio
 SELECT 
     s.id as shop_id,
     'tontine_corporate' as transaction_type,
-    150 as rate_bps, -- 1.5%
+    150 as rate_bps, -- 1.5%%
     0 as min_commission_cents,
     5000000 as max_commission_cents,
     'system' as created_by
@@ -50,7 +50,7 @@ INSERT INTO commission_rates (shop_id, transaction_type, rate_bps, min_commissio
 SELECT 
     s.id as shop_id,
     'tontine_family' as transaction_type,
-    150 as rate_bps, -- 1.5%
+    150 as rate_bps, -- 1.5%%
     0 as min_commission_cents,
     5000000 as max_commission_cents,
     'system' as created_by
@@ -62,7 +62,7 @@ ON CONFLICT (shop_id, transaction_type) DO NOTHING;
 -- ============================================================
 DO $$
 BEGIN
-    RAISE NOTICE '✅ Migration 016 appliquée avec succès';
-    RAISE NOTICE '   - Colonnes commission ajoutées à tontine_payments';
-    RAISE NOTICE '   - Taux par défaut insérés (commercial: 2%, corporate/family: 1.5%)';
+    RAISE NOTICE 'Migration 016 appliquee avec succes';
+    RAISE NOTICE '   - Colonnes commission ajoutees a tontine_payments';
+    RAISE NOTICE '   - Taux par defaut inseres (commercial: 2%%, corporate/family: 1.5%%)';
 END $$;

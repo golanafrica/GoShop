@@ -29,7 +29,8 @@ export default function() {
     // 20%: Inscription (emails uniques)
     const registerRes = http.post(`${BASE_URL}/register`, JSON.stringify({
       email: `stresstest_${Date.now()}_${__VU}_${__ITER}@example.com`,
-      password: 'Password123!'
+      password: 'Password123!',
+       role: 'merchant'
     }), {
       headers: { 'Content-Type': 'application/json' },
       tags: { endpoint: 'register' }

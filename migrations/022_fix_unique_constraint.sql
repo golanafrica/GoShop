@@ -1,4 +1,3 @@
-
 -- ============================================================
 -- Migration 022 : Fix unique constraints for soft delete
 -- Date: 2026-07-05
@@ -45,7 +44,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_collaborators_shop_user_active
 -- PARTIE 3 : VÉRIFICATION
 -- ============================================================
 
-DO \$\$
+DO $$
 BEGIN
     RAISE NOTICE '==============================================================';
     RAISE NOTICE '✅ Migration 022 terminee avec succes';
@@ -56,5 +55,3 @@ BEGIN
     RAISE NOTICE '   - Les enregistrements soft-deleted ne bloquent plus';
     RAISE NOTICE '==============================================================';
 END $$;
-
-

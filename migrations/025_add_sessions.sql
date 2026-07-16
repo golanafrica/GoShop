@@ -6,28 +6,20 @@
 --               pour permettre aux admins de voir et revoquer
 --               leurs sessions actives.
 -- ============================================================
---
--- 🎯 Objectif :
---   - Stocker les sessions actives (token, device, IP)
---   - Permettre la liste des sessions par user
---   - Permettre la revocation individuelle ou globale
---   - Detecter les activites suspectes
---
--- 🔐 Securite :
---   - Token de session hash (jamais en clair)
---   - Expiration automatique (7 jours par defaut)
---   - Index pour recherche rapide
---
--- 📊 Tables creees :
---   - user_sessions : Sessions actives par utilisateur
---
--- ============================================================
 
 -- ============================================================
--- PARTIE 1 : TABLE user_sessions
+-- PARTIE 1 : TABLE user_sessions (Mise à jour forcée)
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS user_sessions (
+-- 1. Supprimer les anciennes vues qui pourraient dépendre de l'ancienne structure
+DROP VIEW IF EXISTS v_active_sessions CASCADE;
+DROP VIEW IF EXISTS v_session_statistics CASCADE;
+
+-- 2. Supprimer l'ancienne table (celle créée prématurément par la migration 018)
+DROP TABLE IF EXISTS user_sessions CASCADE;
+
+-- 3. Créer la nouvelle structure complète et correcte
+CREATE TABLE user_sessions (
     -- Identification
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -38,7 +30,6 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     
     -- Device info (JSONB)
     device_info JSONB NOT NULL DEFAULT '{}',
-    -- Exemple : {"user_agent": "Mozilla/5.0...", "browser": "Chrome", "os": "Windows"}
     
     -- Localisation
     ip_address INET NOT NULL,
@@ -51,7 +42,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     -- Statut
     is_active BOOLEAN NOT NULL DEFAULT true,
     revoked_at TIMESTAMPTZ,
-    revoked_by VARCHAR(255),  -- user_id qui a revoque
+    revoked_by VARCHAR(255),
     
     -- Contraintes
     CONSTRAINT user_sessions_expires_check CHECK (expires_at > created_at)
@@ -61,19 +52,15 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 -- PARTIE 2 : INDEX
 -- ============================================================
 
--- Index pour recherche rapide par user_id
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id 
     ON user_sessions(user_id);
 
--- Index pour les sessions actives
 CREATE INDEX IF NOT EXISTS idx_user_sessions_active 
     ON user_sessions(user_id, is_active) WHERE is_active = true;
 
--- Index pour les sessions expirees (nettoyage)
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires 
     ON user_sessions(expires_at) WHERE is_active = true;
 
--- Index pour recherche par session_id
 CREATE INDEX IF NOT EXISTS idx_user_sessions_session_id 
     ON user_sessions(session_id);
 
@@ -81,7 +68,6 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_session_id
 -- PARTIE 3 : TRIGGERS
 -- ============================================================
 
--- Trigger pour mise a jour automatique de updated_at
 CREATE OR REPLACE FUNCTION update_user_sessions_last_activity()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -100,7 +86,6 @@ CREATE TRIGGER trigger_user_sessions_last_activity
 -- PARTIE 4 : VUES
 -- ============================================================
 
--- Vue pour dashboard admin (sessions actives)
 CREATE OR REPLACE VIEW v_active_sessions AS
 SELECT 
     us.id,
@@ -123,7 +108,6 @@ FROM user_sessions us
 JOIN users u ON us.user_id = u.id
 WHERE us.is_active = true AND us.expires_at > NOW();
 
--- Vue pour statistiques de sessions
 CREATE OR REPLACE VIEW v_session_statistics AS
 SELECT 
     COUNT(*) FILTER (WHERE is_active = true AND expires_at > NOW()) AS total_active,
@@ -137,7 +121,6 @@ FROM user_sessions;
 -- PARTIE 5 : FONCTION DE NETTOYAGE
 -- ============================================================
 
--- Fonction pour nettoyer les sessions expirees
 CREATE OR REPLACE FUNCTION cleanup_expired_sessions()
 RETURNS INTEGER AS $$
 DECLARE
@@ -155,29 +138,14 @@ $$ LANGUAGE plpgsql;
 -- PARTIE 6 : COMMENTAIRES
 -- ============================================================
 
-COMMENT ON TABLE user_sessions IS 
-    'Sessions actives des utilisateurs pour gestion et audit';
-
-COMMENT ON COLUMN user_sessions.session_token_hash IS 
-    'Hash SHA-256 du token JWT (jamais stocker le token en clair)';
-
-COMMENT ON COLUMN user_sessions.session_id IS 
-    'ID unique de session (jti claim dans JWT)';
-
-COMMENT ON COLUMN user_sessions.device_info IS 
-    'Informations sur l appareil (user agent, browser, OS)';
-
-COMMENT ON COLUMN user_sessions.is_active IS 
-    'true si session active, false si revoquee';
-
-COMMENT ON VIEW v_active_sessions IS 
-    'Sessions actives avec statut (active/away/idle)';
-
-COMMENT ON VIEW v_session_statistics IS 
-    'Statistiques globales sur les sessions';
-
-COMMENT ON FUNCTION cleanup_expired_sessions() IS 
-    'Nettoie les sessions expirees et revoquees depuis plus de 30 jours';
+COMMENT ON TABLE user_sessions IS 'Sessions actives des utilisateurs pour gestion et audit';
+COMMENT ON COLUMN user_sessions.session_token_hash IS 'Hash SHA-256 du token JWT (jamais stocker le token en clair)';
+COMMENT ON COLUMN user_sessions.session_id IS 'ID unique de session (jti claim dans JWT)';
+COMMENT ON COLUMN user_sessions.device_info IS 'Informations sur l appareil (user agent, browser, OS)';
+COMMENT ON COLUMN user_sessions.is_active IS 'true si session active, false si revoquee';
+COMMENT ON VIEW v_active_sessions IS 'Sessions actives avec statut (active/away/idle)';
+COMMENT ON VIEW v_session_statistics IS 'Statistiques globales sur les sessions';
+COMMENT ON FUNCTION cleanup_expired_sessions() IS 'Nettoie les sessions expirees et revoquees depuis plus de 30 jours';
 
 -- ============================================================
 -- PARTIE 7 : VERIFICATION
@@ -188,16 +156,10 @@ BEGIN
     RAISE NOTICE '==============================================================';
     RAISE NOTICE 'Migration 025 terminee avec succes';
     RAISE NOTICE '==============================================================';
-    RAISE NOTICE 'Tables creees :';
-    RAISE NOTICE '   - user_sessions (sessions actives)';
-    RAISE NOTICE 'Vues creees :';
-    RAISE NOTICE '   - v_active_sessions (sessions avec statut)';
-    RAISE NOTICE '   - v_session_statistics (stats globales)';
-    RAISE NOTICE 'Fonctions creees :';
-    RAISE NOTICE '   - cleanup_expired_sessions()';
-    RAISE NOTICE 'Securite :';
-    RAISE NOTICE '   - Token hash (SHA-256)';
-    RAISE NOTICE '   - Expiration automatique (7 jours)';
-    RAISE NOTICE '   - Revocation avec audit';
+    RAISE NOTICE 'Tables recreees :';
+    RAISE NOTICE '   - user_sessions (structure v2 avec session_id et device_info)';
+    RAISE NOTICE 'Vues recreees :';
+    RAISE NOTICE '   - v_active_sessions';
+    RAISE NOTICE '   - v_session_statistics';
     RAISE NOTICE '==============================================================';
 END $$;
