@@ -160,6 +160,9 @@ type CreditInstallmentRepository interface {
 
 	// UpdateCreditCommissionStatus met à jour le statut de commission d'une échéance
 	UpdateCreditCommissionStatus(ctx context.Context, installmentID string, status string, commissionCents int64, batchID *string) error
+
+	// FindDueInstallments récupère les échéances dues (pending ou late) dont la date d'échéance est <= aujourd'hui
+	FindDueInstallments(ctx context.Context, limit int) ([]*entity.CreditInstallment, error)
 }
 
 // ============================================================

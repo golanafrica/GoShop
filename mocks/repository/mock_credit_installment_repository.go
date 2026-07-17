@@ -130,6 +130,21 @@ func (mr *MockCreditInstallmentRepositoryMockRecorder) FindByID(ctx, id any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).FindByID), ctx, id)
 }
 
+// FindDueInstallments mocks base method.
+func (m *MockCreditInstallmentRepository) FindDueInstallments(ctx context.Context, limit int) ([]*entity.CreditInstallment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindDueInstallments", ctx, limit)
+	ret0, _ := ret[0].([]*entity.CreditInstallment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindDueInstallments indicates an expected call of FindDueInstallments.
+func (mr *MockCreditInstallmentRepositoryMockRecorder) FindDueInstallments(ctx, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDueInstallments", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).FindDueInstallments), ctx, limit)
+}
+
 // FindOverdue mocks base method.
 func (m *MockCreditInstallmentRepository) FindOverdue(ctx context.Context) ([]*entity.CreditInstallment, error) {
 	m.ctrl.T.Helper()

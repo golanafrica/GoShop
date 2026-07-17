@@ -20,6 +20,13 @@ var (
 	ErrWebhookProcessing = errors.New("webhook processing failed")
 )
 
+// CreditUpdater définit l'interface minimale pour mettre à jour les entités de crédit
+type CreditUpdater interface {
+	MarkInstallmentPaid(ctx context.Context, installmentID string, paymentID string) error
+	MarkContractDownPaymentPaid(ctx context.Context, contractID string, paymentID string) error
+	CreditMerchantWallet(ctx context.Context, shopID string, amountCents int64, contractID string) error
+}
+
 // ProcessWebhookUsecase traite les webhooks reçus des providers
 type ProcessWebhookUsecase struct {
 	paymentRepo      repository.PaymentRepository
@@ -27,6 +34,7 @@ type ProcessWebhookUsecase struct {
 	db               repository.DBExecutor
 	shopRepo         repository.ShopRepository
 	tontineWebhookUC *ProcessTontineWebhookUsecase
+	creditUpdater    CreditUpdater // 🆕 AJOUT (renommé et étendu)
 }
 
 // NewProcessWebhookUsecase crée une nouvelle instance
@@ -36,6 +44,7 @@ func NewProcessWebhookUsecase(
 	db repository.DBExecutor,
 	shopRepo repository.ShopRepository,
 	tontineWebhookUC *ProcessTontineWebhookUsecase,
+	creditUpdater CreditUpdater, // 🆕 AJOUT
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
@@ -43,6 +52,7 @@ func NewProcessWebhookUsecase(
 		db:               db,
 		shopRepo:         shopRepo,
 		tontineWebhookUC: tontineWebhookUC,
+		creditUpdater:    creditUpdater, // 🆕 AJOUT
 	}
 }
 
@@ -73,7 +83,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
 
 	// 🆕 3b. v2.9.0 : Détecter si c'est un webhook tontine
-	// La référence tontine est dans event.Metadata["reference"] (format: TONTINE:{groupID}:{cycle}:{participantID})
 	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
 		logger.Info().
 			Str("reference", reference).
@@ -132,7 +141,74 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	// 6. Transition de statut selon l'événement
+	// 🆕 Détecter si c'est un webhook d'échéance de crédit
+	if paymentEntity.ReferenceType != nil && *paymentEntity.ReferenceType == "credit_installment" && paymentEntity.ReferenceID != nil {
+		logger.Info().
+			Str("reference_type", *paymentEntity.ReferenceType).
+			Str("reference_id", *paymentEntity.ReferenceID).
+			Str("transaction_id", event.ExternalID).
+			Str("status", string(event.Status)).
+			Msg("🎯 Credit installment webhook detected")
+
+		if event.Status == entity.PaymentStatusSuccess {
+			// 1. Marquer l'échéance comme payée
+			if err := uc.creditUpdater.MarkInstallmentPaid(ctx, *paymentEntity.ReferenceID, paymentEntity.ID.String()); err != nil {
+				logger.Error().Err(err).Msg("Failed to mark installment as paid")
+				return fmt.Errorf("%w: mark installment paid: %v", ErrWebhookProcessing, err)
+			}
+
+			// 2. Créditer le wallet du marchand
+			contractID := ""
+			if paymentEntity.Metadata != nil {
+				if cid, ok := paymentEntity.Metadata["contract_id"].(string); ok {
+					contractID = cid
+				}
+			}
+
+			if err := uc.creditUpdater.CreditMerchantWallet(ctx, shop.ID.String(), paymentEntity.AmountCents, contractID); err != nil {
+				logger.Error().Err(err).Msg("Failed to credit merchant wallet for installment")
+				// On continue, le statut de l'échéance est déjà mis à jour
+			}
+
+			logger.Info().
+				Str("installment_id", *paymentEntity.ReferenceID).
+				Msg("✅ Credit installment processed successfully")
+		}
+
+		// Sauvegarder le statut du paiement (SUCCESS/FAILED)
+		if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
+			return fmt.Errorf("%w: update payment: %v", ErrWebhookProcessing, err)
+		}
+
+		return nil
+	}
+
+	// 🆕 Détecter si c'est un webhook d'apport initial de crédit
+	if paymentEntity.ReferenceType != nil && *paymentEntity.ReferenceType == "credit_down_payment" && paymentEntity.ReferenceID != nil {
+		logger.Info().
+			Str("reference_type", *paymentEntity.ReferenceType).
+			Str("reference_id", *paymentEntity.ReferenceID).
+			Str("transaction_id", event.ExternalID).
+			Str("status", string(event.Status)).
+			Msg("🎯 Credit down payment webhook detected")
+
+		if event.Status == entity.PaymentStatusSuccess {
+			if err := uc.creditUpdater.MarkContractDownPaymentPaid(ctx, *paymentEntity.ReferenceID, paymentEntity.ID.String()); err != nil {
+				logger.Error().Err(err).Msg("Failed to mark contract down payment as paid")
+				return fmt.Errorf("%w: mark down payment paid: %v", ErrWebhookProcessing, err)
+			}
+			logger.Info().
+				Str("contract_id", *paymentEntity.ReferenceID).
+				Msg("✅ Credit contract down payment processed successfully")
+		}
+
+		if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
+			return fmt.Errorf("%w: update payment: %v", ErrWebhookProcessing, err)
+		}
+		return nil
+	}
+
+	// 6. Transition de statut selon l'événement (flux standard)
 	switch event.Status {
 	case entity.PaymentStatusSuccess:
 		if err := paymentEntity.MarkSuccess(event.ProviderRef); err != nil {

@@ -1,4 +1,3 @@
-// internal/app/app.go
 package app
 
 import (
@@ -15,26 +14,24 @@ import (
 
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
+	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
+	walletusecase "Goshop/application/usecase/wallet_usecase"
 	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
 
 	// 🆕 v3.0.0 : Usecases
 	codusecase "Goshop/application/usecase/cod_usecase"
 	creditusecase "Goshop/application/usecase/credit_usecase"
-	walletusecase "Goshop/application/usecase/wallet_usecase"
 
 	// 🆕 v4.1.0 : Merchant KYC Usecases
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
 
 	// 🆕 v4.2.0 : Admin Shop Usecases
 	adminshopusecase "Goshop/application/usecase/admin_shop_usecase"
-
-	// 🆕 v4.3.0 : Collaborator Usecases
-	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
 
 	// 🆕 v4.4.0 : 2FA Usecases
 	twofausecase "Goshop/application/usecase/twofa_usecase"
@@ -89,6 +86,7 @@ import (
 	infscheduler "Goshop/infrastructure/scheduler"
 
 	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
 
@@ -140,6 +138,45 @@ import (
 
 	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+// ============================================================
+// 🆕 WRAPPER POUR CREDIT UPDATER
+// ============================================================
+// Ce wrapper permet à app.go de fournir l'interface requise par ProcessWebhookUsecase
+// sans créer de dépendance circulaire entre les packages usecase.
+
+type creditUpdaterWrapper struct {
+	installmentRepo repository.CreditInstallmentRepository
+	contractRepo    repository.CreditContractRepository
+	creditWalletUC  *walletusecase.CreditWalletUsecase
+}
+
+func (w *creditUpdaterWrapper) MarkInstallmentPaid(ctx context.Context, installmentID string, paymentID string) error {
+	inst, err := w.installmentRepo.FindByID(ctx, installmentID)
+	if err != nil {
+		return err
+	}
+	if err := inst.MarkPaid(paymentID); err != nil {
+		return err
+	}
+	return w.installmentRepo.Update(ctx, inst)
+}
+
+func (w *creditUpdaterWrapper) MarkContractDownPaymentPaid(ctx context.Context, contractID string, paymentID string) error {
+	contract, err := w.contractRepo.FindByID(ctx, contractID)
+	if err != nil {
+		return err
+	}
+	if err := contract.MarkDownPaymentPaid(); err != nil {
+		return err
+	}
+	return w.contractRepo.Update(ctx, contract)
+}
+
+func (w *creditUpdaterWrapper) CreditMerchantWallet(ctx context.Context, shopID string, amountCents int64, contractID string) error {
+	_, err := w.creditWalletUC.CreditFromCreditPlan(ctx, shopID, amountCents, contractID)
+	return err
+}
 
 // ============ STRUCT App ============
 
@@ -368,13 +405,24 @@ func (a *App) setupRouter() {
 		shopRepo,
 	)
 
-	// Process Webhook Usecase (modifié pour inclure tontine)
+	// 🆕 v3.0.0 : WALLET USECASES
+	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
+	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
+
+	// Process Webhook Usecase (modifié pour inclure tontine et credit)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
 		processTontineWebhookUC,
+		&creditUpdaterWrapper{ // 🆕 AJOUT : Wrapper pour le crédit (mis à jour)
+			installmentRepo: creditInstallmentRepo,
+			contractRepo:    creditContractRepo,
+			creditWalletUC:  creditWalletUC,
+		},
 	)
 
 	// Withdrawal Usecases
@@ -510,14 +558,6 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.2.0 Admin Shop usecases initialized (list, details, health, suspend, activate)")
 
-	// ============ 🆕 v3.0.0 : WALLET USECASES ============
-	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
-	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
-	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
-	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
-
-	a.Logger.Info().Msg("✅ v3.0.0 Wallet usecases initialized (credit, debit, freeze, unfreeze)")
-
 	// ============ 🆕 v3.0.0 : COD USECASES ============
 	submitClientProofUC := codusecase.NewSubmitClientProofUsecase(codProofRepo, postgresOrderRepo, txmanagerRepo)
 	submitMerchantProofUC := codusecase.NewSubmitMerchantProofUsecase(codProofRepo, postgresOrderRepo, txmanagerRepo)
@@ -557,14 +597,25 @@ func (a *App) setupRouter() {
 		creditScoreRepo,
 		txmanagerRepo,
 	)
+
+	// 🆕 AJOUT : PayDownPayment Usecase sécurisé (initie le paiement via YengaPay)
 	payDownPaymentUC := creditusecase.NewPayDownPaymentUsecase(
 		creditContractRepo,
-		creditInstallmentRepo,
-		creditScoreRepo,
+		paymentRepo,
+		paymentRegistry, // Implémente l'interface locale PaymentRegistry
 		txmanagerRepo,
 	)
 
-	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down)")
+	// 🆕 AJOUT : PayInstallment Usecase
+	payInstallmentUC := creditusecase.NewPayInstallmentUsecase(
+		creditInstallmentRepo,
+		creditContractRepo,
+		paymentRepo,
+		paymentRegistry, // Implémente l'interface locale GetAvailable
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down, pay_installment)")
 
 	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
 	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
@@ -720,15 +771,18 @@ func (a *App) setupRouter() {
 
 	// ============ 🆕 v3.4.0 : CREDIT SCHEDULER ============
 	creditSched := appscheduler.NewCreditScheduler(
-		creditInstallmentRepo,
-		batchRepo,
-		rateRepo,
-		debitWalletUC,
-		freezeAccountUC,
-		a.Logger.Logger,
+		creditInstallmentRepo, // 1. installmentRepo
+		creditContractRepo,    // 2. contractRepo (NOUVEAU)
+		postgresCustomerRepo,  // 3. customerRepo (NOUVEAU)
+		payInstallmentUC,      // 4. payInstallmentUC (NOUVEAU)
+		batchRepo,             // 5. batchRepo
+		rateRepo,              // 6. rateRepo
+		debitWalletUC,         // 7. debitUC
+		freezeAccountUC,       // 8. freezeUC
+		a.Logger.Logger,       // 9. logger
 	)
 
-	a.Logger.Info().Msg("✅ v3.4.0 Credit scheduler initialized")
+	a.Logger.Info().Msg("✅ v3.4.0 Credit scheduler initialized (with auto-trigger capability)")
 
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
@@ -847,12 +901,14 @@ func (a *App) setupRouter() {
 		codProofRepo,
 	)
 
+	// 🆕 AJOUT : Injection de payDownPaymentUC et payInstallmentUC dans le CreditHandler
 	creditHandler := credithandler.NewCreditHandler(
 		configureCreditPlanUC,
 		applyForCreditUC,
 		approveCreditUC,
 		rejectCreditUC,
 		payDownPaymentUC,
+		payInstallmentUC,
 	)
 
 	// ============ 🆕 v3.1.0 : SCHEDULER HANDLER ============

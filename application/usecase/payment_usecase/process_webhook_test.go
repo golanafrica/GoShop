@@ -72,6 +72,7 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -110,6 +111,7 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -156,6 +158,7 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -206,6 +209,7 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -253,6 +257,7 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -313,6 +318,7 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -379,6 +385,7 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -445,6 +452,7 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -511,6 +519,7 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -575,6 +584,7 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -640,6 +650,7 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()

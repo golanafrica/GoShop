@@ -773,3 +773,40 @@ func (r *CreditInstallmentRepositoryInfrastructure) UpdateCreditCommissionStatus
 	}
 	return nil
 }
+
+// FindDueInstallments récupère les échéances dues pour le déclenchement automatique
+func (r *CreditInstallmentRepositoryInfrastructure) FindDueInstallments(ctx context.Context, limit int) ([]*entity.CreditInstallment, error) {
+	query := `
+		SELECT id, contract_id, shop_id, installment_number, due_date, amount_cents, 
+		       status, paid_at, late_fee_cents, created_at, updated_at
+		FROM credit_installments
+		WHERE status IN ('pending', 'late')
+		  AND due_date <= NOW()
+		ORDER BY due_date ASC
+		LIMIT $1
+	`
+	rows, err := r.queryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query due installments: %w", err)
+	}
+	defer rows.Close()
+
+	var installments []*entity.CreditInstallment
+	for rows.Next() {
+		var inst entity.CreditInstallment
+		var paidAt sql.NullTime
+		err := rows.Scan(
+			&inst.ID, &inst.ContractID, &inst.ShopID, &inst.InstallmentNumber,
+			&inst.DueDate, &inst.AmountCents, &inst.Status, &paidAt,
+			&inst.LateFeeCents, &inst.CreatedAt, &inst.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan installment: %w", err)
+		}
+		if paidAt.Valid {
+			inst.PaidAt = &paidAt.Time
+		}
+		installments = append(installments, &inst)
+	}
+	return installments, rows.Err()
+}

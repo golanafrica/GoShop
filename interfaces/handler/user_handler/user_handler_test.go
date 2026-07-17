@@ -27,15 +27,15 @@ func TestRegister_Success(t *testing.T) {
 	mockRepo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		mockRepo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: payload avec un mot de passe VALIDE (respecte la politique de mot de passe fort)
+	// ✅ Mot de passe fort : Majuscule, Chiffre, Caractère spécial, > 8 chars
 	body := map[string]string{
 		"email":    "test@example.com",
-		"password": "ValidPassword123!", // ✅ Corrigé : contient majuscule, chiffre et caractère spécial
+		"password": "ValidPassword123!",
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -43,13 +43,11 @@ func TestRegister_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	// MOCK: user n'existe pas encore
 	mockRepo.
 		EXPECT().
 		FindUserByEmail("test@example.com").
 		Return(nil, userrepository.ErrUserNotFound)
 
-	// MOCK: création OK
 	mockRepo.
 		EXPECT().
 		CreateUser(gomock.Any()).
@@ -62,10 +60,8 @@ func TestRegister_Success(t *testing.T) {
 			Status:   userentity.StatusActive,
 		}, nil)
 
-	// WHEN: appel handler
 	err := handler.Register(w, req)
 
-	// THEN: Pas d'erreur et statut 201 Created
 	assert.NoError(t, err, "L'inscription ne doit pas retourner d'erreur")
 	assert.Equal(t, http.StatusCreated, w.Code, "Le code HTTP doit être 201 Created")
 }
@@ -77,15 +73,13 @@ func TestLoginHandler_Success(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// 1. Préparation du mot de passe hashé
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("pwd123"), bcrypt.DefaultCost)
 
-	// 2. Mock du repository
 	repo.EXPECT().
 		FindUserByEmail("test@example.com").
 		Return(&userentity.UserEntity{
@@ -97,7 +91,6 @@ func TestLoginHandler_Success(t *testing.T) {
 			Status:   userentity.StatusActive,
 		}, nil)
 
-	// 3. Requête HTTP
 	body := map[string]string{
 		"email":    "test@example.com",
 		"password": "pwd123",
@@ -108,14 +101,12 @@ func TestLoginHandler_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	// 4. Appel direct du handler (pas via Chi router)
 	err := handler.Login(w, req)
 
-	// 5. Vérifications
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Vérifie la réponse JSON
+	// ✅ CORRECTION CRITIQUE : Utiliser map[string]interface{} car la réponse contient "expires_in": 900 (un nombre)
 	var response map[string]interface{}
 	err = json.NewDecoder(w.Body).Decode(&response)
 	assert.NoError(t, err)
@@ -130,17 +121,15 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// Mock : utilisateur non trouvé
 	repo.EXPECT().
 		FindUserByEmail("wrong@example.com").
 		Return(nil, userrepository.ErrUserNotFound)
 
-	// Requête avec mauvais email
 	body := map[string]string{
 		"email":    "wrong@example.com",
 		"password": "pwd123",
@@ -151,10 +140,8 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	// Appel du handler
 	err := handler.Login(w, req)
 
-	// Doit retourner une erreur
 	assert.Error(t, err)
 }
 
@@ -165,12 +152,11 @@ func TestMeHandler_Success(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: Un utilisateur existant
 	expectedUser := &userentity.UserEntity{
 		ID:       "user-123",
 		Email:    "test@example.com",
@@ -180,27 +166,22 @@ func TestMeHandler_Success(t *testing.T) {
 		Status:   userentity.StatusActive,
 	}
 
-	// 🔥 CORRECTION: Mock FindUserByID, pas FindUserByEmail
 	repo.EXPECT().
 		FindUserByID("user-123").
 		Return(expectedUser, nil).
 		Times(1)
 
-	// WHEN: Requête avec userID dans le contexte
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
 	ctx := utils.SetUserID(req.Context(), "user-123")
 	req = req.WithContext(ctx)
 
 	w := httptest.NewRecorder()
 
-	// Appel du handler
 	err := handler.Me(w, req)
 
-	// THEN: Pas d'erreur, status 200
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Vérifie la réponse JSON
 	var response map[string]string
 	err = json.NewDecoder(w.Body).Decode(&response)
 	assert.NoError(t, err)
@@ -216,19 +197,16 @@ func TestMeHandler_Unauthorized(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: Requête SANS userID dans le contexte
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
 	w := httptest.NewRecorder()
 
-	// WHEN: Appel du handler
 	err := handler.Me(w, req)
 
-	// THEN: Doit retourner ErrUnauthorized
 	assert.Error(t, err)
 	assert.Equal(t, utils.ErrUnauthorized, err)
 }
@@ -240,28 +218,24 @@ func TestMeHandler_UserNotFound(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: UserID existe mais utilisateur pas en base
 	repo.EXPECT().
 		FindUserByID("user-123").
 		Return(nil, userrepository.ErrUserNotFound).
 		Times(1)
 
-	// WHEN: Requête avec userID
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
 	ctx := utils.SetUserID(req.Context(), "user-123")
 	req = req.WithContext(ctx)
 
 	w := httptest.NewRecorder()
 
-	// Appel du handler
 	err := handler.Me(w, req)
 
-	// THEN: Erreur car utilisateur non trouvé
 	assert.Error(t, err)
 }
 
@@ -272,28 +246,24 @@ func TestMeHandler_InternalServerError(t *testing.T) {
 	repo := mockrepo.NewMockUserRepository(ctrl)
 	handler := userhandler.NewUserHandler(
 		repo,
-		nil, // 🆕 v4.4.2 : sessionRepo = nil
-		nil, // 🆕 v4.4.21 : rateLimiter = nil
+		nil,
+		nil,
 		setupLogging.GetTestLogger(),
 	)
 
-	// GIVEN: Erreur interne du repository
 	repo.EXPECT().
 		FindUserByID("user-123").
 		Return(nil, userrepository.ErrUserCreateFailed).
 		Times(1)
 
-	// WHEN: Requête avec userID
 	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
 	ctx := utils.SetUserID(req.Context(), "user-123")
 	req = req.WithContext(ctx)
 
 	w := httptest.NewRecorder()
 
-	// Appel du handler
 	err := handler.Me(w, req)
 
-	// THEN: Erreur interne
 	assert.Error(t, err)
 	assert.Equal(t, utils.ErrInternalServer, err)
 }

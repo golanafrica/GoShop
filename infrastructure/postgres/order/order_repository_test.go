@@ -5,6 +5,7 @@ import (
 	"Goshop/domain/tenant"
 	"Goshop/infrastructure/postgres/order"
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -34,20 +35,26 @@ func TestOrderRepository_Create(t *testing.T) {
 	repo := order.NewOrderPostgresInfra(db)
 
 	orderEntity := &entity.Order{
-		CustomerID:    "1234",
-		TotalCents:    50000,
-		Status:        "PENDING",
-		PaymentMethod: "mobile_money", // Ajouté pour correspondre à la logique par défaut
+		CustomerID: "1234",
+		TotalCents: 50000,
+		Status:     "PENDING",
 	}
 
-	// ✅ Lignes retournées correspondant à la nouvelle requête
+	expectedQuery := `
+		INSERT INTO orders (
+			shop_id, customer_id, total_cents, status, 
+			payment_method, reserved_until,
+			created_at, updated_at
+		) 
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+		RETURNING id, customer_id, total_cents, status, payment_method, reserved_until, created_at, updated_at
+	`
+
 	rows := sqlmock.NewRows([]string{
 		"id", "customer_id", "total_cents", "status", "payment_method", "reserved_until", "created_at", "updated_at",
 	}).AddRow("order-1", "1234", 50000, "PENDING", "mobile_money", nil, time.Now(), time.Now())
 
-	// ✅ Utilisation d'une regex robuste qui ignore les espaces et sauts de ligne
-	// Cela évite les échecs dus aux différences de formatage entre le code et le test
-	mock.ExpectQuery(`(?i)INSERT INTO orders\s*\(.*?\)\s*VALUES\s*\(.*?\)\s*RETURNING.*`).
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(testShop.ID.String(), orderEntity.CustomerID, orderEntity.TotalCents, orderEntity.Status, "mobile_money", nil).
 		WillReturnRows(rows)
 
@@ -67,14 +74,23 @@ func TestOrderRepository_FindByID(t *testing.T) {
 	repo := order.NewOrderPostgresInfra(db)
 
 	// 1️⃣ Requête principale : orders (avec shop_id)
+	// Il faut fournir TOUTES les colonnes que le code réel essaie de scanner (14 colonnes)
 	orderRows := sqlmock.NewRows([]string{
 		"id", "customer_id", "total_cents", "status", "created_at", "updated_at",
 		"payment_method", "accepted_at", "rejected_at", "delivered_at", "cancelled_at",
 		"delivery_notes", "amount_received_cents", "reserved_until",
 	}).AddRow("order-1", "cust-123", 100000, "PENDING", time.Now(), time.Now(),
-		"mobile_money", nil, nil, nil, nil, nil, int64(0), nil)
+		"mobile_money", nil, nil, nil, nil, "", int64(0), nil)
 
-	mock.ExpectQuery(`(?i)SELECT id, customer_id, total_cents, status, created_at, updated_at,.*payment_method.*FROM orders\s+WHERE id = \$1 AND shop_id = \$2`).
+	expectedQuery := `
+		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
+		       delivery_notes, amount_received_cents, reserved_until
+		FROM orders 
+		WHERE id = $1 AND shop_id = $2
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs("order-1", testShop.ID.String()).
 		WillReturnRows(orderRows)
 
@@ -85,7 +101,11 @@ func TestOrderRepository_FindByID(t *testing.T) {
 		"item-1", "order-1", "prod-99", int64(2), int64(50000), int64(100000),
 	)
 
-	mock.ExpectQuery(`(?i)SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents\s+FROM order_items\s+WHERE order_id = \$1`).
+	expectedItemQuery := `SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
+		FROM order_items
+		WHERE order_id = $1`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedItemQuery)).
 		WithArgs("order-1").
 		WillReturnRows(itemRows)
 
@@ -122,7 +142,26 @@ func TestOrderRepository_FindAll(t *testing.T) {
 		AddRow("order-2", "cust-2", 50000, "PENDING", date2, date2,
 			nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery(`(?i)SELECT\s+o\.id AS order_id.*FROM orders o\s+LEFT JOIN order_items oi ON o\.id = oi\.order_id\s+WHERE o\.shop_id = \$1\s+ORDER BY o\.created_at DESC`).
+	expectedQuery := `
+		SELECT 
+			o.id AS order_id,
+			o.customer_id,
+			o.total_cents,
+			o.status,
+			o.created_at,
+			o.updated_at,
+			oi.id AS item_id,
+			oi.product_id,
+			oi.quantity,
+			oi.price_cents,
+			oi.subtotal_cents
+		FROM orders o
+		LEFT JOIN order_items oi ON o.id = oi.order_id
+		WHERE o.shop_id = $1
+		ORDER BY o.created_at DESC
+	`
+
+	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(testShop.ID.String()).
 		WillReturnRows(rows)
 

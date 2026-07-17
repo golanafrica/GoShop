@@ -20,11 +20,12 @@ import (
 
 // CreditHandler gère les endpoints liés au crédit par tempérament
 type CreditHandler struct {
-	configureUC *creditusecase.ConfigureCreditPlanUsecase
-	applyUC     *creditusecase.ApplyForCreditUsecase
-	approveUC   *creditusecase.ApproveCreditUsecase
-	rejectUC    *creditusecase.RejectCreditUsecase
-	payDownUC   *creditusecase.PayDownPaymentUsecase
+	configureUC      *creditusecase.ConfigureCreditPlanUsecase
+	applyUC          *creditusecase.ApplyForCreditUsecase
+	approveUC        *creditusecase.ApproveCreditUsecase
+	rejectUC         *creditusecase.RejectCreditUsecase
+	payDownUC        *creditusecase.PayDownPaymentUsecase
+	payInstallmentUC *creditusecase.PayInstallmentUsecase // 🆕 AJOUT
 }
 
 // NewCreditHandler crée une nouvelle instance du handler
@@ -34,13 +35,15 @@ func NewCreditHandler(
 	approveUC *creditusecase.ApproveCreditUsecase,
 	rejectUC *creditusecase.RejectCreditUsecase,
 	payDownUC *creditusecase.PayDownPaymentUsecase,
+	payInstallmentUC *creditusecase.PayInstallmentUsecase, // 🆕 AJOUT
 ) *CreditHandler {
 	return &CreditHandler{
-		configureUC: configureUC,
-		applyUC:     applyUC,
-		approveUC:   approveUC,
-		rejectUC:    rejectUC,
-		payDownUC:   payDownUC,
+		configureUC:      configureUC,
+		applyUC:          applyUC,
+		approveUC:        approveUC,
+		rejectUC:         rejectUC,
+		payDownUC:        payDownUC,
+		payInstallmentUC: payInstallmentUC, // 🆕 AJOUT
 	}
 }
 
@@ -637,6 +640,8 @@ func (h *CreditHandler) ListPendingApplications(w http.ResponseWriter, r *http.R
 
 // PayDownPayment permet au client de payer l'apport initial
 // POST /api/credit/down-payment
+// PayDownPayment permet au client d'initier le paiement de l'apport initial
+// POST /api/credit/down-payment
 func (h *CreditHandler) PayDownPayment(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -648,42 +653,75 @@ func (h *CreditHandler) PayDownPayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Parser la requête
-	var req PayDownPaymentRequest
+	var req creditusecase.PayDownPaymentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 	defer r.Body.Close()
 
-	// 3. Valider les champs
-	if req.ContractID == "" || req.PaymentID == "" {
-		utils.WriteError(w, http.StatusBadRequest, "contract_id and payment_id are required")
+	// 3. Appeler le usecase sécurisé
+	resp, err := h.payDownUC.Execute(r.Context(), &req)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to initiate down payment")
+		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to initiate payment: %v", err))
 		return
 	}
+
+	// 4. Retourner la réponse
+	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"success": true,
+		"message": resp.Message,
+		"data":    resp,
+	})
+}
+
+// ============================================================
+// 🆕 HANDLERS : INSTALLMENT PAYMENT (CLIENT)
+// ============================================================
+
+// PayInstallment permet au client de payer une échéance manuellement
+// POST /api/credit/installments/{installment_id}/pay
+func (h *CreditHandler) PayInstallment(w http.ResponseWriter, r *http.Request) {
+	logger := zerolog.Ctx(r.Context())
+
+	// 1. Récupérer le shop
+	_, err := tenant.FromContext(r.Context())
+	if err != nil {
+		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
+		return
+	}
+
+	// 2. Récupérer l'installment_id depuis l'URL
+	installmentID := chi.URLParam(r, "installment_id")
+	if installmentID == "" {
+		utils.WriteError(w, http.StatusBadRequest, "installment_id is required in URL")
+		return
+	}
+
+	// 3. Parser la requête
+	var req creditusecase.PayInstallmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
+		return
+	}
+	defer r.Body.Close()
+
+	req.InstallmentID = installmentID // Forcer l'ID depuis l'URL
 
 	// 4. Appeler le usecase
-	ucReq := &creditusecase.PayDownPaymentRequest{
-		ContractID: req.ContractID,
-		PaymentID:  req.PaymentID,
-	}
-
-	resp, err := h.payDownUC.Execute(r.Context(), ucReq)
+	resp, err := h.payInstallmentUC.Execute(r.Context(), &req)
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to pay down payment")
-		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to pay down payment: %v", err))
+		logger.Error().Err(err).Msg("Failed to initiate installment payment")
+		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to initiate payment: %v", err))
 		return
 	}
 
-	// 5. Logger et retourner
-	logger.Info().
-		Str("contract_id", req.ContractID).
-		Int64("down_payment_cents", resp.DownPaymentCents).
-		Msg("Down payment received")
-
-	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+	// 5. Retourner la réponse
+	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"success": true,
-		"message": "Down payment received. Contract is now active. Installments schedule started.",
-		"payment": resp,
+		"message": resp.Message,
+		"data":    resp,
 	})
 }
 
@@ -950,6 +988,9 @@ func (h *CreditHandler) RegisterRoutes(r chi.Router) {
 
 	// Paiement apport initial (client)
 	r.Post("/down-payment", h.PayDownPayment)
+
+	// 🆕 AJOUT : Paiement d'échéance (client)
+	r.Post("/installments/{installment_id}/pay", h.PayInstallment)
 
 	// Contrats et échéances
 	r.Get("/contracts/active", h.ListActiveContracts)

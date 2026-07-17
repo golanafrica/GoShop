@@ -30,8 +30,10 @@ const (
 	ProviderYengaPay    PaymentProvider = "yenga_pay"
 	ProviderCash        PaymentProvider = "cash"
 	ProviderMock        PaymentProvider = "mock"
-	// CommissionStatus
+)
 
+// CommissionStatus
+const (
 	CommissionStatusPending   = "pending"
 	CommissionStatusCollected = "collected"
 	CommissionStatusFailed    = "failed"
@@ -47,24 +49,28 @@ const (
 
 // Payment représente un paiement
 type Payment struct {
-	ID            uuid.UUID
-	ShopID        uuid.UUID
-	OrderID       uuid.UUID
-	Provider      PaymentProvider
-	ProviderRef   *string // Référence côté provider (peut être nil avant initiation)
-	AmountCents   int64
-	Currency      Currency
-	CustomerPhone *string
-	CustomerEmail *string
-	Description   *string
-	Status        PaymentStatus
-	Metadata      map[string]interface{}
-	InitiatedAt   *time.Time
-	CompletedAt   *time.Time
-	ExpiresAt     *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	// Dans la struct Payment existante, ajoute :
+	ID      uuid.UUID `json:"id" db:"id"`
+	ShopID  uuid.UUID `json:"shop_id" db:"shop_id"`
+	OrderID uuid.UUID `json:"order_id" db:"order_id"`
+
+	// 🆕 Champs polymorphes pour supporter les échéances de crédit, tontines, etc.
+	ReferenceType *string `json:"reference_type,omitempty" db:"reference_type"` // ex: "order", "credit_installment"
+	ReferenceID   *string `json:"reference_id,omitempty" db:"reference_id"`     // UUID en format string
+
+	Provider      PaymentProvider        `json:"provider" db:"provider"`
+	ProviderRef   *string                `json:"provider_ref,omitempty" db:"provider_ref"` // Référence côté provider (peut être nil avant initiation)
+	AmountCents   int64                  `json:"amount_cents" db:"amount_cents"`
+	Currency      Currency               `json:"currency" db:"currency"`
+	CustomerPhone *string                `json:"customer_phone,omitempty" db:"customer_phone"`
+	CustomerEmail *string                `json:"customer_email,omitempty" db:"customer_email"`
+	Description   *string                `json:"description,omitempty" db:"description"`
+	Status        PaymentStatus          `json:"status" db:"status"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty" db:"metadata"`
+	InitiatedAt   *time.Time             `json:"initiated_at,omitempty" db:"initiated_at"`
+	CompletedAt   *time.Time             `json:"completed_at,omitempty" db:"completed_at"`
+	ExpiresAt     *time.Time             `json:"expires_at,omitempty" db:"expires_at"`
+	CreatedAt     time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at" db:"updated_at"`
 
 	// Commission
 	CommissionRateBps     int        `json:"commission_rate_bps" db:"commission_rate_bps"`

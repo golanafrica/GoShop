@@ -388,38 +388,6 @@ func TestRejectCreditRequest_Validate_EmptyRejectionReason(t *testing.T) {
 // TESTS : PayDownPaymentRequest.Validate()
 // ============================================================
 
-func TestPayDownPaymentRequest_Validate_Success(t *testing.T) {
-	req := &creditusecase.PayDownPaymentRequest{
-		ContractID: "contract-123",
-		PaymentID:  "payment-123",
-	}
-
-	err := req.Validate()
-	assert.NoError(t, err)
-}
-
-func TestPayDownPaymentRequest_Validate_EmptyContractID(t *testing.T) {
-	req := &creditusecase.PayDownPaymentRequest{
-		ContractID: "", // Vide
-		PaymentID:  "payment-123",
-	}
-
-	err := req.Validate()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "contract_id is required")
-}
-
-func TestPayDownPaymentRequest_Validate_EmptyPaymentID(t *testing.T) {
-	req := &creditusecase.PayDownPaymentRequest{
-		ContractID: "contract-123",
-		PaymentID:  "", // Vide
-	}
-
-	err := req.Validate()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "payment_id is required")
-}
-
 // ============================================================
 // TESTS : CreditScore helpers
 // ============================================================

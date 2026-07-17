@@ -67,12 +67,14 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
+	// ✅ AJOUT : reference_type et reference_id dans l'INSERT
 	query := `
 		INSERT INTO payments (
 			id, shop_id, order_id, provider, provider_ref,
 			amount_cents, currency, customer_phone, customer_email,
-			description, status, metadata, initiated_at, completed_at, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			description, status, metadata, initiated_at, completed_at, expires_at,
+			reference_type, reference_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 
 	_, err = r.execContext(ctx, query,
@@ -91,6 +93,8 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		payment.InitiatedAt,
 		payment.CompletedAt,
 		payment.ExpiresAt,
+		payment.ReferenceType, // ✅ AJOUT
+		payment.ReferenceID,   // ✅ AJOUT
 	)
 
 	if err != nil {
@@ -106,11 +110,12 @@ func (r *PaymentRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUID) 
 		return nil, err
 	}
 
+	// ✅ AJOUT : reference_type et reference_id dans le SELECT
 	query := `
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, created_at, updated_at
+		       expires_at, reference_type, reference_id, created_at, updated_at
 		FROM payments
 		WHERE id = $1 AND shop_id = $2
 	`
@@ -128,7 +133,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderID(ctx context.Context, orderID u
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, created_at, updated_at
+		       expires_at, reference_type, reference_id, created_at, updated_at
 		FROM payments
 		WHERE order_id = $1 AND shop_id = $2
 		ORDER BY created_at DESC
@@ -144,11 +149,12 @@ func (r *PaymentRepositoryPostgres) FindByOrderID(ctx context.Context, orderID u
 }
 
 func (r *PaymentRepositoryPostgres) FindByProviderRef(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error) {
+	// ✅ AJOUT : reference_type et reference_id dans le SELECT
 	query := `
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, created_at, updated_at
+		       expires_at, reference_type, reference_id, created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
 	`
@@ -161,7 +167,7 @@ func (r *PaymentRepositoryPostgres) FindByShop(ctx context.Context, shopID uuid.
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, created_at, updated_at
+		       expires_at, reference_type, reference_id, created_at, updated_at
 		FROM payments
 		WHERE shop_id = $1
 	`
@@ -214,6 +220,7 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
+	// ✅ AJOUT : reference_type et reference_id dans l'UPDATE
 	query := `
 		UPDATE payments SET
 			provider_ref = $1,
@@ -221,8 +228,10 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 			metadata = $3,
 			initiated_at = $4,
 			completed_at = $5,
+			reference_type = $6,
+			reference_id = $7,
 			updated_at = NOW()
-		WHERE id = $6 AND shop_id = $7
+		WHERE id = $8 AND shop_id = $9
 	`
 
 	result, err := r.execContext(ctx, query,
@@ -231,6 +240,8 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		metadataJSON,
 		payment.InitiatedAt,
 		payment.CompletedAt,
+		payment.ReferenceType, // ✅ AJOUT
+		payment.ReferenceID,   // ✅ AJOUT
 		payment.ID,
 		shopID,
 	)
@@ -251,8 +262,9 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, error) {
 	var p entity.Payment
 	var metadataBytes []byte
-	var providerRef, customerPhone, customerEmail, description sql.NullString
+	var providerRef, customerPhone, customerEmail, description, referenceType, referenceID sql.NullString
 
+	// ✅ AJOUT : reference_type et reference_id dans le Scan
 	err := row.Scan(
 		&p.ID,
 		&p.ShopID,
@@ -269,6 +281,8 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&p.InitiatedAt,
 		&p.CompletedAt,
 		&p.ExpiresAt,
+		&referenceType, // ✅ AJOUT
+		&referenceID,   // ✅ AJOUT
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)
@@ -292,6 +306,12 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 	if description.Valid {
 		p.Description = &description.String
 	}
+	if referenceType.Valid {
+		p.ReferenceType = &referenceType.String
+	}
+	if referenceID.Valid {
+		p.ReferenceID = &referenceID.String
+	}
 
 	if len(metadataBytes) > 0 {
 		if err := json.Unmarshal(metadataBytes, &p.Metadata); err != nil {
@@ -310,7 +330,7 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 	for rows.Next() {
 		var p entity.Payment
 		var metadataBytes []byte
-		var providerRef, customerPhone, customerEmail, description sql.NullString
+		var providerRef, customerPhone, customerEmail, description, referenceType, referenceID sql.NullString
 
 		err := rows.Scan(
 			&p.ID,
@@ -328,6 +348,8 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 			&p.InitiatedAt,
 			&p.CompletedAt,
 			&p.ExpiresAt,
+			&referenceType, // ✅ AJOUT
+			&referenceID,   // ✅ AJOUT
 			&p.CreatedAt,
 			&p.UpdatedAt,
 		)
@@ -346,6 +368,12 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 		}
 		if description.Valid {
 			p.Description = &description.String
+		}
+		if referenceType.Valid {
+			p.ReferenceType = &referenceType.String
+		}
+		if referenceID.Valid {
+			p.ReferenceID = &referenceID.String
 		}
 
 		if len(metadataBytes) > 0 {

@@ -759,6 +759,7 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 		mockDB,
 		mockShopRepo,
 		mockTontineUC,
+		nil,
 	)
 
 	ctx := context.Background()
