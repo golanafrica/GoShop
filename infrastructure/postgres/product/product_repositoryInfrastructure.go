@@ -188,3 +188,50 @@ func (pr *ProductRepositoryInfrastructure) Delete(ctx context.Context, id string
 	}
 	return nil
 }
+
+// FindPublicProducts retourne les produits de toutes les boutiques actives avec stock > 0
+// Note : On utilise pr.db directement car c'est une lecture publique, pas besoin de transaction.
+func (pr *ProductRepositoryInfrastructure) FindPublicProducts(ctx context.Context, limit, offset int) ([]*repository.PublicProduct, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := `
+		SELECT 
+			p.id, p.name, p.description, p.price_cents, p.stock, p.created_at, p.updated_at,
+			s.id as shop_id, s.name as shop_name, s.slug as shop_slug
+		FROM products p
+		JOIN shops s ON p.shop_id = s.id
+		WHERE s.is_active = true AND p.stock > 0
+		ORDER BY p.created_at DESC
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := pr.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var products []*repository.PublicProduct
+	for rows.Next() {
+		p := &repository.PublicProduct{}
+		err := rows.Scan(
+			&p.ID, &p.Name, &p.Description, &p.PriceCents, &p.Stock,
+			&p.CreatedAt, &p.UpdatedAt,
+			&p.ShopID, &p.ShopName, &p.ShopSlug,
+		)
+		if err != nil {
+			return nil, err
+		}
+		products = append(products, p)
+	}
+
+	return products, rows.Err()
+}

@@ -7,12 +7,10 @@ import (
 )
 
 //go:generate mockgen -destination=../../mocks/repository/mock_product_cache.go -package=repository . ProductCache
-//go:generate mockgen -destination=../../mocks/repository/mock_product_tontine_settings_repository.go -package=repository . ShopPaymentSettingsRepository
 
 // ProductCache définit les opérations de cache pour les produits
 type ProductCache interface {
 	// Get récupère un produit du cache par ID
-	// Retourne le produit ou une erreur (ex: cache miss, timeout, etc.)
 	Get(ctx context.Context, id string) (*entity.Product, error)
 
 	// Set stocke un produit dans le cache avec une durée d'expiration

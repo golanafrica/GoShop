@@ -41,7 +41,8 @@ func TestCreateShopUsecase_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl) // ✅ AJOUT
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)     // ✅ MODIFIÉ
 
 	ctx := contextWithUser("user-123")
 
@@ -50,8 +51,13 @@ func TestCreateShopUsecase_Success(t *testing.T) {
 		FindBySlug(ctx, "ma-boutique").
 		Return(nil, nil)
 
-	// Création réussie
+	// Création réussie de la boutique
 	mockRepo.EXPECT().
+		Create(ctx, gomock.Any()).
+		Return(nil)
+
+	// ✅ AJOUT : Création réussie du collaborateur propriétaire
+	mockCollabRepo.EXPECT().
 		Create(ctx, gomock.Any()).
 		Return(nil)
 
@@ -69,7 +75,8 @@ func TestCreateShopUsecase_Unauthenticated(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl) // ✅ AJOUT
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)     // ✅ MODIFIÉ
 
 	ctx := context.Background() // Pas de user_id
 
@@ -85,7 +92,8 @@ func TestCreateShopUsecase_SlugAlreadyTaken(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl) // ✅ AJOUT
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)     // ✅ MODIFIÉ
 
 	ctx := contextWithUser("user-123")
 
@@ -106,7 +114,8 @@ func TestCreateShopUsecase_CustomDomainAlreadyTaken(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl) // ✅ AJOUT
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)     // ✅ MODIFIÉ
 
 	ctx := contextWithUser("user-123")
 
@@ -131,7 +140,8 @@ func TestCreateShopUsecase_RepositoryError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl) // ✅ AJOUT
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)     // ✅ MODIFIÉ
 
 	ctx := contextWithUser("user-123")
 

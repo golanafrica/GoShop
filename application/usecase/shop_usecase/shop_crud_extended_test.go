@@ -28,7 +28,8 @@ func TestCreateShopUsecase_FindBySlugError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl)
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)
 
 	ctx := utils.WithUserID(context.Background(), "user-123")
 
@@ -48,7 +49,8 @@ func TestCreateShopUsecase_FindByCustomDomainError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl)
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)
 
 	ctx := utils.WithUserID(context.Background(), "user-123")
 
@@ -74,7 +76,8 @@ func TestCreateShopUsecase_Success_WithCustomDomain(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mock_repository.NewMockShopRepository(ctrl)
-	usecase := shopusecase.NewCreateShopUsecase(mockRepo)
+	mockCollabRepo := mock_repository.NewMockShopCollaboratorRepository(ctrl)
+	usecase := shopusecase.NewCreateShopUsecase(mockRepo, mockCollabRepo)
 
 	ctx := utils.WithUserID(context.Background(), "user-123")
 
@@ -88,7 +91,7 @@ func TestCreateShopUsecase_Success_WithCustomDomain(t *testing.T) {
 		FindByCustomDomain(ctx, "boutique.com").
 		Return(nil, nil)
 
-	// Création réussie
+	// Création réussie de la boutique
 	mockRepo.EXPECT().
 		Create(ctx, gomock.Any()).
 		DoAndReturn(func(ctx context.Context, shop *entity.Shop) error {
@@ -96,6 +99,11 @@ func TestCreateShopUsecase_Success_WithCustomDomain(t *testing.T) {
 			assert.Equal(t, "boutique.com", *shop.CustomDomain)
 			return nil
 		})
+
+	// ✅ AJOUT CRITIQUE : Création réussie du collaborateur propriétaire
+	mockCollabRepo.EXPECT().
+		Create(ctx, gomock.Any()).
+		Return(nil)
 
 	shop, err := usecase.Execute(ctx, "Ma Boutique", "ma-boutique", "boutique.com")
 

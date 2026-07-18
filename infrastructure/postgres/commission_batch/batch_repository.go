@@ -416,16 +416,18 @@ func (r *CommissionBatchRepositoryPostgres) getDailyStatsFallback(
 }
 
 // ============================================================
-// VÉRIFICATION DE L'INTERFACE
+// 🆕 FIX DASHBOARD : Commission mensuelle par boutique
 // ============================================================
-
 // GetMonthlyCommissionByShop retourne le total des commissions collectées ce mois-ci
+// 🆕 FIX : commission_batches est un journal global des runs du scheduler et n'a pas de colonne shop_id.
+// La vraie source de vérité par boutique est wallet_transactions, où chaque prélèvement de commission
+// génère une ligne transaction_type = 'commission_debit' liée au shop_id concerné.
 func (r *CommissionBatchRepositoryPostgres) GetMonthlyCommissionByShop(ctx context.Context, shopID string) (int64, error) {
 	query := `
-		SELECT COALESCE(SUM(collected_commission_cents), 0)
-		FROM commission_batches
-		WHERE shop_id = $1 
-		  AND status = 'completed'
+		SELECT COALESCE(SUM(amount_cents), 0)
+		FROM wallet_transactions
+		WHERE shop_id = $1
+		  AND transaction_type = 'commission_debit'
 		  AND created_at >= DATE_TRUNC('month', CURRENT_DATE)
 	`
 

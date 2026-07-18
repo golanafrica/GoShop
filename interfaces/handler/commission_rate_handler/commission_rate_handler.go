@@ -8,6 +8,7 @@ import (
 	appscheduler "Goshop/application/scheduler"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/interfaces/utils" // 🆕 AJOUT : Pour utiliser utils.NewAppError
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -61,7 +62,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return &AppError{Code: "INVALID_PAYLOAD", Message: "Invalid request body", Status: http.StatusBadRequest}
+		return utils.NewAppError("INVALID_PAYLOAD", "Invalid request body", http.StatusBadRequest)
 	}
 
 	// Valider le type de transaction
@@ -75,12 +76,12 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !validTypes[req.TransactionType] {
-		return &AppError{Code: "INVALID_TRANSACTION_TYPE", Message: "Invalid transaction type", Status: http.StatusBadRequest}
+		return utils.NewAppError("INVALID_TRANSACTION_TYPE", "Invalid transaction type", http.StatusBadRequest)
 	}
 
 	// Valider le taux (max 15% = 1500 bps, BCEAO)
 	if req.RateBps < 0 || req.RateBps > 1500 {
-		return &AppError{Code: "INVALID_RATE", Message: "Rate must be between 0 and 1500 bps (15%)", Status: http.StatusBadRequest}
+		return utils.NewAppError("INVALID_RATE", "Rate must be between 0 and 1500 bps (15%)", http.StatusBadRequest)
 	}
 
 	// Upsert
@@ -98,7 +99,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		if err := h.rateRepo.Create(ctx, rate); err != nil {
 			logger.Error().Err(err).Msg("Failed to upsert rate")
-			return &AppError{Code: "RATE_UPSERT_FAILED", Message: "Failed to update rate", Status: http.StatusInternalServerError}
+			return utils.NewAppError("RATE_UPSERT_FAILED", "Failed to update rate", http.StatusInternalServerError)
 		}
 	}
 
@@ -125,13 +126,14 @@ func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request)
 
 	shopID := r.URL.Query().Get("shop_id")
 	if shopID == "" {
-		return &AppError{Code: "MISSING_SHOP_ID", Message: "shop_id is required", Status: http.StatusBadRequest}
+		// ✅ FIX : Utiliser utils.NewAppError pour que le middleware le reconnaisse et renvoie un 400
+		return utils.NewAppError("MISSING_SHOP_ID", "shop_id is required", http.StatusBadRequest)
 	}
 
 	rates, err := h.rateRepo.FindByShop(ctx, shopID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to fetch rates")
-		return &AppError{Code: "RATES_FETCH_FAILED", Message: "Failed to fetch rates", Status: http.StatusInternalServerError}
+		return utils.NewAppError("RATES_FETCH_FAILED", "Failed to fetch rates", http.StatusInternalServerError)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -219,19 +221,4 @@ func (h *CommissionRateHandler) TriggerCreditCollection(w http.ResponseWriter, r
 		"message": "Credit collection triggered in background",
 	})
 	return nil
-}
-
-// ============================================================
-// ERREURS
-// ============================================================
-
-// AppError représente une erreur d'application
-type AppError struct {
-	Code    string
-	Message string
-	Status  int
-}
-
-func (e *AppError) Error() string {
-	return e.Message
 }

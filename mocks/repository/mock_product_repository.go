@@ -100,6 +100,21 @@ func (mr *MockProductRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockProductRepository)(nil).FindByID), ctx, id)
 }
 
+// FindPublicProducts mocks base method.
+func (m *MockProductRepository) FindPublicProducts(ctx context.Context, limit, offset int) ([]*repository.PublicProduct, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPublicProducts", ctx, limit, offset)
+	ret0, _ := ret[0].([]*repository.PublicProduct)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPublicProducts indicates an expected call of FindPublicProducts.
+func (mr *MockProductRepositoryMockRecorder) FindPublicProducts(ctx, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPublicProducts", reflect.TypeOf((*MockProductRepository)(nil).FindPublicProducts), ctx, limit, offset)
+}
+
 // Update mocks base method.
 func (m *MockProductRepository) Update(ctx context.Context, product *entity.Product) (*entity.Product, error) {
 	m.ctrl.T.Helper()

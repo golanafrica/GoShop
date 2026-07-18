@@ -15,17 +15,24 @@ import (
 
 // CreateShopUsecase crée une nouvelle boutique
 type CreateShopUsecase struct {
-	shopRepo repository.ShopRepository
+	shopRepo   repository.ShopRepository
+	collabRepo repository.ShopCollaboratorRepository // ✅ AJOUT : Pour inscrire le propriétaire comme admin
 }
 
-func NewCreateShopUsecase(shopRepo repository.ShopRepository) *CreateShopUsecase {
-	return &CreateShopUsecase{shopRepo: shopRepo}
+func NewCreateShopUsecase(
+	shopRepo repository.ShopRepository,
+	collabRepo repository.ShopCollaboratorRepository, // ✅ AJOUT
+) *CreateShopUsecase {
+	return &CreateShopUsecase{
+		shopRepo:   shopRepo,
+		collabRepo: collabRepo,
+	}
 }
 
 func (uc *CreateShopUsecase) Execute(ctx context.Context, name, slug, customDomain string) (*entity.Shop, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// ✅ Récupérer l'user_id via utils (bonne clé de contexte)
+	// ✅ Récupérer l'user_id via utils
 	userID, ok := utils.GetUserID(ctx)
 	if !ok || userID == "" {
 		return nil, fmt.Errorf("user not authenticated")
@@ -76,14 +83,65 @@ func (uc *CreateShopUsecase) Execute(ctx context.Context, name, slug, customDoma
 		return nil, fmt.Errorf("failed to save shop: %w", err)
 	}
 
+	// ============================================================
+	// ✅ FIX CRITIQUE : Insérer automatiquement le propriétaire comme shop_admin
+	// ============================================================
+
+	// 1. Définir les permissions complètes pour le propriétaire
+	ownerPermissions := entity.ShopPermissions{
+		CanManageProducts:  true,
+		CanViewProducts:    true,
+		CanManageOrders:    true,
+		CanViewOrders:      true,
+		CanManageCustomers: true,
+		CanViewCustomers:   true,
+		CanViewPayments:    true,
+		CanWithdraw:        true,
+		CanViewReports:     true,
+		CanManageSettings:  true,
+	}
+
+	// 2. Créer l'entité collaborateur (invitedBy = lui-même)
+	collab, err := entity.NewShopCollaborator(
+		shop.ID,
+		userID,
+		entity.ShopRoleShopAdmin,
+		ownerPermissions,
+		userID,
+	)
+
+	if err != nil {
+		logger.Error().Err(err).
+			Str("shop_id", shop.ID.String()).
+			Str("user_id", userID).
+			Msg("CRITICAL: Failed to create owner collaborator entity")
+	} else {
+		// 3. Marquer comme accepté d'office (pas besoin d'invitation pour le propriétaire)
+		collab.MarkAccepted()
+
+		// 4. Sauvegarder en base de données
+		if err := uc.collabRepo.Create(ctx, collab); err != nil {
+			logger.Error().Err(err).
+				Str("shop_id", shop.ID.String()).
+				Str("user_id", userID).
+				Msg("CRITICAL: Failed to save owner collaborator to DB. Owner may not be able to manage shop employees.")
+			// Note: On ne retourne pas d'erreur ici pour ne pas bloquer la création de la boutique,
+			// mais l'erreur est loguée de façon très visible pour un rattrapage manuel si nécessaire.
+		}
+	}
+
 	logger.Info().
 		Str("shop_id", shop.ID.String()).
-		Str("shop_slug", shop.Slug).
+		Str("owner_id", userID).
 		Dur("duration_ms", time.Since(start)).
-		Msg("Shop created successfully")
+		Msg("Shop created successfully with owner as shop_admin")
 
 	return shop, nil
 }
+
+// ============================================================
+// LIST SHOPS
+// ============================================================
 
 // ListShopsUsecase liste les boutiques d'un utilisateur
 type ListShopsUsecase struct {
@@ -97,7 +155,6 @@ func NewListShopsUsecase(shopRepo repository.ShopRepository) *ListShopsUsecase {
 func (uc *ListShopsUsecase) Execute(ctx context.Context) ([]*entity.Shop, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// ✅ Récupérer l'user_id via utils (bonne clé de contexte)
 	userID, ok := utils.GetUserID(ctx)
 	if !ok || userID == "" {
 		return nil, fmt.Errorf("user not authenticated")
@@ -111,6 +168,10 @@ func (uc *ListShopsUsecase) Execute(ctx context.Context) ([]*entity.Shop, error)
 	logger.Debug().Int("shops_count", len(shops)).Msg("Shops listed successfully")
 	return shops, nil
 }
+
+// ============================================================
+// UPDATE SHOP
+// ============================================================
 
 // UpdateShopUsecase met à jour une boutique
 type UpdateShopUsecase struct {
@@ -131,7 +192,6 @@ func (uc *UpdateShopUsecase) Execute(
 ) (*entity.Shop, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// ✅ Récupérer l'user_id via utils (bonne clé de contexte)
 	userID, ok := utils.GetUserID(ctx)
 	if !ok || userID == "" {
 		return nil, fmt.Errorf("user not authenticated")

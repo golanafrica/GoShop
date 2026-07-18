@@ -18,6 +18,7 @@ import (
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
+	productuscase "Goshop/application/usecase/product_uscase" // 🆕 AJOUT v3.6.0
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -369,7 +370,8 @@ func (a *App) setupRouter() {
 	)
 
 	// Shop Usecases
-	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo)
+	// 🆕 Injection du shopCollabRepo pour que le créateur de la boutique soit automatiquement shop_admin
+	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo, shopCollabRepo)
 	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
 	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
 
@@ -629,7 +631,12 @@ func (a *App) setupRouter() {
 		batchRepo,
 	)
 
+	// 🆕 v3.6.0 : PUBLIC PRODUCT CATALOG USECASE & HANDLER
+	listPublicProductsUC := productuscase.NewListPublicProductsUsecase(postgreProductRepo)
+	publicProductHandler := productHandler.NewPublicProductHandler(listPublicProductsUC)
+
 	a.Logger.Info().Msg("✅ v3.5.0 Credit & Merchant Overview usecases initialized")
+	a.Logger.Info().Msg("✅ v3.6.0 Public Product Catalog usecase initialized")
 
 	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
 	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
@@ -996,7 +1003,7 @@ func (a *App) setupRouter() {
 		getAPIKeyStatsUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview)")
+	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1022,6 +1029,9 @@ func (a *App) setupRouter() {
 	r.Get("/help", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Goshop API est en ligne !"))
 	})
+
+	// 🆕 v3.6.0 : Catalogue public (Pas d'authentification requise)
+	r.Get("/api/public/products", middl.ErrorHandler(publicProductHandler.GetPublicProducts))
 
 	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/swagger/*", httpSwagger.Handler())
@@ -1299,7 +1309,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management + Merchant Overview)")
+		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management + Merchant Overview + Public Products)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
