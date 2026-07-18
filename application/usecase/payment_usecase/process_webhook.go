@@ -197,6 +197,14 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				logger.Error().Err(err).Msg("Failed to mark contract down payment as paid")
 				return fmt.Errorf("%w: mark down payment paid: %v", ErrWebhookProcessing, err)
 			}
+
+			// 🆕 FIX : créditer le wallet marchand pour l'apport initial, comme pour les échéances.
+			// Sans ça, l'argent de l'apport ne parvient jamais au marchand.
+			if err := uc.creditUpdater.CreditMerchantWallet(ctx, shop.ID.String(), paymentEntity.AmountCents, *paymentEntity.ReferenceID); err != nil {
+				logger.Error().Err(err).Msg("Failed to credit merchant wallet for down payment")
+				// On continue : le contrat est déjà marqué payé, le crédit du wallet peut être rattrapé manuellement/via réconciliation.
+			}
+
 			logger.Info().
 				Str("contract_id", *paymentEntity.ReferenceID).
 				Msg("✅ Credit contract down payment processed successfully")
