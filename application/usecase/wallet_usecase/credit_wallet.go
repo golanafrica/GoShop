@@ -275,6 +275,7 @@ func (uc *CreditWalletUsecase) CreditFromTontine(
 }
 
 // CreditFromCreditPlan crédite le wallet suite à une vente crédit
+// CreditFromCreditPlan crédite le wallet suite à un paiement de plan de crédit
 func (uc *CreditWalletUsecase) CreditFromCreditPlan(
 	ctx context.Context,
 	shopID string,
@@ -284,12 +285,18 @@ func (uc *CreditWalletUsecase) CreditFromCreditPlan(
 	refType := "credit_contract"
 	description := fmt.Sprintf("Credit plan payment from contract %s", contractID)
 
+	// ✅ CORRECTION : Éviter d'envoyer une chaîne vide "" à une colonne UUID
+	var refID *string
+	if contractID != "" {
+		refID = &contractID
+	}
+
 	req := &CreditWalletRequest{
 		ShopID:          shopID,
 		AmountCents:     amountCents,
 		TransactionType: entity.WalletTxSaleCreditPlan,
 		ReferenceType:   &refType,
-		ReferenceID:     &contractID,
+		ReferenceID:     refID, // ✅ Utilise le pointeur conditionnel (sera nil si vide)
 		Description:     &description,
 	}
 

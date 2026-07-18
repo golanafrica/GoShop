@@ -430,6 +430,7 @@ func (a *App) setupRouter() {
 		withdrawalRepo,
 		shopRepo,
 		paymentRegistry,
+		debitWalletUC, // ✅ AJOUT : Injection du usecase de débit pour sécuriser les retraits
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 

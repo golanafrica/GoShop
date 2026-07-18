@@ -413,6 +413,7 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
         FROM payments
         WHERE status = 'success'
           AND (commission_status IS NULL OR commission_status = 'pending')
+          AND (reference_type IS NULL OR reference_type = 'order') -- ✅ AJOUT CRITIQUE : Évite la contamination avec les paiements de crédit/tontine
         ORDER BY completed_at ASC
         LIMIT $1
     `

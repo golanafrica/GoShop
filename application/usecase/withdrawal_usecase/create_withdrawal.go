@@ -6,6 +6,7 @@ import (
 	"os"
 
 	withdrawaldto "Goshop/application/dto/withdrawal_dto"
+	walletusecase "Goshop/application/usecase/wallet_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
@@ -19,18 +20,21 @@ type CreateWithdrawalUsecase struct {
 	shopPaymentRepo ShopPaymentSettingsRepository
 	registry        PaymentRegistry
 	yengaPayFactory YengaPayProviderFactory
+	debitWalletUC   *walletusecase.DebitWalletUsecase // ✅ AJOUT : Pour débiter le wallet avant le retrait
 }
 
 func NewCreateWithdrawalUsecase(
 	withdrawalRepo repository.WithdrawalRepository,
 	shopPaymentRepo ShopPaymentSettingsRepository,
 	registry PaymentRegistry,
+	debitWalletUC *walletusecase.DebitWalletUsecase, // ✅ AJOUT
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
 		shopPaymentRepo: shopPaymentRepo,
 		registry:        registry,
-		yengaPayFactory: defaultYengaPayFactory, // ✅ Factory par défaut
+		yengaPayFactory: defaultYengaPayFactory,
+		debitWalletUC:   debitWalletUC, // ✅ AJOUT
 	}
 }
 
@@ -45,12 +49,14 @@ func NewCreateWithdrawalUsecaseWithFactory(
 	shopPaymentRepo ShopPaymentSettingsRepository,
 	registry PaymentRegistry,
 	yengaPayFactory YengaPayProviderFactory,
+	debitWalletUC *walletusecase.DebitWalletUsecase, // ✅ AJOUT
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
 		shopPaymentRepo: shopPaymentRepo,
 		registry:        registry,
 		yengaPayFactory: yengaPayFactory,
+		debitWalletUC:   debitWalletUC, // ✅ AJOUT
 	}
 }
 
@@ -72,12 +78,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	// ============================================================
 	// 🆕 v4.1.0 : Vérification KYC pour les retraits
 	// ============================================================
-	// Règle : Un marchand doit avoir son KYC vérifié pour effectuer des retraits
-	// - unverified : ❌ Bloqué (doit soumettre documents)
-	// - pending    : ❌ Bloqué (en attente de vérification)
-	// - verified   : ✅ Autorisé
-	// - rejected   : ❌ Bloqué (doit re-soumettre)
-	// ============================================================
 	if !shop.CanWithdraw() {
 		logger.Warn().
 			Str("shop_id", shop.ID.String()).
@@ -86,7 +86,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 			Int64("amount_cents", req.AmountCents).
 			Msg("❌ Retrait bloqué : KYC non vérifié")
 
-		// Message d'erreur informatif pour le marchand
 		var message string
 		switch shop.KYCStatus {
 		case entity.ShopKYCStatusUnverified:
@@ -111,7 +110,24 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Str("kyc_status", string(shop.KYCStatus)).
 		Msg("✅ KYC vérifié, retrait autorisé")
 
-	// 2. Créer l'entité Withdrawal
+	// ============================================================
+	// ✅ 2. NOUVEAU : Débiter le wallet AVANT d'appeler l'API externe
+	// Cela garantit que le marchand a les fonds et évite les découverts non gérés.
+	// ============================================================
+	debitReq := &walletusecase.DebitWalletRequest{
+		ShopID:          shop.ID.String(),
+		AmountCents:     req.AmountCents,
+		TransactionType: entity.WalletTxPayout, // ✅ Le nom exact de la constante dans ton code
+		AllowNegative:   false,                 // ✅ Interdire le négatif pour un retrait
+	}
+
+	_, err = uc.debitWalletUC.Execute(ctx, debitReq)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to debit wallet for withdrawal")
+		return nil, fmt.Errorf("insufficient funds or wallet error: %w", err)
+	}
+
+	// 3. Créer l'entité Withdrawal
 	withdrawal, err := entity.NewWithdrawal(
 		shop.ID,
 		req.AmountCents,
@@ -132,12 +148,12 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		withdrawal.Description = &req.Description
 	}
 
-	// 3. Sauvegarder en statut PENDING
+	// 4. Sauvegarder en statut PENDING
 	if err := uc.withdrawalRepo.Create(ctx, withdrawal); err != nil {
 		return nil, fmt.Errorf("save withdrawal: %w", err)
 	}
 
-	// 4. Récupérer la config Yenga Pay de la boutique (fallback hybride)
+	// 5. Récupérer la config Yenga Pay de la boutique (fallback hybride)
 	var providerConfig payment.YengaPayConfig
 
 	settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID)
@@ -164,16 +180,17 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		logger.Info().Msg("Using global Yenga Pay configuration for cash-out")
 	}
 
-	// 5. Créer un provider Yenga Pay avec la config
+	// 6. Créer un provider Yenga Pay avec la config
 	yengaProvider, err := uc.yengaPayFactory(providerConfig)
 	if err != nil {
+		// ✅ CORRECTION : Marquer le retrait comme échoué si la création du provider échoue
 		if markErr := withdrawal.MarkFailed(err.Error()); markErr == nil {
 			_ = uc.withdrawalRepo.Update(ctx, withdrawal)
 		}
 		return nil, fmt.Errorf("create yenga provider: %w", err)
 	}
 
-	// 6. Appeler l'API cash-out
+	// 7. Appeler l'API cash-out
 	cashOutReq := &payment.CashOutRequest{
 		AmountCents:       req.AmountCents,
 		PaymentMethod:     req.PaymentMethod,
@@ -191,12 +208,11 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("cash-out with Yenga Pay: %w", err)
 	}
 
-	// 7. Mettre à jour le retrait avec la réponse
+	// 8. Mettre à jour le retrait avec la réponse
 	if err := withdrawal.MarkProcessing(cashOutResp.ProviderRef); err != nil {
 		return nil, fmt.Errorf("mark processing: %w", err)
 	}
 
-	// Si le statut est déjà success (peut arriver pour certains cas)
 	if cashOutResp.Status == "SUCCESS" || cashOutResp.Status == "DONE" {
 		if err := withdrawal.MarkSuccess(
 			cashOutResp.Fees*100,
@@ -215,7 +231,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Str("withdrawal_id", withdrawal.ID.String()).
 		Str("provider_ref", cashOutResp.ProviderRef).
 		Str("status", cashOutResp.Status).
-		Msg("Withdrawal created successfully")
+		Msg("Withdrawal created and processed successfully")
 
 	return toResponse(withdrawal), nil
 }
@@ -260,7 +276,6 @@ func toResponse(w *entity.Withdrawal) *withdrawaldto.WithdrawalResponse {
 	return resp
 }
 
-// getEnvOrDefault récupère une variable d'environnement ou retourne une valeur par défaut
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
