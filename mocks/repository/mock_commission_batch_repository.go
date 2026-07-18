@@ -145,6 +145,21 @@ func (mr *MockCommissionBatchRepositoryMockRecorder) GetDailyStats(ctx, days any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDailyStats", reflect.TypeOf((*MockCommissionBatchRepository)(nil).GetDailyStats), ctx, days)
 }
 
+// GetMonthlyCommissionByShop mocks base method.
+func (m *MockCommissionBatchRepository) GetMonthlyCommissionByShop(ctx context.Context, shopID string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMonthlyCommissionByShop", ctx, shopID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMonthlyCommissionByShop indicates an expected call of GetMonthlyCommissionByShop.
+func (mr *MockCommissionBatchRepositoryMockRecorder) GetMonthlyCommissionByShop(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMonthlyCommissionByShop", reflect.TypeOf((*MockCommissionBatchRepository)(nil).GetMonthlyCommissionByShop), ctx, shopID)
+}
+
 // UpdateBatch mocks base method.
 func (m *MockCommissionBatchRepository) UpdateBatch(ctx context.Context, batch *repository.CommissionBatch) error {
 	m.ctrl.T.Helper()

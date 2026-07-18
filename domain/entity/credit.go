@@ -441,6 +441,9 @@ type CreditInstallment struct {
 	CommissionBatchID     *string    `json:"commission_batch_id,omitempty" db:"commission_batch_id"`
 	CommissionCollectedAt *time.Time `json:"commission_collected_at,omitempty" db:"commission_collected_at"`
 
+	// 🆕 v3.5.0 : Suivi des pénalités de score (anti-doublon scheduler)
+	PenaltyAppliedAt *time.Time `json:"penalty_applied_at,omitempty" db:"penalty_applied_at"`
+
 	// 🆕 v3.4.0 : Pour le scheduler (non persisté en DB)
 	// Rempli par le repository lors du JOIN avec credit_contracts
 	ShopID string `json:"shop_id,omitempty" db:"-"`
@@ -516,6 +519,17 @@ func (i *CreditInstallment) MarkCommissionFailed(batchID string, reason string) 
 	now := time.Now().UTC()
 	i.CommissionStatus = CreditCommissionFailed
 	i.CommissionBatchID = &batchID
+	i.UpdatedAt = now
+	return nil
+}
+
+// 🆕 v3.5.0 : MarkPenaltyApplied marque qu'une pénalité de score a été appliquée
+func (i *CreditInstallment) MarkPenaltyApplied() error {
+	if i.PenaltyAppliedAt != nil {
+		return errors.New("penalty already applied for this installment")
+	}
+	now := time.Now().UTC()
+	i.PenaltyAppliedAt = &now
 	i.UpdatedAt = now
 	return nil
 }

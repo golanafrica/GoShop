@@ -26,6 +26,7 @@ import (
 	// 🆕 v3.0.0 : Usecases
 	codusecase "Goshop/application/usecase/cod_usecase"
 	creditusecase "Goshop/application/usecase/credit_usecase"
+	merchantusecase "Goshop/application/usecase/merchant_usecase" // 🆕 AJOUT v3.5.0
 
 	// 🆕 v4.1.0 : Merchant KYC Usecases
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
@@ -115,6 +116,7 @@ import (
 	// 🆕 v3.0.0 : Handlers
 	codhandler "Goshop/interfaces/handler/cod_handler"
 	credithandler "Goshop/interfaces/handler/credit_handler"
+	merchanthandler "Goshop/interfaces/handler/merchant_handler" // 🆕 AJOUT v3.5.0
 	wallethandler "Goshop/interfaces/handler/wallet_handler"
 
 	// 🆕 v3.1.0 : Scheduler Handler
@@ -616,7 +618,18 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	a.Logger.Info().Msg("✅ v3.0.0 Credit usecases initialized (configure, apply, approve, reject, pay_down, pay_installment)")
+	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE
+	getMerchantOverviewUC := merchantusecase.NewGetMerchantOverviewUsecase(
+		postgresOrderRepo,
+		paymentRepo,
+		creditContractRepo,
+		creditInstallmentRepo,
+		walletRepo,
+		freezeRepo,
+		batchRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v3.5.0 Credit & Merchant Overview usecases initialized")
 
 	// ============ 🆕 v4.3.0 : COLLABORATOR USECASES ============
 	invitePlatformUC := collaboratorusecase.NewInvitePlatformCollaboratorUsecase(
@@ -912,6 +925,9 @@ func (a *App) setupRouter() {
 		payInstallmentUC,
 	)
 
+	// 🆕 v3.5.0 : MERCHANT OVERVIEW HANDLER
+	merchantOverviewHandler := merchanthandler.NewMerchantOverviewHandler(getMerchantOverviewUC)
+
 	// ============ 🆕 v3.1.0 : SCHEDULER HANDLER ============
 	schedulerHandler := schedulerhandler.NewSchedulerHandler(
 		commissionSched,
@@ -980,7 +996,7 @@ func (a *App) setupRouter() {
 		getAPIKeyStatsUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys)")
+	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1161,6 +1177,11 @@ func (a *App) setupRouter() {
 			r.Route("/credit", func(r chi.Router) {
 				creditHandler.RegisterRoutes(r)
 			})
+
+			// ============ 🆕 v3.5.0 : MERCHANT OVERVIEW ROUTE ============
+			r.Route("/merchant", func(r chi.Router) {
+				r.Get("/overview", middl.ErrorHandler(merchantOverviewHandler.GetOverview))
+			})
 		})
 
 		// ============================================================
@@ -1278,7 +1299,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management)")
+		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management + Merchant Overview)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

@@ -419,6 +419,25 @@ func (r *CommissionBatchRepositoryPostgres) getDailyStatsFallback(
 // VÉRIFICATION DE L'INTERFACE
 // ============================================================
 
+// GetMonthlyCommissionByShop retourne le total des commissions collectées ce mois-ci
+func (r *CommissionBatchRepositoryPostgres) GetMonthlyCommissionByShop(ctx context.Context, shopID string) (int64, error) {
+	query := `
+		SELECT COALESCE(SUM(collected_commission_cents), 0)
+		FROM commission_batches
+		WHERE shop_id = $1 
+		  AND status = 'completed'
+		  AND created_at >= DATE_TRUNC('month', CURRENT_DATE)
+	`
+
+	var total int64
+	err := r.db.QueryRowContext(ctx, query, shopID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("query monthly commission: %w", err)
+	}
+
+	return total, nil
+}
+
 var _ repository.CommissionBatchRepository = (*CommissionBatchRepositoryPostgres)(nil)
 
 // Silence "imported and not used" pour time

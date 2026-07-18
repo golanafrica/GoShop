@@ -810,3 +810,37 @@ func (r *CreditInstallmentRepositoryInfrastructure) FindDueInstallments(ctx cont
 	}
 	return installments, rows.Err()
 }
+
+// GetMerchantRecoveryStats retourne les statistiques de recouvrement
+func (r *CreditInstallmentRepositoryInfrastructure) GetMerchantRecoveryStats(ctx context.Context, shopID string) (*repository.MerchantRecoveryStats, error) {
+	query := `
+		SELECT 
+			COUNT(*) FILTER (WHERE ci.status = 'paid' AND ci.due_date <= CURRENT_DATE) as paid_count,
+			COUNT(*) FILTER (WHERE ci.status = 'late') as late_count,
+			COALESCE(SUM(ci.amount_cents) FILTER (WHERE ci.status = 'late'), 0) as overdue_amount,
+			COUNT(*) FILTER (WHERE ci.status = 'late') as overdue_count
+		FROM credit_installments ci
+		JOIN credit_contracts cc ON ci.contract_id = cc.id
+		WHERE cc.shop_id = $1
+	`
+
+	var stats repository.MerchantRecoveryStats
+	err := r.queryRowContext(ctx, query, shopID).Scan(
+		&stats.PaidCount,
+		&stats.LateCount,
+		&stats.OverdueAmountCents,
+		&stats.OverdueCount,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("query recovery stats: %w", err)
+	}
+
+	// Calcul du taux de recouvrement
+	totalDue := stats.PaidCount + stats.LateCount
+	if totalDue > 0 {
+		stats.RecoveryRatePercent = float64(stats.PaidCount) / float64(totalDue) * 100
+	}
+
+	return &stats, nil
+}

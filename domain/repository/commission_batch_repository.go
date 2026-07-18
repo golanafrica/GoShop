@@ -72,6 +72,9 @@ type CommissionBatchRepository interface {
 	// Requêtes métier
 	FindPendingProofsForCollection(ctx context.Context, limit int) ([]*entity.CODProof, error)
 	GetDailyStats(ctx context.Context, days int) ([]*DailyCommissionStats, error)
+
+	// GetMonthlyCommissionByShop retourne le total des commissions collectées ce mois-ci pour une boutique
+	GetMonthlyCommissionByShop(ctx context.Context, shopID string) (int64, error)
 }
 
 // DailyCommissionStats représente les stats quotidiennes

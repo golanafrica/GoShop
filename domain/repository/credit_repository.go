@@ -13,6 +13,34 @@ import (
 )
 
 // ============================================================
+// 🆕 v3.5.0 : TYPES POUR LE DASHBOARD MARCHAND
+// ============================================================
+
+type MerchantCreditStats struct {
+	ActiveContractsCount  int
+	TotalFinancedCents    int64
+	TotalOutstandingCents int64
+}
+
+type MerchantRecoveryStats struct {
+	PaidCount           int
+	LateCount           int
+	OverdueAmountCents  int64
+	OverdueCount        int
+	RecoveryRatePercent float64
+}
+
+// ============================================================
+// AJOUTS AUX INTERFACES EXISTANTES
+// ============================================================
+
+// Dans l'interface CreditContractRepository, ajoute :
+// GetMerchantCreditStats(ctx context.Context, shopID string) (*MerchantCreditStats, error)
+
+// Dans l'interface CreditInstallmentRepository, ajoute :
+// GetMerchantRecoveryStats(ctx context.Context, shopID string) (*MerchantRecoveryStats, error)
+
+// ============================================================
 // CREDIT PLAN REPOSITORY
 // ============================================================
 
@@ -107,6 +135,8 @@ type CreditContractRepository interface {
 	// Update met à jour un contrat
 	Update(ctx context.Context, contract *entity.CreditContract) error
 
+	GetMerchantCreditStats(ctx context.Context, shopID string) (*MerchantCreditStats, error)
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) CreditContractRepository
 }
@@ -149,6 +179,8 @@ type CreditInstallmentRepository interface {
 
 	// Update met à jour une échéance
 	Update(ctx context.Context, installment *entity.CreditInstallment) error
+
+	GetMerchantRecoveryStats(ctx context.Context, shopID string) (*MerchantRecoveryStats, error)
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) CreditInstallmentRepository

@@ -205,6 +205,21 @@ func (mr *MockCreditInstallmentRepositoryMockRecorder) FindPendingByContractID(c
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPendingByContractID", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).FindPendingByContractID), ctx, contractID)
 }
 
+// GetMerchantRecoveryStats mocks base method.
+func (m *MockCreditInstallmentRepository) GetMerchantRecoveryStats(ctx context.Context, shopID string) (*repository.MerchantRecoveryStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMerchantRecoveryStats", ctx, shopID)
+	ret0, _ := ret[0].(*repository.MerchantRecoveryStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMerchantRecoveryStats indicates an expected call of GetMerchantRecoveryStats.
+func (mr *MockCreditInstallmentRepositoryMockRecorder) GetMerchantRecoveryStats(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMerchantRecoveryStats", reflect.TypeOf((*MockCreditInstallmentRepository)(nil).GetMerchantRecoveryStats), ctx, shopID)
+}
+
 // SumPendingAmountByContractID mocks base method.
 func (m *MockCreditInstallmentRepository) SumPendingAmountByContractID(ctx context.Context, contractID string) (int64, error) {
 	m.ctrl.T.Helper()

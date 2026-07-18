@@ -161,6 +161,21 @@ func (mr *MockCreditContractRepositoryMockRecorder) FindByShopID(ctx, shopID any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopID", reflect.TypeOf((*MockCreditContractRepository)(nil).FindByShopID), ctx, shopID)
 }
 
+// GetMerchantCreditStats mocks base method.
+func (m *MockCreditContractRepository) GetMerchantCreditStats(ctx context.Context, shopID string) (*repository.MerchantCreditStats, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMerchantCreditStats", ctx, shopID)
+	ret0, _ := ret[0].(*repository.MerchantCreditStats)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMerchantCreditStats indicates an expected call of GetMerchantCreditStats.
+func (mr *MockCreditContractRepositoryMockRecorder) GetMerchantCreditStats(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMerchantCreditStats", reflect.TypeOf((*MockCreditContractRepository)(nil).GetMerchantCreditStats), ctx, shopID)
+}
+
 // Update mocks base method.
 func (m *MockCreditContractRepository) Update(ctx context.Context, contract *entity.CreditContract) error {
 	m.ctrl.T.Helper()

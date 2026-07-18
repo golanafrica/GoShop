@@ -599,3 +599,32 @@ func (r *CreditContractRepositoryInfrastructure) FindCompletedByShopID(ctx conte
 
 	return r.scanContracts(ctx, query, shopID)
 }
+
+// GetMerchantCreditStats retourne les statistiques de crédit pour un marchand
+func (r *CreditContractRepositoryInfrastructure) GetMerchantCreditStats(ctx context.Context, shopID string) (*repository.MerchantCreditStats, error) {
+	query := `
+		SELECT 
+			COUNT(*) FILTER (WHERE status = 'active') as active_contracts,
+			COALESCE(SUM(financed_amount_cents) FILTER (WHERE status = 'active'), 0) as total_financed,
+			COALESCE(SUM(total_amount_cents - down_payment_cents - 
+				(SELECT COALESCE(SUM(amount_cents), 0) 
+				 FROM credit_installments ci 
+				 WHERE ci.contract_id = cc.id AND ci.status = 'paid')
+			) FILTER (WHERE status = 'active'), 0) as total_outstanding
+		FROM credit_contracts cc
+		WHERE shop_id = $1
+	`
+
+	var stats repository.MerchantCreditStats
+	err := r.queryRowContext(ctx, query, shopID).Scan(
+		&stats.ActiveContractsCount,
+		&stats.TotalFinancedCents,
+		&stats.TotalOutstandingCents,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("query credit stats: %w", err)
+	}
+
+	return &stats, nil
+}
