@@ -8,7 +8,7 @@ import (
 	appscheduler "Goshop/application/scheduler"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
-	"Goshop/interfaces/utils" // 🆕 AJOUT : Pour utiliser utils.NewAppError
+	"Goshop/interfaces/utils"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -24,7 +24,7 @@ type CommissionRateHandler struct {
 	rateRepo           repository.CommissionRateRepository
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler
 	tontineSched       *appscheduler.TontineScheduler
-	creditSched        *appscheduler.CreditScheduler // 🆕 v3.4.0
+	creditSched        *appscheduler.CreditScheduler
 }
 
 // NewCommissionRateHandler crée une nouvelle instance
@@ -32,13 +32,13 @@ func NewCommissionRateHandler(
 	rateRepo repository.CommissionRateRepository,
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler,
 	tontineSched *appscheduler.TontineScheduler,
-	creditSched *appscheduler.CreditScheduler, // 🆕 v3.4.0
+	creditSched *appscheduler.CreditScheduler,
 ) *CommissionRateHandler {
 	return &CommissionRateHandler{
 		rateRepo:           rateRepo,
 		onlinePaymentSched: onlinePaymentSched,
 		tontineSched:       tontineSched,
-		creditSched:        creditSched, // 🆕 v3.4.0
+		creditSched:        creditSched,
 	}
 }
 
@@ -199,7 +199,6 @@ func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, 
 
 // TriggerCreditCollection déclenche manuellement la collecte credit
 // POST /api/admin/commission-rates/trigger-credit
-// 🆕 v3.4.0
 func (h *CommissionRateHandler) TriggerCreditCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 	logger.Info().Msg("💰 Manual credit collection triggered")
