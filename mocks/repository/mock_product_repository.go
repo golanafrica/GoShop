@@ -70,21 +70,6 @@ func (mr *MockProductRepositoryMockRecorder) Delete(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockProductRepository)(nil).Delete), ctx, id)
 }
 
-// FindAll mocks base method.
-func (m *MockProductRepository) FindAll(ctx context.Context, limit, offset int) ([]*entity.Product, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindAll", ctx, limit, offset)
-	ret0, _ := ret[0].([]*entity.Product)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindAll indicates an expected call of FindAll.
-func (mr *MockProductRepositoryMockRecorder) FindAll(ctx, limit, offset any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAll", reflect.TypeOf((*MockProductRepository)(nil).FindAll), ctx, limit, offset)
-}
-
 // FindByID mocks base method.
 func (m *MockProductRepository) FindByID(ctx context.Context, id string) (*entity.Product, error) {
 	m.ctrl.T.Helper()
@@ -101,18 +86,33 @@ func (mr *MockProductRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Call 
 }
 
 // FindPublicProducts mocks base method.
-func (m *MockProductRepository) FindPublicProducts(ctx context.Context, limit, offset int) ([]*repository.PublicProduct, error) {
+func (m *MockProductRepository) FindPublicProducts(ctx context.Context, filter repository.ProductFilter) ([]*repository.PublicProduct, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindPublicProducts", ctx, limit, offset)
+	ret := m.ctrl.Call(m, "FindPublicProducts", ctx, filter)
 	ret0, _ := ret[0].([]*repository.PublicProduct)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // FindPublicProducts indicates an expected call of FindPublicProducts.
-func (mr *MockProductRepositoryMockRecorder) FindPublicProducts(ctx, limit, offset any) *gomock.Call {
+func (mr *MockProductRepositoryMockRecorder) FindPublicProducts(ctx, filter any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPublicProducts", reflect.TypeOf((*MockProductRepository)(nil).FindPublicProducts), ctx, limit, offset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPublicProducts", reflect.TypeOf((*MockProductRepository)(nil).FindPublicProducts), ctx, filter)
+}
+
+// List mocks base method.
+func (m *MockProductRepository) List(ctx context.Context, filter repository.ProductFilter) ([]*entity.Product, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "List", ctx, filter)
+	ret0, _ := ret[0].([]*entity.Product)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// List indicates an expected call of List.
+func (mr *MockProductRepositoryMockRecorder) List(ctx, filter any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockProductRepository)(nil).List), ctx, filter)
 }
 
 // Update mocks base method.

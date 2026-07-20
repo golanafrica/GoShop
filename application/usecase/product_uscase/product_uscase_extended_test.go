@@ -9,8 +9,9 @@ import (
 	dto "Goshop/application/dto/product_dto"
 	productuscase "Goshop/application/usecase/product_uscase"
 	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	"Goshop/interfaces/utils"
-	"Goshop/mocks/repository"
+	repositoryMocks "Goshop/mocks/repository"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
@@ -21,15 +22,15 @@ import (
 // ============================================================
 
 // ============================================================
-// TESTS : ListProductUsecase (0% -> 100%)
+// TESTS : ListProductUsecase (avec ProductFilter)
 // ============================================================
 
 func TestListProductUsecase_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewListProductUsecase(mockRepo, mockTxManager)
 
 	products := []*entity.Product{
@@ -44,10 +45,16 @@ func TestListProductUsecase_Success(t *testing.T) {
 		},
 	}
 
-	mockRepo.EXPECT().FindAll(gomock.Any(), 10, 0).Return(products, nil)
+	// ✅ CORRECTION : Utilisation de List() avec ProductFilter au lieu de FindAll()
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).Return(products, nil)
 
 	ctx := context.Background()
-	result, err := uc.Execute(ctx, 10, 0)
+	req := &dto.ListProductsRequest{
+		Search: "",
+		Limit:  10,
+		Offset: 0,
+	}
+	result, err := uc.Execute(ctx, req)
 
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
@@ -58,32 +65,71 @@ func TestListProductUsecase_EmptyList(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewListProductUsecase(mockRepo, mockTxManager)
 
-	mockRepo.EXPECT().FindAll(gomock.Any(), 10, 0).Return([]*entity.Product{}, nil)
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).Return([]*entity.Product{}, nil)
 
 	ctx := context.Background()
-	result, err := uc.Execute(ctx, 10, 0)
+	req := &dto.ListProductsRequest{Limit: 10, Offset: 0}
+	result, err := uc.Execute(ctx, req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result)
 }
 
+func TestListProductUsecase_WithSearchFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	uc := productuscase.NewListProductUsecase(mockRepo, mockTxManager)
+
+	products := []*entity.Product{
+		{ID: "p1", Name: "Moto Yamaha", PriceCents: 500000, Stock: 5, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+
+	// Vérification que le filtre est correctement passé au repository
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, filter repository.ProductFilter) ([]*entity.Product, error) {
+			assert.Equal(t, "moto", filter.Search)
+			assert.Equal(t, int64(10000), filter.MinPriceCents)
+			assert.Equal(t, int64(1000000), filter.MaxPriceCents)
+			assert.Equal(t, 10, filter.Limit)
+			return products, nil
+		})
+
+	ctx := context.Background()
+	req := &dto.ListProductsRequest{
+		Search:        "moto",
+		MinPriceCents: 10000,
+		MaxPriceCents: 1000000,
+		Limit:         10,
+		Offset:        0,
+	}
+	result, err := uc.Execute(ctx, req)
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "Moto Yamaha", result[0].Name)
+}
+
 func TestListProductUsecase_RepositoryError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewListProductUsecase(mockRepo, mockTxManager)
 
-	mockRepo.EXPECT().FindAll(gomock.Any(), 10, 0).Return(nil, errors.New("db error"))
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
 	ctx := context.Background()
-	result, err := uc.Execute(ctx, 10, 0)
+	req := &dto.ListProductsRequest{Limit: 10, Offset: 0}
+	result, err := uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -97,8 +143,8 @@ func TestCreateProductUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("tx error"))
@@ -116,10 +162,10 @@ func TestCreateProductUsecase_CreateError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -140,17 +186,17 @@ func TestCreateProductUsecase_CommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewCreateProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit error"))
-	mockTx.EXPECT().Rollback().Return(nil) // ✅ Ajouté : le defer appelle Rollback si err != nil
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	ctx := context.Background()
 	input := dto.CreateProductRequest{Name: "Test", PriceCents: 100, Stock: 10}
@@ -169,8 +215,8 @@ func TestDeleteProductUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewDeleteProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("tx error"))
@@ -186,10 +232,10 @@ func TestDeleteProductUsecase_DeleteError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewDeleteProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -209,10 +255,10 @@ func TestDeleteProductUsecase_CommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewDeleteProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -220,7 +266,7 @@ func TestDeleteProductUsecase_CommitError(t *testing.T) {
 	mockRepoWithTx.EXPECT().FindByID(gomock.Any(), "p1").Return(&entity.Product{ID: "p1", Name: "Test"}, nil)
 	mockRepoWithTx.EXPECT().Delete(gomock.Any(), "p1").Return(nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit error"))
-	mockTx.EXPECT().Rollback().Return(nil) // ✅ Ajouté
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	ctx := context.Background()
 	err := uc.Execute(ctx, "p1")
@@ -230,15 +276,15 @@ func TestDeleteProductUsecase_CommitError(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : UpdateProductUsecase (Branches d'erreur transaction & logChanges)
+// TESTS : UpdateProductUsecase (Branches d'erreur transaction)
 // ============================================================
 
 func TestUpdateProductUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewUpdateProductUsecase(mockRepo, mockTxManager)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("tx error"))
@@ -256,10 +302,10 @@ func TestUpdateProductUsecase_CommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewUpdateProductUsecase(mockRepo, mockTxManager)
 
 	existing := &entity.Product{ID: "p1", Name: "Old", PriceCents: 100, Stock: 10, CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -270,7 +316,7 @@ func TestUpdateProductUsecase_CommitError(t *testing.T) {
 	mockRepoWithTx.EXPECT().FindByID(gomock.Any(), "p1").Return(existing, nil)
 	mockRepoWithTx.EXPECT().Update(gomock.Any(), gomock.Any()).Return(updated, nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit error"))
-	mockTx.EXPECT().Rollback().Return(nil) // ✅ Ajouté
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	ctx := context.Background()
 	input := &entity.Product{ID: "p1", Name: "New", PriceCents: 200, Stock: 20}
@@ -285,10 +331,10 @@ func TestUpdateProductUsecase_NoChangesDetected(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
-	mockTx := repository.NewMockTx(ctrl)
-	mockRepoWithTx := repository.NewMockProductRepository(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
+	mockTx := repositoryMocks.NewMockTx(ctrl)
+	mockRepoWithTx := repositoryMocks.NewMockProductRepository(ctrl)
 	uc := productuscase.NewUpdateProductUsecase(mockRepo, mockTxManager)
 
 	now := time.Now()
@@ -301,7 +347,6 @@ func TestUpdateProductUsecase_NoChangesDetected(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(nil)
 
 	ctx := context.Background()
-	// Input identique à existing pour déclencher "No changes detected" dans logChanges
 	input := &entity.Product{ID: "p1", Name: "Same", Description: "Same", PriceCents: 100, Stock: 10}
 
 	result, err := uc.Execute(ctx, input)
@@ -318,8 +363,8 @@ func TestGetProductByIdUsecase_NotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockRepo := repository.NewMockProductRepository(ctrl)
-	mockTxManager := repository.NewMockTxManager(ctrl)
+	mockRepo := repositoryMocks.NewMockProductRepository(ctrl)
+	mockTxManager := repositoryMocks.NewMockTxManager(ctrl)
 	uc := productuscase.NewGetProductByIdUsecase(mockRepo, mockTxManager)
 
 	mockRepo.EXPECT().FindByID(gomock.Any(), "p1").Return(nil, errors.New("not found"))

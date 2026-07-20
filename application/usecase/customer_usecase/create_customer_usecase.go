@@ -10,25 +10,26 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	userrepository "Goshop/domain/repository/user_repository" // ✅ AJOUTÉ
 
 	"github.com/rs/zerolog"
 )
 
 type CreateCustomerUsecase struct {
 	repo      repository.CustomerRepositoryInterface
+	userRepo  userrepository.UserRepository // ✅ AJOUTÉ
 	txManager repository.TxManager
-	//logger    *setupLogging.Logger
 }
 
 func NewCreateCustomerUsecase(
 	repo repository.CustomerRepositoryInterface,
+	userRepo userrepository.UserRepository, // ✅ AJOUTÉ
 	txManager repository.TxManager,
-	//logger *setupLogging.Logger,
 ) *CreateCustomerUsecase {
 	return &CreateCustomerUsecase{
 		repo:      repo,
+		userRepo:  userRepo, // ✅ AJOUTÉ
 		txManager: txManager,
-		//logger:    logger.WithComponent("create_customer"),
 	}
 }
 
@@ -50,7 +51,7 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 		Str("customer_name", customer.FirstName+" "+customer.LastName).
 		Msg("Starting customer creation process")
 
-		// 1. Validation avant transaction
+	// 1. Validation avant transaction
 	logger.Debug().
 		Str("operation", "execute").
 		Str("customer_email", customer.Email).
@@ -107,12 +108,27 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 		Str("customer_email", customer.Email).
 		Msg("Repository attached to transaction")
 
-		// 4. Vérifier si l'email existe déjà - TEMPORAIREMENT COMMENTÉ POUR LES TESTS
-		// 4. Vérifier si l'email existe déjà - AVEC LA NOUVELLE MÉTHODE
+	// 4. ✅ NOUVEAU : Vérifier si un UTILISATEUR existe déjà avec cet email pour lier les comptes
 	logger.Debug().
 		Str("operation", "execute").
 		Str("email", customer.Email).
-		Msg("Checking if email already exists using FindByEmail")
+		Msg("Checking if a User account exists to link with Customer")
+
+	existingUser, userErr := uc.userRepo.FindUserByEmail(customer.Email)
+	if userErr == nil && existingUser != nil {
+		// L'utilisateur existe (il s'est inscrit lui-même), on lie les comptes
+		customer.UserID = existingUser.ID
+		logger.Info().
+			Str("user_id", existingUser.ID).
+			Str("customer_email", customer.Email).
+			Msg("Linked new Customer to existing User account")
+	}
+
+	// 5. Vérifier si le CUSTOMER existe déjà (pour éviter les doublons dans la même boutique)
+	logger.Debug().
+		Str("operation", "execute").
+		Str("email", customer.Email).
+		Msg("Checking if customer already exists in this shop using FindByEmail")
 
 	existingCustomer, findErr := repo.FindByEmail(ctx, customer.Email)
 	if findErr == nil && existingCustomer != nil {
@@ -120,8 +136,8 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 			Str("operation", "execute").
 			Str("email", customer.Email).
 			Str("existing_customer_id", existingCustomer.ID).
-			Msg("Customer with this email already exists")
-		return nil, errors.New("customer with this email already exists")
+			Msg("Customer with this email already exists in this shop")
+		return nil, errors.New("customer with this email already exists in this shop")
 	}
 
 	if findErr != nil && !errors.Is(findErr, sql.ErrNoRows) {
@@ -139,10 +155,10 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 			Msg("Email is unique, can proceed with creation")
 	}
 
-	// 5. Normaliser les données
+	// 6. Normaliser les données
 	uc.normalizeCustomerData(ctx, customer)
 
-	// 6. Création du client
+	// 7. Création du client
 	logger.Debug().
 		Str("operation", "execute").
 		Str("customer_email", customer.Email).
@@ -166,7 +182,7 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 		Str("customer_email", createdCustomer.Email).
 		Msg("Customer created successfully in repository")
 
-	// 7. Commit de la transaction
+	// 8. Commit de la transaction
 	logger.Debug().
 		Str("operation", "execute").
 		Str("customer_id", createdCustomer.ID).
@@ -188,7 +204,7 @@ func (uc *CreateCustomerUsecase) Execute(ctx context.Context, customer *entity.C
 		Str("customer_id", createdCustomer.ID).
 		Msg("Transaction committed successfully")
 
-	// 8. Log de succès
+	// 9. Log de succès
 	duration := time.Since(start)
 	logger.Info().
 		Str("customer_id", createdCustomer.ID).

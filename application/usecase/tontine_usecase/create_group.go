@@ -126,12 +126,9 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 		creatorCustomerID = nil
 	}
 
-	// 8. Calculer le montant par cycle
-	amountPerCycle, remainder := entity.CalculateAmountPerCycle(product.PriceCents, req.TotalCycles)
-	if remainder > 0 {
-		// Arrondi au centime supérieur pour le dernier cycle
-		amountPerCycle++
-	}
+	// 8. Calculer le montant par cycle (Arrondi au supérieur pour éviter les pertes de centimes)
+	// Formule mathématique sûre : (Total + Cycles - 1) / Cycles
+	amountPerCycle := (product.PriceCents + int64(req.TotalCycles) - 1) / int64(req.TotalCycles)
 
 	// 9. Générer un code d'invitation unique
 	inviteCode, err := generateInviteCode(8)

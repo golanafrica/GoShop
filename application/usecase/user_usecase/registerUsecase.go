@@ -87,14 +87,14 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 		return nil, utils.ErrInternalServer
 	}
 
-	// 3. Création de l'entité (VALEURS EN DUR POUR ÊTRE 100% SÛR)
+	// 3. Création de l'entité
 	user := &userentity.UserEntity{
 		ID:                  uuid.NewString(),
 		Email:               email,
 		Password:            string(hashed),
-		Role:                "merchant", // ✅ Valeur en dur
-		Active:              true,       // ✅ Valeur en dur
-		Status:              "active",   // ✅ Valeur en dur (c'est ce qui corrige l'erreur)
+		Role:                "user", // ✅ CORRIGÉ : Était "merchant". Un utilisateur qui s'inscrit publiquement est un client par défaut.
+		Active:              true,
+		Status:              "active",
 		FailedLoginAttempts: 0,
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),

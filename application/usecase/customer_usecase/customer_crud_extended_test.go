@@ -8,6 +8,7 @@ import (
 
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/entity"
+	"Goshop/mocks/repository"
 	mockrepo "Goshop/mocks/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -37,8 +38,8 @@ func TestCreateCustomerUsecase_EmailAlreadyExists(t *testing.T) {
 
 	existingCustomer := &entity.Customer{ID: "existing-id", Email: "john@mail.com"}
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(existingCustomer, nil)
-
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
 	result, err := uc.Execute(context.Background(), customer)
@@ -66,7 +67,8 @@ func TestCreateCustomerUsecase_FindByEmailError(t *testing.T) {
 	// ✅ AJOUTER : Le code continue et appelle Create (qui échoue aussi)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
 	result, err := uc.Execute(context.Background(), customer)
@@ -91,7 +93,8 @@ func TestCreateCustomerUsecase_CreateError(t *testing.T) {
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
 	result, err := uc.Execute(context.Background(), customer)
@@ -117,7 +120,8 @@ func TestCreateCustomerUsecase_CommitError(t *testing.T) {
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.Customer{ID: "c123"}, nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
 	result, err := uc.Execute(context.Background(), customer)
@@ -133,7 +137,8 @@ func TestCreateCustomerUsecase_InvalidEmail(t *testing.T) {
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "invalid-email"}
 	result, err := uc.Execute(context.Background(), customer)
@@ -150,7 +155,8 @@ func TestCreateCustomerUsecase_EmptyLastName(t *testing.T) {
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockTxManager)
+	mockUserRepo := new(repository.MockUserRepository)
+	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "", Email: "john@mail.com"}
 	result, err := uc.Execute(context.Background(), customer)

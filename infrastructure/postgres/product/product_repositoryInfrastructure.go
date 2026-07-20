@@ -45,7 +45,6 @@ func (pr *ProductRepositoryInfrastructure) execContext(ctx context.Context, quer
 	return pr.db.ExecContext(ctx, query, args...)
 }
 
-// getShopID extrait le shop_id du contexte (multi-tenant)
 func (pr *ProductRepositoryInfrastructure) getShopID(ctx context.Context) (string, error) {
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
@@ -54,7 +53,6 @@ func (pr *ProductRepositoryInfrastructure) getShopID(ctx context.Context) (strin
 	return shop.ID.String(), nil
 }
 
-// Create crée un produit avec le shop_id du contexte
 func (pr *ProductRepositoryInfrastructure) Create(ctx context.Context, product *entity.Product) error {
 	shopID, err := pr.getShopID(ctx)
 	if err != nil {
@@ -69,7 +67,6 @@ func (pr *ProductRepositoryInfrastructure) Create(ctx context.Context, product *
 		Scan(&product.ID, &product.CreatedAt, &product.UpdatedAt)
 }
 
-// FindByID trouve un produit par ID en respectant le tenant
 func (pr *ProductRepositoryInfrastructure) FindByID(ctx context.Context, id string) (*entity.Product, error) {
 	shopID, err := pr.getShopID(ctx)
 	if err != nil {
@@ -94,30 +91,54 @@ func (pr *ProductRepositoryInfrastructure) FindByID(ctx context.Context, id stri
 	return product, nil
 }
 
-// FindAll retourne les produits du shop courant
-func (pr *ProductRepositoryInfrastructure) FindAll(ctx context.Context, limit, offset int) ([]*entity.Product, error) {
+// List implémente la recherche plein texte (FTS) et les filtres de prix
+func (pr *ProductRepositoryInfrastructure) List(ctx context.Context, filter repository.ProductFilter) ([]*entity.Product, error) {
 	shopID, err := pr.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 100 {
 		limit = 100
 	}
+	offset := filter.Offset
 	if offset < 0 {
 		offset = 0
 	}
 
 	query := `SELECT id, name, description, price_cents, stock, created_at, updated_at 
               FROM products 
-              WHERE shop_id = $1
-              ORDER BY created_at DESC 
-              LIMIT $2 OFFSET $3`
+              WHERE shop_id = $1`
+	var args []interface{}
+	args = append(args, shopID)
+	argIdx := 2
 
-	rows, err := pr.queryContext(ctx, query, shopID, limit, offset)
+	if filter.Search != "" {
+		query += fmt.Sprintf(" AND search_vector @@ plainto_tsquery('french', $%d)", argIdx)
+		args = append(args, filter.Search)
+		argIdx++
+	}
+
+	if filter.MinPriceCents > 0 {
+		query += fmt.Sprintf(" AND price_cents >= $%d", argIdx)
+		args = append(args, filter.MinPriceCents)
+		argIdx++
+	}
+
+	if filter.MaxPriceCents > 0 {
+		query += fmt.Sprintf(" AND price_cents <= $%d", argIdx)
+		args = append(args, filter.MaxPriceCents)
+		argIdx++
+	}
+
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := pr.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +147,7 @@ func (pr *ProductRepositoryInfrastructure) FindAll(ctx context.Context, limit, o
 	var products []*entity.Product
 	for rows.Next() {
 		p := &entity.Product{}
-		err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.PriceCents,
-			&p.Stock, &p.CreatedAt, &p.UpdatedAt)
+		err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.PriceCents, &p.Stock, &p.CreatedAt, &p.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +157,6 @@ func (pr *ProductRepositoryInfrastructure) FindAll(ctx context.Context, limit, o
 	return products, rows.Err()
 }
 
-// Update met à jour un produit en respectant le tenant
 func (pr *ProductRepositoryInfrastructure) Update(ctx context.Context, product *entity.Product) (*entity.Product, error) {
 	shopID, err := pr.getShopID(ctx)
 	if err != nil {
@@ -166,7 +185,6 @@ func (pr *ProductRepositoryInfrastructure) Update(ctx context.Context, product *
 	return updated, nil
 }
 
-// Delete supprime un produit en respectant le tenant
 func (pr *ProductRepositoryInfrastructure) Delete(ctx context.Context, id string) error {
 	shopID, err := pr.getShopID(ctx)
 	if err != nil {
@@ -189,15 +207,16 @@ func (pr *ProductRepositoryInfrastructure) Delete(ctx context.Context, id string
 	return nil
 }
 
-// FindPublicProducts retourne les produits de toutes les boutiques actives avec stock > 0
-// Note : On utilise pr.db directement car c'est une lecture publique, pas besoin de transaction.
-func (pr *ProductRepositoryInfrastructure) FindPublicProducts(ctx context.Context, limit, offset int) ([]*repository.PublicProduct, error) {
+// FindPublicProducts supporte désormais la recherche FTS pour le catalogue public
+func (pr *ProductRepositoryInfrastructure) FindPublicProducts(ctx context.Context, filter repository.ProductFilter) ([]*repository.PublicProduct, error) {
+	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 100 {
 		limit = 100
 	}
+	offset := filter.Offset
 	if offset < 0 {
 		offset = 0
 	}
@@ -208,12 +227,21 @@ func (pr *ProductRepositoryInfrastructure) FindPublicProducts(ctx context.Contex
 			s.id as shop_id, s.name as shop_name, s.slug as shop_slug
 		FROM products p
 		JOIN shops s ON p.shop_id = s.id
-		WHERE s.is_active = true AND p.stock > 0
-		ORDER BY p.created_at DESC
-		LIMIT $1 OFFSET $2
-	`
+		WHERE s.is_active = true AND p.stock > 0`
 
-	rows, err := pr.db.QueryContext(ctx, query, limit, offset)
+	var args []interface{}
+	argIdx := 1
+
+	if filter.Search != "" {
+		query += fmt.Sprintf(" AND p.search_vector @@ plainto_tsquery('french', $%d)", argIdx)
+		args = append(args, filter.Search)
+		argIdx++
+	}
+
+	query += fmt.Sprintf(" ORDER BY p.created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := pr.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

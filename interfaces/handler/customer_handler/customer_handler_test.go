@@ -21,14 +21,14 @@ import (
 	mockrepo "Goshop/mocks/repository"
 )
 
-// Helper pour injecter le paramatre ID de fa�on fiable
+// Helper pour injecter le paramètre ID de façon fiable
 func setupChiContext(r *http.Request, id string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", id)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
-// Helper pour creer un customer de test
+// Helper pour créer un customer de test
 func createTestCustomer(id, email string) *entity.Customer {
 	return &entity.Customer{
 		ID:        id,
@@ -45,18 +45,18 @@ func TestCreateCustomerHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
-	// Mock expectations - CORRECTION ICI
+	// Mock expectations
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 
-	// AVANT : FindByCustomerID
-	// APR�S : FindByEmail
+	mockUserRepo.EXPECT().FindUserByEmail("john@example.com").Return(nil, sql.ErrNoRows) // ✅ AJOUTÉ
 	mockRepoWithTx.EXPECT().FindByEmail(gomock.Any(), "john@example.com").Return(nil, sql.ErrNoRows)
 
 	mockRepoWithTx.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, customer *entity.Customer) (*entity.Customer, error) {
@@ -96,9 +96,10 @@ func TestCreateCustomerHandler_InvalidPayload(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// JSON invalide
 	invalidJSON := `{"first_name": "John", "email": "invalid-email"`
@@ -123,9 +124,10 @@ func TestCreateCustomerHandler_ValidationFailed(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Email invalide
 	body := map[string]interface{}{
@@ -155,11 +157,12 @@ func TestGetCustomerByIdHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	customer := createTestCustomer("cust-123", "john@example.com")
 
@@ -167,8 +170,8 @@ func TestGetCustomerByIdHandler_Success(t *testing.T) {
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(customer, nil)
-	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
+	mockTx.EXPECT().Commit().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	req := httptest.NewRequest(http.MethodGet, "/customers/cust-123", nil)
 	req = setupChiContext(req, "cust-123")
@@ -193,11 +196,12 @@ func TestGetCustomerByIdHandler_NotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Mock expectations
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -205,7 +209,7 @@ func TestGetCustomerByIdHandler_NotFound(t *testing.T) {
 	mockRepoWithTx.EXPECT().
 		FindByCustomerID(gomock.Any(), "cust-999").
 		Return(nil, sql.ErrNoRows)
-	mockTx.EXPECT().Rollback().Return(nil) // Pas de Commit, seulement Rollback
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/customers/cust-999", nil)
 	req = setupChiContext(req, "cust-999")
@@ -227,9 +231,10 @@ func TestGetCustomerByIdHandler_EmptyID(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// ID vide
 	req := httptest.NewRequest(http.MethodGet, "/customers/", nil)
@@ -252,11 +257,12 @@ func TestGetAllCustomersHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	customers := []*entity.Customer{
 		createTestCustomer("cust-1", "john1@example.com"),
@@ -267,8 +273,8 @@ func TestGetAllCustomersHandler_Success(t *testing.T) {
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindAllCustomers(gomock.Any()).Return(customers, nil)
-	mockTx.EXPECT().Commit().Return(nil)              // S'assurer que Commit est appel�
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Apr�s Commit
+	mockTx.EXPECT().Commit().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
 	w := httptest.NewRecorder()
@@ -291,26 +297,18 @@ func TestGetAllCustomersHandler_Empty(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Mock expectations - L'ORDRE EST CRITIQUE
-	// 1. BeginTx doit �tre appel� en premier
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-
-	// 2. WithTX doit �tre appel� ensuite
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
-
-	// 3. FindAllCustomers doit �tre appel�
 	mockRepoWithTx.EXPECT().FindAllCustomers(gomock.Any()).Return([]*entity.Customer{}, nil)
-
-	// 4. Commit doit �tre appel� APR�S FindAllCustomers
 	mockTx.EXPECT().Commit().Return(nil)
-
-	// 5. Rollback peut �tre appel� � tout moment (AnyTimes)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
@@ -332,11 +330,12 @@ func TestUpdateCustomerHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	existingCustomer := createTestCustomer("cust-123", "old@example.com")
 	updatedCustomer := createTestCustomer("cust-123", "new@example.com")
@@ -348,8 +347,8 @@ func TestUpdateCustomerHandler_Success(t *testing.T) {
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(existingCustomer, nil)
 	mockRepoWithTx.EXPECT().UpdateCustomer(gomock.Any(), gomock.Any()).Return(updatedCustomer, nil)
-	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
+	mockTx.EXPECT().Commit().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	body := map[string]interface{}{
 		"first_name": "Jane",
@@ -382,11 +381,12 @@ func TestUpdateCustomerHandler_NotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Mock expectations
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -394,7 +394,7 @@ func TestUpdateCustomerHandler_NotFound(t *testing.T) {
 	mockRepoWithTx.EXPECT().
 		FindByCustomerID(gomock.Any(), "cust-999").
 		Return(nil, sql.ErrNoRows)
-	mockTx.EXPECT().Rollback().Return(nil) // Pas de Commit, seulement Rollback
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	body := map[string]interface{}{
 		"first_name": "NewName",
@@ -424,9 +424,10 @@ func TestUpdateCustomerHandler_ValidationFailed(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Email invalide
 	body := map[string]interface{}{
@@ -457,11 +458,12 @@ func TestDeleteCustomerHandler_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	customer := createTestCustomer("cust-123", "john@example.com")
 
@@ -470,8 +472,8 @@ func TestDeleteCustomerHandler_Success(t *testing.T) {
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTx)
 	mockRepoWithTx.EXPECT().FindByCustomerID(gomock.Any(), "cust-123").Return(customer, nil)
 	mockRepoWithTx.EXPECT().DeleteCustomer(gomock.Any(), "cust-123").Return(nil)
-	mockTx.EXPECT().Commit().Return(nil)              // Commit AVANT Rollback
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // Rollback apr�s
+	mockTx.EXPECT().Commit().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	req := httptest.NewRequest(http.MethodDelete, "/customers/cust-123", nil)
 	req = setupChiContext(req, "cust-123")
@@ -489,11 +491,12 @@ func TestDeleteCustomerHandler_NotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepoWithTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 
-	handler := customerhandler.NewCustomerHandler(mockRepo, mockTxManager)
+	handler := customerhandler.NewCustomerHandler(mockRepo, mockUserRepo, mockTxManager) // ✅ MODIFIÉ
 
 	// Mock expectations
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
@@ -501,7 +504,7 @@ func TestDeleteCustomerHandler_NotFound(t *testing.T) {
 	mockRepoWithTx.EXPECT().
 		FindByCustomerID(gomock.Any(), "cust-999").
 		Return(nil, sql.ErrNoRows)
-	mockTx.EXPECT().Rollback().Return(nil) // Pas de Commit, seulement Rollback
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/customers/cust-999", nil)
 	req = setupChiContext(req, "cust-999")

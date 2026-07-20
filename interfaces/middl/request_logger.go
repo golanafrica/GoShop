@@ -2,6 +2,8 @@
 package middl
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"time"
 
@@ -77,4 +79,12 @@ func slowRequestWarning(duration time.Duration) string {
 		return "slow_request"
 	}
 	return ""
+}
+
+// ✅ AJOUTER CETTE MÉTHODE pour supporter les WebSockets
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }

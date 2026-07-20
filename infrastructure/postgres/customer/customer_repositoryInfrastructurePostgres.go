@@ -1,16 +1,19 @@
 package customer
 
 import (
-	dto "Goshop/application/dto/customer_dto"
-	"Goshop/domain/entity"
-	"Goshop/domain/repository"
-	"Goshop/domain/tenant"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
+
+	credit_dto "Goshop/application/dto/credit_dto"
+	dto "Goshop/application/dto/customer_dto"
+	"Goshop/domain/entity"
+	"Goshop/domain/repository"
+	"Goshop/domain/tenant"
 )
 
 type CustomerRepoInfrastructurePostgres struct {
@@ -108,7 +111,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithPagination(
 	}
 
 	baseQuery := `
-		SELECT id, first_name, last_name, email, created_at, updated_at
+		SELECT id, user_id, first_name, last_name, email, created_at, updated_at
 		FROM customers
 		WHERE shop_id = $1`
 	args := []interface{}{shopID}
@@ -146,6 +149,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithPagination(
 		c := &entity.Customer{}
 		err := rows.Scan(
 			&c.ID,
+			&c.UserID, // ✅ AJOUTÉ
 			&c.FirstName,
 			&c.LastName,
 			&c.Email,
@@ -195,7 +199,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithSorting(ctx co
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, first_name, last_name, email, created_at, updated_at
+		SELECT id, user_id, first_name, last_name, email, created_at, updated_at
 		FROM customers
 		WHERE shop_id = $1
 		ORDER BY %s %s`, column, direction)
@@ -211,6 +215,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithSorting(ctx co
 		c := &entity.Customer{}
 		err := rows.Scan(
 			&c.ID,
+			&c.UserID, // ✅ AJOUTÉ
 			&c.FirstName,
 			&c.LastName,
 			&c.Email,
@@ -230,31 +235,31 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithSorting(ctx co
 	return customers, nil
 }
 
-// Create crée un client avec shop_id et KYC par défaut (none)
+// Create crée un client avec shop_id, user_id et KYC par défaut (none)
 func (cr *CustomerRepoInfrastructurePostgres) Create(ctx context.Context, customer *entity.Customer) (*entity.Customer, error) {
 	shopID, err := cr.getShopID(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Valeur par défaut pour KYC
 	if customer.KYCLevel == "" {
 		customer.KYCLevel = entity.KYCLevelNone
 	}
 
 	query := `
 		INSERT INTO customers (
-			shop_id, first_name, last_name, email,
+			shop_id, user_id, first_name, last_name, email,
 			kyc_level, kyc_validated_at, kyc_validated_by,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-		RETURNING id, first_name, last_name, email,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		RETURNING id, user_id, first_name, last_name, email,
 		          kyc_level, kyc_validated_at, kyc_validated_by,
 		          created_at, updated_at
 	`
 
 	err = cr.queryRowContext(ctx, query,
 		shopID,
+		customer.UserID, // ✅ AJOUTÉ : Sauvegarde du UserID
 		customer.FirstName,
 		customer.LastName,
 		customer.Email,
@@ -263,6 +268,7 @@ func (cr *CustomerRepoInfrastructurePostgres) Create(ctx context.Context, custom
 		customer.KYCValidatedBy,
 	).Scan(
 		&customer.ID,
+		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID retourné
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -289,7 +295,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 
 	customer := &entity.Customer{}
 	query := `
-		SELECT id, first_name, last_name, email,
+		SELECT id, user_id, first_name, last_name, email,
 		       kyc_level, kyc_validated_at, kyc_validated_by,
 		       created_at, updated_at
 		FROM customers WHERE id = $1 AND shop_id = $2
@@ -297,6 +303,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 
 	err = cr.queryRowContext(ctx, query, id, shopID).Scan(
 		&customer.ID,
+		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -325,7 +332,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 	}
 
 	query := `
-		SELECT id, first_name, last_name, email,
+		SELECT id, user_id, first_name, last_name, email,
 		       kyc_level, kyc_validated_at, kyc_validated_by,
 		       created_at, updated_at
 		FROM customers WHERE shop_id = $1
@@ -342,6 +349,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 		customer := &entity.Customer{}
 		if err := rows.Scan(
 			&customer.ID,
+			&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
 			&customer.FirstName,
 			&customer.LastName,
 			&customer.Email,
@@ -376,7 +384,7 @@ func (cr *CustomerRepoInfrastructurePostgres) UpdateCustomer(ctx context.Context
 			kyc_validated_by = $6,
 			updated_at = NOW()
 		WHERE id = $7 AND shop_id = $8
-		RETURNING id, first_name, last_name, email,
+		RETURNING id, user_id, first_name, last_name, email,
 		          kyc_level, kyc_validated_at, kyc_validated_by,
 		          created_at, updated_at
 	`
@@ -392,6 +400,7 @@ func (cr *CustomerRepoInfrastructurePostgres) UpdateCustomer(ctx context.Context
 		shopID,
 	).Scan(
 		&customer.ID,
+		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID retourné
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -435,7 +444,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByEmail(ctx context.Context, e
 
 	customer := &entity.Customer{}
 	query := `
-		SELECT id, first_name, last_name, email,
+		SELECT id, user_id, first_name, last_name, email,
 		       kyc_level, kyc_validated_at, kyc_validated_by,
 		       created_at, updated_at
 		FROM customers WHERE email = $1 AND shop_id = $2
@@ -443,6 +452,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByEmail(ctx context.Context, e
 
 	err = cr.queryRowContext(ctx, query, email, shopID).Scan(
 		&customer.ID,
+		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -461,4 +471,113 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByEmail(ctx context.Context, e
 	}
 
 	return customer, nil
+}
+
+// GetClientDashboard récupère le dashboard client en une seule requête JSON optimisée
+func (cr *CustomerRepoInfrastructurePostgres) GetClientDashboard(ctx context.Context, customerID string) (*credit_dto.ClientDashboardResponse, error) {
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("multi-tenant: %w", err)
+	}
+	shopID := shop.ID.String()
+
+	query := `
+		SELECT 
+			c.id, c.first_name, c.last_name, c.kyc_level,
+			
+			-- 1. Score de crédit agrégé
+			json_build_object(
+				'score', COALESCE(cs.score, 500),
+				'on_time_payments', COALESCE(cs.on_time_payments, 0),
+				'late_payments', COALESCE(cs.late_payments, 0),
+				'defaults', COALESCE(cs.defaults, 0)
+			) AS credit_score_json,
+
+			-- 2. Contrats actifs agrégés
+			(
+				SELECT json_agg(json_build_object(
+					'contract_id', cc.id,
+					'status', cc.status,
+					'total_amount_cents', cc.total_amount_cents,
+					'monthly_payment_cents', cc.monthly_payment_cents
+				))
+				FROM credit_contracts cc
+				WHERE cc.customer_id = c.id AND cc.shop_id = $2 AND cc.status = 'active'
+			) AS active_contracts_json,
+
+			-- 3. Prochaines échéances (max 3) agrégées
+			(
+				SELECT json_agg(row_to_json(inst))
+				FROM (
+					SELECT ci.id as installment_id, ci.contract_id, ci.due_date, ci.amount_cents, ci.status
+					FROM credit_installments ci
+					JOIN credit_contracts cc ON ci.contract_id = cc.id
+					WHERE cc.customer_id = c.id AND cc.shop_id = $2
+					  AND ci.status IN ('pending', 'late')
+					ORDER BY ci.due_date ASC
+					LIMIT 3
+				) inst
+			) AS upcoming_installments_json
+
+		FROM customers c
+		LEFT JOIN credit_scores cs ON c.id = cs.customer_id AND cs.shop_id = $2
+		WHERE c.id = $1 AND c.shop_id = $2
+	`
+
+	var resp credit_dto.ClientDashboardResponse
+	var scoreJSON, contractsJSON, installmentsJSON sql.NullString
+
+	err = cr.queryRowContext(ctx, query, customerID, shopID).Scan(
+		&resp.CustomerID,
+		&resp.FirstName,
+		&resp.LastName,
+		&resp.KYCLevel,
+		&scoreJSON,
+		&contractsJSON,
+		&installmentsJSON,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// ✅ FALLBACK ÉLÉGANT : Retourne un dashboard par défaut si le profil client n'existe pas encore
+			resp.CustomerID = customerID
+			resp.FirstName = "Client"
+			resp.LastName = "Nouveau"
+			resp.KYCLevel = "none"
+			resp.CreditScore = credit_dto.CreditScoreDTO{Score: 500}
+			resp.ActiveContracts = []credit_dto.ActiveContractDTO{}
+			resp.UpcomingInstallments = []credit_dto.UpcomingInstallmentDTO{}
+			return &resp, nil
+		}
+		return nil, fmt.Errorf("failed to query client dashboard: %w", err)
+	}
+
+	// Désérialisation du JSON Postgres vers les structs Go
+	if scoreJSON.Valid {
+		if err := json.Unmarshal([]byte(scoreJSON.String), &resp.CreditScore); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal credit score: %w", err)
+		}
+	} else {
+		resp.CreditScore = credit_dto.CreditScoreDTO{Score: 500}
+	}
+
+	if contractsJSON.Valid {
+		if err := json.Unmarshal([]byte(contractsJSON.String), &resp.ActiveContracts); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal active contracts: %w", err)
+		}
+	}
+	if resp.ActiveContracts == nil {
+		resp.ActiveContracts = []credit_dto.ActiveContractDTO{}
+	}
+
+	if installmentsJSON.Valid {
+		if err := json.Unmarshal([]byte(installmentsJSON.String), &resp.UpcomingInstallments); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal upcoming installments: %w", err)
+		}
+	}
+	if resp.UpcomingInstallments == nil {
+		resp.UpcomingInstallments = []credit_dto.UpcomingInstallmentDTO{}
+	}
+
+	return &resp, nil
 }

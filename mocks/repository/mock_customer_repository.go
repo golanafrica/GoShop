@@ -10,6 +10,7 @@
 package repository
 
 import (
+	creditdto "Goshop/application/dto/credit_dto"
 	dto "Goshop/application/dto/customer_dto"
 	entity "Goshop/domain/entity"
 	repository "Goshop/domain/repository"
@@ -160,6 +161,21 @@ func (m *MockCustomerRepositoryInterface) FindByEmail(ctx context.Context, email
 func (mr *MockCustomerRepositoryInterfaceMockRecorder) FindByEmail(ctx, email any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByEmail", reflect.TypeOf((*MockCustomerRepositoryInterface)(nil).FindByEmail), ctx, email)
+}
+
+// GetClientDashboard mocks base method.
+func (m *MockCustomerRepositoryInterface) GetClientDashboard(ctx context.Context, customerID string) (*creditdto.ClientDashboardResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetClientDashboard", ctx, customerID)
+	ret0, _ := ret[0].(*creditdto.ClientDashboardResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetClientDashboard indicates an expected call of GetClientDashboard.
+func (mr *MockCustomerRepositoryInterfaceMockRecorder) GetClientDashboard(ctx, customerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClientDashboard", reflect.TypeOf((*MockCustomerRepositoryInterface)(nil).GetClientDashboard), ctx, customerID)
 }
 
 // UpdateCustomer mocks base method.

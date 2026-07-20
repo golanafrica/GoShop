@@ -66,6 +66,9 @@ import (
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
 
+	// 🆕 v4.5.0 : WebSocket Infrastructure
+	wsinfra "Goshop/infrastructure/websocket"
+
 	// 🆕 v4.4.0 : 2FA Repository
 	user2fainfra "Goshop/infrastructure/postgres/user_2fa"
 
@@ -335,10 +338,6 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
 	}
 
-	// ============ 🆕 NOTIFICATION SERVICE ============
-	notifService := service.NotificationService(notification.NewNoopNotificationService(a.Logger.Logger))
-	a.Logger.Info().Msg("✅ Notification service initialized (no-op mode)")
-
 	// ============ 🆕 v4.3.2 : EMAIL SERVICE (SMTP) ============
 	emailConfig := config.LoadEmailConfig()
 	var emailService service.EmailService
@@ -354,6 +353,35 @@ func (a *App) setupRouter() {
 			Bool("configured", emailService.IsConfigured()).
 			Bool("debug_mode", emailConfig.DebugMode).
 			Msg("✅ v4.3.2 Email service initialized")
+	}
+
+	// ============ 🆕 v4.5.0 : WEBSOCKET HUB ============
+	// On l'initialise ici pour qu'il soit disponible pour le NotificationDispatcher
+	var wsHub *wsinfra.Hub
+	if utils.Rdb != nil {
+		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
+			wsHub = wsinfra.NewHub(utils.Rdb, a.Logger.Logger)
+			a.Logger.Info().Msg("✅ v4.5.0 WebSocket Hub initialized with Redis Pub/Sub")
+		}
+	}
+	if wsHub == nil {
+		a.Logger.Warn().Msg("⚠️ v4.5.0 WebSocket Hub disabled (Redis not available)")
+	}
+
+	// ============ 🆕 v4.5.0 : NOTIFICATION DISPATCHER ============
+	// On l'initialise ICI, après que wsHub et emailService soient prêts
+	var notifService service.NotificationService
+	if wsHub != nil || emailService != nil {
+		notifService = notification.NewNotificationDispatcher(
+			wsHub,
+			emailService,
+			postgresCustomerRepo, // ✅ AJOUTÉ : Permet au dispatcher de résoudre le UserID depuis le CustomerID
+			a.Logger.Logger,
+		)
+		a.Logger.Info().Msg("✅ v4.5.0 Notification Dispatcher initialized (WebSocket + Email)")
+	} else {
+		notifService = notification.NewNoopNotificationService(a.Logger.Logger)
+		a.Logger.Warn().Msg("⚠️ v4.5.0 Notification Dispatcher using Noop (no WebSocket or Email configured)")
 	}
 
 	// -- Usecases (existants)
@@ -752,6 +780,10 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.4.3 API Key Management usecases initialized (create, list, revoke, revoke-all, stats)")
 
+	// ============ 🆕 CLIENT DASHBOARD USECASE ============
+	getDashboardUC := customerusecase.NewGetClientDashboardUsecase(postgresCustomerRepo)
+	a.Logger.Info().Msg("✅ Client Dashboard usecase initialized")
+
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
 		codProofRepo,
@@ -815,8 +847,12 @@ func (a *App) setupRouter() {
 
 	customerHandler := customerhandler.NewCustomerHandler(
 		postgresCustomerRepo,
+		postgresUserRepo,
 		txmanagerRepo,
 	)
+
+	// 🆕 Client Dashboard Handler
+	clientDashboardHandler := customerhandler.NewCustomerDashboardHandler(getDashboardUC)
 
 	orderHandler := ordershandler.NewOrderHandler(
 		a.DB,
@@ -839,16 +875,13 @@ func (a *App) setupRouter() {
 
 	// 🆕 v4.4.21 : Initialisation du Rate Limiter pour le login
 	var loginRateLimiter service.LoginRateLimiter
-	redisAvailable := false
 	if utils.Rdb != nil {
-		// Tester la connexion Redis avec un ping
 		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
-			redisAvailable = true
 			loginRateLimiter = ratelimit.NewLoginRateLimiterRedis(utils.Rdb)
 			a.Logger.Info().Msg("✅ v4.4.21 Login rate limiter initialisé (Redis)")
 		}
 	}
-	if !redisAvailable {
+	if loginRateLimiter == nil {
 		loginRateLimiter = ratelimit.NewLoginRateLimiterMemory()
 		a.Logger.Warn().Msg("⚠️ v4.4.21 Login rate limiter initialisé (mémoire - fallback)")
 	}
@@ -1003,7 +1036,13 @@ func (a *App) setupRouter() {
 		getAPIKeyStatsUC,
 	)
 
-	a.Logger.Info().Msg("✅ v4.4.3 handlers initialized (wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products)")
+	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
+	var wsHandler *handlers.WSHandler
+	if wsHub != nil {
+		wsHandler = handlers.NewWSHandler(wsHub)
+	}
+
+	a.Logger.Info().Msg("✅ v4.5.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1081,6 +1120,12 @@ func (a *App) setupRouter() {
 	r.With(authMiddlewareWithSession).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
+	// 🆕 v4.5.0 : WebSocket Notifications Route (nécessite Auth)
+	if wsHandler != nil {
+		r.With(authMiddlewareWithSession).
+			Get("/ws/notifications", wsHandler.HandleNotifications)
+	}
+
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
 		r.Use(authMiddlewareWithSession)
@@ -1103,6 +1148,9 @@ func (a *App) setupRouter() {
 		// Routes multi-tenant (AVEC TenantResolver)
 		r.Group(func(r chi.Router) {
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
+
+			// ✅ CORRECTION : Route Dashboard placée ici, au niveau racine du groupe multi-tenant
+			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
 
 			// Products
 			r.Route("/products", func(r chi.Router) {
@@ -1301,7 +1349,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.4.3 Commission schedulers started")
+			Msg("✅ v4.5.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1309,7 +1357,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.4.3: + API Keys Management + Merchant Overview + Public Products)")
+		Msg("✅ Router configuré avec succès (v4.5.0: + WebSocket Notifications + API Keys Management + Merchant Overview + Public Products)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1376,7 +1424,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.4.3", // 🆕 v4.4.3
+		Version:     "4.5.0", // 🆕 v4.5.0
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

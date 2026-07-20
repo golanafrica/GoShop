@@ -28,6 +28,7 @@ func TestCreateCustomerUsecase_Success(t *testing.T) {
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockRepoTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 
 	customer := &entity.Customer{
 		FirstName: "John",
@@ -42,20 +43,21 @@ func TestCreateCustomerUsecase_Success(t *testing.T) {
 		Email:     "john@mail.com",
 	}
 
-	// Mock expectations - CORRECTION ICI
+	// Mock expectations
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
 
-	// AVANT : FindByCustomerID
-	// APRES : FindByEmail
-	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
+	// ✅ AJOUTÉ : Mock pour la vérification de l'utilisateur existant
+	mockUserRepo.EXPECT().FindUserByEmail("john@mail.com").Return(nil, errors.New("not found"))
 
+	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(createdCustomer, nil)
 	mockTx.EXPECT().Commit().Return(nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	uc := customerusecase.NewCreateCustomerUsecase(
 		mockRepo,
+		mockUserRepo, // ✅ AJOUTÉ
 		mockTxManager,
 	)
 
@@ -71,9 +73,11 @@ func TestCreateCustomerUsecase_ValidationError(t *testing.T) {
 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 
 	uc := customerusecase.NewCreateCustomerUsecase(
 		mockRepo,
+		mockUserRepo, // ✅ AJOUTÉ
 		mockTxManager,
 	)
 
@@ -89,11 +93,13 @@ func TestCreateCustomerUsecase_BeginTxError(t *testing.T) {
 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl) // ✅ AJOUTÉ
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("tx error"))
 
 	uc := customerusecase.NewCreateCustomerUsecase(
 		mockRepo,
+		mockUserRepo, // ✅ AJOUTÉ
 		mockTxManager,
 	)
 

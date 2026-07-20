@@ -2,12 +2,8 @@
 package customerhandler
 
 import (
-	dto "Goshop/application/dto/customer_dto"
-	customerusecase "Goshop/application/usecase/customer_usecase"
-	"Goshop/domain/repository"
-	"Goshop/interfaces/utils"
 	"bytes"
-	"database/sql" // Ajout important
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +11,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	dto "Goshop/application/dto/customer_dto"
+	customerusecase "Goshop/application/usecase/customer_usecase"
+	"Goshop/domain/repository"
+	userrepository "Goshop/domain/repository/user_repository" // ✅ AJOUTÉ
+	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
@@ -26,28 +28,25 @@ type CustomerHandler struct {
 	getCustomerByIdUsecase *customerusecase.GetCustomerByIdUsecase
 	updateCustomerUsecase  *customerusecase.UpdateCustomerUsecase
 	deleteCustomerUsecase  *customerusecase.DeleteCustomerUsecase
-	//logger                 *setupLogging.Logger
 }
 
 func NewCustomerHandler(
 	repo repository.CustomerRepositoryInterface,
+	userRepo userrepository.UserRepository, // ✅ AJOUTÉ
 	txManager repository.TxManager,
-	//logger *setupLogging.Logger,
 ) *CustomerHandler {
 	return &CustomerHandler{
-		createCustomerUsecase:  customerusecase.NewCreateCustomerUsecase(repo, txManager),
+		createCustomerUsecase:  customerusecase.NewCreateCustomerUsecase(repo, userRepo, txManager), // ✅ MODIFIÉ
 		getAllCustomersUsecase: customerusecase.NewGetAllCustomersUsecase(repo, txManager),
 		getCustomerByIdUsecase: customerusecase.NewGetCustomerByIdUsecase(repo, txManager),
 		updateCustomerUsecase:  customerusecase.NewUpdateCustomerUsecase(repo, txManager),
 		deleteCustomerUsecase:  customerusecase.NewDeleteCustomerUsecase(repo, txManager),
-		//logger:                 logger.WithComponent("customer_handler"),
 	}
 }
 
 func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
-	//logger := h.logger.WithOperation("create_customer")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -55,13 +54,11 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 		Str("path", r.URL.Path).
 		Msg("Starting customer creation")
 
-	// AJOUTER LE LOG DU BODY COMPLET
 	bodyBytes, _ := io.ReadAll(r.Body)
 	logger.Debug().
 		Str("raw_body", string(bodyBytes)).
 		Msg("Raw request body")
 
-	// Réinitialiser le body
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var req dto.CustomerRequestDto
@@ -71,7 +68,6 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 			Str("content_type", r.Header.Get("Content-Type")).
 			Int64("content_length", r.ContentLength).
 			Msg("Failed to decode JSON payload")
-
 		return utils.ErrInvalidPayload
 	}
 
@@ -81,7 +77,6 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 		Str("customer_last_name", req.LastName).
 		Msg("Customer request decoded")
 
-	// AJOUTER DU LOGGING AVANT LA VALIDATION
 	logger.Debug().Msg("Starting validation")
 	if err := h.validateCustomerRequest(&req, logger); err != nil {
 		logger.Error().Err(err).Msg("Validation failed")
@@ -95,7 +90,6 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 		Str("customer_id", customer.ID).
 		Msg("Customer entity created")
 
-	// AJOUTER DU LOGGING AVANT L'APPEL AU USECASE
 	logger.Info().
 		Str("usecase_type", fmt.Sprintf("%T", h.createCustomerUsecase)).
 		Msg("Executing create customer usecase")
@@ -114,13 +108,6 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 				"id":         customer.ID,
 			}).
 			Msg("Failed to create customer")
-
-		// AJOUTER UNE VÉRIFICATION SPÉCIFIQUE
-		//if strings.Contains(err.Error(), "unique constraint") {
-		//	logger.Warn().Msg("Duplicate email detected")
-		//	return utils.ErrDuplicateEmail
-		//}
-
 		return utils.ErrCustomerCreateFail
 	}
 
@@ -145,7 +132,6 @@ func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.
 	ctx := r.Context()
 	start := time.Now()
 	id := chi.URLParam(r, "id")
-	//logger := h.logger.WithOperation("get_customer_by_id")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -162,7 +148,6 @@ func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.
 	logger.Debug().Msg("Executing get customer by ID usecase")
 	customer, err := h.getCustomerByIdUsecase.Execute(ctx, id)
 	if err != nil {
-		// CORRECTION : Vérifier explicitement sql.ErrNoRows
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
 			logger.Warn().
 				Err(err).
@@ -199,7 +184,6 @@ func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.
 func (h *CustomerHandler) GetAllCustomersHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
-	//logger := h.logger.WithOperation("get_all_customers")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -242,7 +226,6 @@ func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	start := time.Now()
 	id := chi.URLParam(r, "id")
-	//logger := h.logger.WithOperation("update_customer")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -283,7 +266,6 @@ func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.R
 	logger.Info().Msg("Executing update customer usecase")
 	updated, err := h.updateCustomerUsecase.Execute(ctx, customer)
 	if err != nil {
-		// CORRECTION : Vérifier explicitement sql.ErrNoRows
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
 			logger.Warn().Err(err).Msg("Customer not found for update")
 			return utils.ErrCustomerNotFound
@@ -323,7 +305,6 @@ func (h *CustomerHandler) DeleteCustomerHandler(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	start := time.Now()
 	id := chi.URLParam(r, "id")
-	//logger := h.logger.WithOperation("delete_customer")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -340,7 +321,6 @@ func (h *CustomerHandler) DeleteCustomerHandler(w http.ResponseWriter, r *http.R
 	logger.Debug().Msg("Executing delete customer usecase")
 	err := h.deleteCustomerUsecase.Execute(ctx, id)
 	if err != nil {
-		// CORRECTION : Vérifier explicitement sql.ErrNoRows
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
 			logger.Warn().
 				Err(err).
@@ -367,7 +347,6 @@ func (h *CustomerHandler) DeleteCustomerHandler(w http.ResponseWriter, r *http.R
 	return nil
 }
 
-// validateCustomerRequest — maintenant avec *setupLogging.Logger
 func (h *CustomerHandler) validateCustomerRequest(req *dto.CustomerRequestDto, logger *zerolog.Logger) error {
 	var validationErrors []string
 

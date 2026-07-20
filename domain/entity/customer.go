@@ -8,6 +8,7 @@ import (
 // Customer représente un client dans une boutique
 type Customer struct {
 	ID          string    `json:"id" db:"id"`
+	UserID      string    `json:"user_id" db:"user_id"` // ✅ AJOUTÉ : Lien vers le compte utilisateur (UserEntity)
 	FirstName   string    `json:"first_name" db:"first_name"`
 	LastName    string    `json:"last_name" db:"last_name"`
 	Email       string    `json:"email" db:"email"`

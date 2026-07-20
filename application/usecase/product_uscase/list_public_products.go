@@ -19,14 +19,23 @@ func NewListPublicProductsUsecase(repo repository.ProductRepository) *ListPublic
 	}
 }
 
-func (uc *ListPublicProductsUsecase) Execute(ctx context.Context, limit, offset int) ([]*productdto.PublicProductResponse, error) {
+func (uc *ListPublicProductsUsecase) Execute(ctx context.Context, req *productdto.ListProductsRequest) ([]*productdto.PublicProductResponse, error) {
 	logger := zerolog.Ctx(ctx)
+
+	// Mapping DTO -> Domain Filter (pas de filtre de prix pour le public par défaut, mais on le supporte)
+	filter := repository.ProductFilter{
+		Search: req.Search,
+		Limit:  req.Limit,
+		Offset: req.Offset,
+	}
+
 	logger.Debug().
-		Int("limit", limit).
-		Int("offset", offset).
+		Str("search", filter.Search).
+		Int("limit", filter.Limit).
+		Int("offset", filter.Offset).
 		Msg("Executing list public products use case")
 
-	publicProducts, err := uc.repo.FindPublicProducts(ctx, limit, offset)
+	publicProducts, err := uc.repo.FindPublicProducts(ctx, filter)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to retrieve public products from repository")
 		return nil, err

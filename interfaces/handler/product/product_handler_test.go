@@ -1,5 +1,4 @@
-﻿// interfaces/handler/product/product_handler_test.go
-package producthandler_test
+﻿package producthandler_test
 
 import (
 	"bytes"
@@ -18,6 +17,7 @@ import (
 
 	dto "Goshop/application/dto/product_dto"
 	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	producthandler "Goshop/interfaces/handler/product"
 	"Goshop/interfaces/middl"
 	mockrepo "Goshop/mocks/repository"
@@ -42,7 +42,7 @@ func setupChiContext(r *http.Request, id string) *http.Request {
 }
 
 // ========================================
-// CREATE PRODUCT TESTS (avec transactions)
+// CREATE PRODUCT TESTS
 // ========================================
 
 func TestProductHandler_CreateProduct_Success(t *testing.T) {
@@ -63,7 +63,6 @@ func TestProductHandler_CreateProduct_Success(t *testing.T) {
 		Stock:       25,
 	}
 
-	// ? CREATE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -122,7 +121,7 @@ func TestProductHandler_CreateProduct_InvalidPayload(t *testing.T) {
 }
 
 // ========================================
-// GET PRODUCT BY ID TESTS (sans transactions)
+// GET PRODUCT BY ID TESTS
 // ========================================
 
 func TestProductHandler_GetProductById_Success(t *testing.T) {
@@ -130,15 +129,13 @@ func TestProductHandler_GetProductById_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockRepo := mockrepo.NewMockProductRepository(ctrl)
-	mockTxMgr := mockrepo.NewMockTxManager(ctrl) // Pas utilise mais necessaire pour le constructeur
+	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
 	product := createTestProduct("123")
 
-	// ? GET BY ID n'utilise PAS de transaction
 	mockRepo.EXPECT().FindByID(gomock.Any(), "123").Return(product, nil)
-	// ? NE PAS mocker: BeginTx, WithTX, Commit, Rollback
 
 	req := httptest.NewRequest("GET", "/products/123", nil)
 	req = setupChiContext(req, "123")
@@ -164,9 +161,7 @@ func TestProductHandler_GetProductById_NotFound(t *testing.T) {
 	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ? GET BY ID n'utilise PAS de transaction
 	mockRepo.EXPECT().FindByID(gomock.Any(), "999").Return(nil, sql.ErrNoRows)
-	// ? NE PAS mocker: BeginTx, WithTX, Rollback
 
 	req := httptest.NewRequest("GET", "/products/999", nil)
 	req = setupChiContext(req, "999")
@@ -184,7 +179,7 @@ func TestProductHandler_GetProductById_NotFound(t *testing.T) {
 }
 
 // ========================================
-// UPDATE PRODUCT TESTS (avec transactions)
+// UPDATE PRODUCT TESTS
 // ========================================
 
 func TestProductHandler_UpdateProduct_Success(t *testing.T) {
@@ -213,7 +208,6 @@ func TestProductHandler_UpdateProduct_Success(t *testing.T) {
 	updatedProduct.Stock = 15
 	updatedProduct.UpdatedAt = time.Now()
 
-	// ? UPDATE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "123").Return(existingProduct, nil)
@@ -239,7 +233,7 @@ func TestProductHandler_UpdateProduct_Success(t *testing.T) {
 }
 
 // ========================================
-// DELETE PRODUCT TESTS (avec transactions)
+// DELETE PRODUCT TESTS
 // ========================================
 
 func TestProductHandler_DeleteProduct_Success(t *testing.T) {
@@ -253,7 +247,6 @@ func TestProductHandler_DeleteProduct_Success(t *testing.T) {
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ? DELETE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "123").Return(createTestProduct("123"), nil)
@@ -283,7 +276,6 @@ func TestProductHandler_DeleteProduct_NotFound(t *testing.T) {
 
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// ? DELETE utilise une transaction
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoWithTX)
 	mockRepoWithTX.EXPECT().FindByID(gomock.Any(), "999").Return(nil, sql.ErrNoRows)
@@ -305,7 +297,7 @@ func TestProductHandler_DeleteProduct_NotFound(t *testing.T) {
 }
 
 // ========================================
-// GET ALL PRODUCTS TESTS (sans transactions)
+// GET ALL PRODUCTS TESTS (avec ProductFilter)
 // ========================================
 
 func TestProductHandler_GetAllProducts_Success(t *testing.T) {
@@ -322,14 +314,13 @@ func TestProductHandler_GetAllProducts_Success(t *testing.T) {
 		createTestProduct("3"),
 	}
 
-	// ? GET ALL n'utilise PAS de transaction
-	mockRepo.EXPECT().FindAll(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, limit, offset int) ([]*entity.Product, error) {
-			assert.Equal(t, 50, limit) // Default limit
-			assert.Equal(t, 0, offset) // Default offset
+	// ✅ CORRECTION : Utilisation de List() avec ProductFilter au lieu de FindAll()
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, filter repository.ProductFilter) ([]*entity.Product, error) {
+			assert.Equal(t, 50, filter.Limit)
+			assert.Equal(t, 0, filter.Offset)
 			return products, nil
 		})
-	// ? NE PAS mocker: BeginTx, WithTX, Commit, Rollback
 
 	req := httptest.NewRequest("GET", "/products", nil)
 	w := httptest.NewRecorder()
@@ -339,10 +330,41 @@ func TestProductHandler_GetAllProducts_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp []dto.ProductResponse
+	var resp map[string]interface{}
 	err := json.NewDecoder(w.Body).Decode(&resp)
 	require.NoError(t, err)
-	assert.Len(t, resp, 3)
+
+	data := resp["data"].([]interface{})
+	assert.Len(t, data, 3)
+}
+
+func TestProductHandler_GetAllProducts_WithSearchFilter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockRepo := mockrepo.NewMockProductRepository(ctrl)
+	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
+	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
+
+	products := []*entity.Product{
+		createTestProduct("1"),
+	}
+
+	mockRepo.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, filter repository.ProductFilter) ([]*entity.Product, error) {
+			assert.Equal(t, "moto", filter.Search)
+			assert.Equal(t, int64(5000), filter.MinPriceCents)
+			assert.Equal(t, int64(50000), filter.MaxPriceCents)
+			return products, nil
+		})
+
+	req := httptest.NewRequest("GET", "/products?search=moto&min_price=5000&max_price=50000", nil)
+	w := httptest.NewRecorder()
+
+	httpHandler := middl.ErrorHandler(handler.GetAllProducts)
+	httpHandler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // ========================================
@@ -357,7 +379,6 @@ func TestProductHandler_CreateProduct_ValidationError(t *testing.T) {
 	mockTxMgr := mockrepo.NewMockTxManager(ctrl)
 	handler := producthandler.NewProductHandler(mockRepo, mockTxMgr)
 
-	// Donn�es avec prix n�gatif
 	reqBody := map[string]interface{}{
 		"name":        "Invalid Product",
 		"description": "Product with negative price",

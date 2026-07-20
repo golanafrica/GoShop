@@ -1,10 +1,11 @@
 package repository
 
 import (
+	"context"
+
+	credit_dto "Goshop/application/dto/credit_dto"
 	dto "Goshop/application/dto/customer_dto"
 	"Goshop/domain/entity"
-
-	"context"
 )
 
 //go:generate mockgen -destination=../../mocks/repository/mock_customer_repository.go -package=repository . CustomerRepositoryInterface
@@ -22,7 +23,9 @@ type CustomerRepositoryInterface interface {
 	CountAllCustomers(ctx context.Context, filter dto.CustomerFilter) (int, error)
 	FindAllCustomersWithSorting(ctx context.Context, sortBy, order string) ([]*entity.Customer, error)
 
-	// permet d'utiliser txmanager
+	// GetClientDashboard récupère toutes les infos financières du client en une seule requête optimisée
+	GetClientDashboard(ctx context.Context, customerID string) (*credit_dto.ClientDashboardResponse, error)
 
+	// permet d'utiliser txmanager
 	WithTX(tx Tx) CustomerRepositoryInterface
 }

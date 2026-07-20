@@ -26,19 +26,25 @@ type UpdateProductRequest struct {
 	Stock       int    `json:"stock"`
 }
 
+// ListProductsRequest contient les paramètres de recherche et de filtrage venant du handler
+type ListProductsRequest struct {
+	Search        string `json:"search"`
+	MinPriceCents int64  `json:"min_price_cents"`
+	MaxPriceCents int64  `json:"max_price_cents"`
+	Limit         int    `json:"limit"`
+	Offset        int    `json:"offset"`
+}
+
 func (p *CreateProductRequest) Validate() error {
 	if p.Name == "" {
 		return errors.New("product name is required")
 	}
-
 	if p.PriceCents <= 0 {
 		return errors.New("price must be greater than 0")
 	}
-
 	if p.Stock < 0 {
 		return errors.New("stock cannot be negative")
 	}
-
 	return nil
 }
 
@@ -46,14 +52,11 @@ func (p *UpdateProductRequest) Validate() error {
 	if p.Name == "" {
 		return errors.New("product name is required")
 	}
-
 	if p.PriceCents <= 0 {
 		return errors.New("price must be greater than 0")
 	}
-
 	if p.Stock < 0 {
 		return errors.New("stock cannot be negative")
 	}
-
 	return nil
 }
