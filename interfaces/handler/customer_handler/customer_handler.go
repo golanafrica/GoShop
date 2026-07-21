@@ -55,10 +55,7 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 		Msg("Starting customer creation")
 
 	bodyBytes, _ := io.ReadAll(r.Body)
-	logger.Debug().
-		Str("raw_body", string(bodyBytes)).
-		Msg("Raw request body")
-
+	// 🛡️ SÉCURITÉ : Ne jamais logger le raw_body brut (pourrait contenir des données sensibles)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var req dto.CustomerRequestDto

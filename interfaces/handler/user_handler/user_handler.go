@@ -79,11 +79,7 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 		return utils.ErrInvalidPayload
 	}
 
-	logger.Debug().
-		Str("raw_body", string(bodyBytes)).
-		Int("body_length", len(bodyBytes)).
-		Msg("📦 Body HTTP reçu (raw)")
-
+	// 🛡️ SÉCURITÉ : Ne jamais logger le raw_body brut (contient le mot de passe en clair)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var req userdto.RegisterUserRequest
@@ -91,7 +87,6 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 		logger.Error().
 			Err(err).
 			Str("error_type", "invalid_json").
-			Str("raw_body", string(bodyBytes)).
 			Msg("❌ Échec décodage JSON inscription")
 		return utils.ErrInvalidPayload
 	}
@@ -168,11 +163,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 		return utils.ErrInvalidPayload
 	}
 
-	logger.Debug().
-		Str("raw_body", string(bodyBytes)).
-		Int("body_length", len(bodyBytes)).
-		Msg("📦 Body HTTP reçu (raw)")
-
+	// 🛡️ SÉCURITÉ : Ne jamais logger le raw_body brut (contient le mot de passe en clair)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var req userdto.LoginRequest
@@ -180,7 +171,6 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 		logger.Error().
 			Err(err).
 			Str("error_type", "invalid_json").
-			Str("raw_body", string(bodyBytes)).
 			Msg("❌ Échec décodage JSON connexion")
 		return utils.ErrInvalidPayload
 	}
@@ -197,9 +187,7 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 
 	logger.Info().Str("user_email", req.Email).Msg("🔑 Authentification en cours")
 
-	// ============================================================
 	// 🆕 v4.4.2 : Utiliser ExecuteWithContext avec IP + UserAgent
-	// ============================================================
 	ipAddress := extractIPWithoutPort(r.RemoteAddr)
 	userAgent := r.UserAgent()
 

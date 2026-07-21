@@ -75,7 +75,14 @@ func (uc *RegisterUsecase) Execute(ctx context.Context, email, password string) 
 	}
 
 	// 2. Hash du mot de passe
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// 🛡️ SÉCURITÉ : Forcer un coût minimum de 10 en production, même si BCRYPT_COST est mal configuré
+	cost := bcrypt.DefaultCost
+	if cost < 10 {
+		cost = 10
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), cost)
+
 	if err != nil {
 		logger.Error().
 			Err(err).
