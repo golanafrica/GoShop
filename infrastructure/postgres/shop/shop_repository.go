@@ -789,15 +789,34 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 		return nil, 0, fmt.Errorf("count shops: %w", err)
 	}
 
-	// Déterminer le tri
-	sortBy := "created_at"
-	sortOrder := "DESC"
-	if filters != nil {
-		if filters.SortBy != "" {
+	// 🛡️ SÉCURITÉ CRITIQUE : Whitelist des colonnes autorisées pour le tri (prévention injection SQL)
+	allowedSortColumns := map[string]bool{
+		"name":         true,
+		"slug":         true,
+		"created_at":   true,
+		"updated_at":   true,
+		"health_score": true,
+		"health_level": true,
+		"kyc_status":   true,
+		"plan":         true,
+		"is_active":    true,
+		"suspended_at": true,
+	}
+
+	// Validation stricte de SortBy
+	sortBy := "created_at" // Valeur par défaut sûre
+	if filters != nil && filters.SortBy != "" {
+		if allowedSortColumns[filters.SortBy] {
 			sortBy = filters.SortBy
 		}
-		if filters.SortOrder != "" {
-			sortOrder = strings.ToUpper(filters.SortOrder)
+	}
+
+	// Validation stricte de SortOrder
+	sortOrder := "DESC" // Valeur par défaut sûre
+	if filters != nil && filters.SortOrder != "" {
+		upperOrder := strings.ToUpper(filters.SortOrder)
+		if upperOrder == "ASC" || upperOrder == "DESC" {
+			sortOrder = upperOrder
 		}
 	}
 
@@ -813,7 +832,7 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 		}
 	}
 
-	// Récupérer les shops
+	// Récupérer les shops (sortBy et sortOrder sont maintenant 100% sûrs)
 	args = append(args, limit, offset)
 	query := fmt.Sprintf(`
 		SELECT %s

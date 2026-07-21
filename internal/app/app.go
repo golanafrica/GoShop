@@ -1145,9 +1145,13 @@ func (a *App) setupRouter() {
 			r.Put("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.UpdateTontineSettings))
 		})
 
-		// Routes multi-tenant (AVEC TenantResolver)
+		// Routes multi-tenant (AVEC TenantResolver et Vérification d'Accès)
 		r.Group(func(r chi.Router) {
+			// 1. Résoudre la boutique à partir du header/sous-domaine
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
+
+			// 🛡️ SÉCURITÉ CRITIQUE (IDOR) : Vérifier que l'utilisateur est owner ou collaborateur
+			r.Use(middl.RequireShopAccess(shopCollabRepo))
 
 			// ✅ CORRECTION : Route Dashboard placée ici, au niveau racine du groupe multi-tenant
 			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))

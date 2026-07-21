@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,9 +45,21 @@ func main() {
 	appLogger.Info().Msg("🚀 Démarrage de GoShop API")
 
 	// 2. Charger la configuration applicative (DB, port, etc.)
+	// C'est ici que le fichier .env est lu et injecté dans l'environnement
 	cfg := config.LoadConfig()
 
-	// Log de la configuration (version safe)
+	// 🚨 SÉCURITÉ CRITIQUE : Validation stricte du secret JWT
+	// On vérifie APRÈS le chargement de la config pour s'assurer que le .env est pris en compte
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" || len(jwtSecret) < 32 {
+		log.Fatal("🚨 ERREUR FATALE DE SÉCURITÉ : JWT_SECRET est manquant ou trop court (< 32 caractères). Veuillez le définir dans votre fichier .env. Arrêt du serveur.")
+	}
+
+	// Initialisation sécurisée du package JWT
+	utils.InitJWT(jwtSecret)
+	appLogger.Info().Msg("✅ Secret JWT initialisé et validé avec succès")
+
+	// Log de la configuration (version safe, sans mot de passe)
 	appLogger.Info().
 		Int("app_port", cfg.AppPort).
 		Str("db_host", cfg.DBHost).
@@ -124,7 +137,7 @@ func main() {
 	}
 
 	// Fermer les dépendances dans l'ordre inverse
-	appLogger.Info().Msg("CloseOperation des connexions...")
+	appLogger.Info().Msg("Fermeture des connexions...")
 	db.Close()
 	if utils.Rdb != nil {
 		utils.Rdb.Close()
