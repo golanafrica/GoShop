@@ -1,30 +1,26 @@
 // interfaces/handler/refresh_handler/refresh_handler.go
-// interfaces/handler/refresh_handler/refresh_handler.go
 package refreshhandler
 
 import (
-	"context" // ← AJOUTÉ
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
-	"github.com/rs/zerolog" // ← AJOUTÉ
-
 	"Goshop/interfaces/utils"
+
+	"github.com/rs/zerolog"
 )
 
 type RefreshUseCase interface {
-	// ✅ Ajout du contexte
 	Execute(ctx context.Context, refreshToken string) (string, string, error)
 }
 
 type RefreshHandler struct {
 	uc RefreshUseCase
-	// logger *setupLogging.Logger // ← SUPPRIMÉ (inutile avec zerolog.Ctx)
 }
 
 func NewRefreshHandler(uc RefreshUseCase) *RefreshHandler {
-	// Le logger est maintenant injecté via le contexte → pas besoin de le stocker
 	return &RefreshHandler{uc: uc}
 }
 
@@ -32,10 +28,21 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// @Summary Rafraîchir les tokens d'authentification
+// @Description Génère un nouveau couple de tokens (access et refresh) à partir d'un refresh token valide.
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body refreshhandler.refreshRequest true "Le refresh token actuel (peut aussi être passé dans le header X-Refresh-Token)"
+// @Success 200 {object} map[string]string "Nouveaux tokens d'accès"
+// @Failure 400 {object} utils.AppError "Refresh token manquant ou format invalide"
+// @Failure 401 {object} utils.AppError "Refresh token invalide ou expiré"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Router /auth/refresh [post]
 func (h *RefreshHandler) Refresh(w http.ResponseWriter, r *http.Request) error {
 	startTime := time.Now()
 
-	// ✅ Récupère le logger enriched avec request_id depuis le contexte
+	// Récupère le logger enriched avec request_id depuis le contexte
 	logger := zerolog.Ctx(r.Context()).With().Str("operation", "refresh_token").Logger()
 
 	logger.Debug().Msg("Traitement de la requête refresh token")
@@ -76,7 +83,7 @@ func (h *RefreshHandler) Refresh(w http.ResponseWriter, r *http.Request) error {
 		Int("token_length", len(req.RefreshToken)).
 		Msg("Exécution du usecase refresh")
 
-	// ✅ Appel avec le contexte
+	// Appel avec le contexte
 	access, refresh, err := h.uc.Execute(r.Context(), req.RefreshToken)
 	if err != nil {
 		h.handleUseCaseError(w, logger, err)

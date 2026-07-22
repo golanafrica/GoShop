@@ -96,8 +96,18 @@ type SimulateCreditRequest struct {
 // HANDLERS : CREDIT PLANS (MARCHAND)
 // ============================================================
 
-// ConfigureCreditPlan configure un plan de crédit pour un produit
-// POST /api/credit/plans
+// @Summary Configurer un plan de crédit pour un produit
+// @Description Permet à un marchand d'activer ou de mettre à jour les conditions de crédit pour un produit spécifique.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body credit_handler.ConfigurePlanRequest true "Détails du plan de crédit"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou données manquantes"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/plans [post]
 func (h *CreditHandler) ConfigureCreditPlan(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -155,8 +165,18 @@ func (h *CreditHandler) ConfigureCreditPlan(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// GetCreditPlan retourne le plan de crédit d'un produit
-// GET /api/credit/plans/{product_id}
+// @Summary Récupérer le plan de crédit d'un produit
+// @Description Retourne les détails de la configuration de crédit pour un produit spécifique.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param product_id path string true "ID du produit (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "ID de produit manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 404 {object} utils.AppError "Plan de crédit non trouvé"
+// @Security ApiKeyAuth
+// @Router /api/credit/plans/{product_id} [get]
 func (h *CreditHandler) GetCreditPlan(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -201,8 +221,17 @@ func (h *CreditHandler) GetCreditPlan(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListCreditPlans retourne tous les plans d'une boutique
-// GET /api/credit/plans
+// @Summary Lister les plans de crédit d'une boutique
+// @Description Retourne la liste de tous les plans de crédit configurés pour la boutique active.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param enabled query boolean false "Filtrer uniquement les plans activés (true/false)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/plans [get]
 func (h *CreditHandler) ListCreditPlans(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -256,8 +285,18 @@ func (h *CreditHandler) ListCreditPlans(w http.ResponseWriter, r *http.Request) 
 // HANDLERS : CREDIT APPLICATIONS (CLIENT)
 // ============================================================
 
-// ApplyForCredit permet à un client de demander un crédit
-// POST /api/credit/apply
+// @Summary Demander un crédit
+// @Description Permet à un client de soumettre une demande de financement pour un produit spécifique.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body credit_handler.ApplyForCreditRequest true "Détails de la demande de crédit"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou éligibilité non remplie"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/apply [post]
 func (h *CreditHandler) ApplyForCredit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -315,8 +354,18 @@ func (h *CreditHandler) ApplyForCredit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SimulateCredit simule un crédit sans créer de demande
-// POST /api/credit/simulate
+// @Summary Simuler un crédit
+// @Description Calcule les mensualités et le coût total d'un crédit sans créer de demande officielle.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body credit_handler.SimulateCreditRequest true "Paramètres de la simulation"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou produit non éligible"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/simulate [post]
 func (h *CreditHandler) SimulateCredit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -367,8 +416,19 @@ func (h *CreditHandler) SimulateCredit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// CheckEligibility vérifie si un client peut demander un crédit
-// GET /api/credit/eligibility/{customer_id}/{product_id}
+// @Summary Vérifier l'éligibilité au crédit
+// @Description Vérifie si un client spécifique est éligible pour demander un crédit sur un produit donné.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param customer_id path string true "ID du client (UUID)"
+// @Param product_id path string true "ID du produit (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "IDs manquants"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/eligibility/{customer_id}/{product_id} [get]
 func (h *CreditHandler) CheckEligibility(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -401,8 +461,18 @@ func (h *CreditHandler) CheckEligibility(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// GetCustomerScore retourne le score de crédit d'un client
-// GET /api/credit/score/{customer_id}
+// @Summary Obtenir le score de crédit d'un client
+// @Description Retourne le score de fiabilité actuel d'un client et son historique de paiement.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param customer_id path string true "ID du client (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "ID client manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/score/{customer_id} [get]
 func (h *CreditHandler) GetCustomerScore(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -461,8 +531,18 @@ func (h *CreditHandler) GetCustomerScore(w http.ResponseWriter, r *http.Request)
 // HANDLERS : APPROVAL (MARCHAND)
 // ============================================================
 
-// ApproveCredit permet au marchand d'approuver une demande
-// POST /api/credit/approve
+// @Summary Approuver une demande de crédit
+// @Description Permet au marchand d'accepter une demande de crédit, ce qui génère le contrat et les échéances.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body credit_handler.ApproveCreditRequest true "ID de la demande à approuver"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou demande introuvable"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/approve [post]
 func (h *CreditHandler) ApproveCredit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -521,8 +601,18 @@ func (h *CreditHandler) ApproveCredit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RejectCredit permet au marchand de rejeter une demande
-// POST /api/credit/reject
+// @Summary Rejeter une demande de crédit
+// @Description Permet au marchand de refuser une demande de crédit avec un motif obligatoire.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body credit_handler.RejectCreditRequest true "ID de la demande et motif du rejet"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou motif manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/reject [post]
 func (h *CreditHandler) RejectCredit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -581,8 +671,16 @@ func (h *CreditHandler) RejectCredit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListPendingApplications retourne les demandes en attente
-// GET /api/credit/applications/pending
+// @Summary Lister les demandes de crédit en attente
+// @Description Retourne la liste de toutes les demandes de crédit nécessitant une validation du marchand.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/applications/pending [get]
 func (h *CreditHandler) ListPendingApplications(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -638,10 +736,18 @@ func (h *CreditHandler) ListPendingApplications(w http.ResponseWriter, r *http.R
 // HANDLERS : DOWN PAYMENT (CLIENT)
 // ============================================================
 
-// PayDownPayment permet au client de payer l'apport initial
-// POST /api/credit/down-payment
-// PayDownPayment permet au client d'initier le paiement de l'apport initial
-// POST /api/credit/down-payment
+// @Summary Payer l'apport initial d'un crédit
+// @Description Permet au client d'initier le paiement de l'apport obligatoire pour activer son contrat de crédit.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param request body creditusecase.PayDownPaymentRequest true "Détails du paiement de l'apport"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou contrat non éligible"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/down-payment [post]
 func (h *CreditHandler) PayDownPayment(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -680,8 +786,19 @@ func (h *CreditHandler) PayDownPayment(w http.ResponseWriter, r *http.Request) {
 // 🆕 HANDLERS : INSTALLMENT PAYMENT (CLIENT)
 // ============================================================
 
-// PayInstallment permet au client de payer une échéance manuellement
-// POST /api/credit/installments/{installment_id}/pay
+// @Summary Payer une échéance de crédit
+// @Description Permet au client d'initier manuellement le paiement d'une échéance spécifique de son contrat.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param installment_id path string true "ID de l'échéance à payer (UUID)"
+// @Param request body creditusecase.PayInstallmentRequest true "Détails du paiement"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou échéance non payable"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/installments/{installment_id}/pay [post]
 func (h *CreditHandler) PayInstallment(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -729,8 +846,19 @@ func (h *CreditHandler) PayInstallment(w http.ResponseWriter, r *http.Request) {
 // HANDLERS : CONTRACTS & INSTALLMENTS
 // ============================================================
 
-// GetContract retourne les détails d'un contrat
-// GET /api/credit/contracts/{contract_id}
+// @Summary Obtenir les détails d'un contrat de crédit
+// @Description Retourne les informations complètes d'un contrat, y compris la liste de toutes ses échéances.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param contract_id path string true "ID du contrat (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "ID de contrat manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé : le contrat n'appartient pas à votre boutique"
+// @Failure 404 {object} utils.AppError "Contrat introuvable"
+// @Security ApiKeyAuth
+// @Router /api/credit/contracts/{contract_id} [get]
 func (h *CreditHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -816,8 +944,19 @@ func (h *CreditHandler) GetContract(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetContractStats retourne les statistiques d'un contrat
-// GET /api/credit/contracts/{contract_id}/stats
+// @Summary Obtenir les statistiques d'un contrat
+// @Description Retourne un résumé financier et l'état d'avancement d'un contrat de crédit spécifique.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Param contract_id path string true "ID du contrat (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "ID de contrat manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé"
+// @Failure 404 {object} utils.AppError "Contrat introuvable"
+// @Security ApiKeyAuth
+// @Router /api/credit/contracts/{contract_id}/stats [get]
 func (h *CreditHandler) GetContractStats(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -853,8 +992,16 @@ func (h *CreditHandler) GetContractStats(w http.ResponseWriter, r *http.Request)
 	utils.WriteJSON(w, http.StatusOK, stats)
 }
 
-// ListActiveContracts retourne les contrats actifs
-// GET /api/credit/contracts/active
+// @Summary Lister les contrats de crédit actifs
+// @Description Retourne la liste de tous les contrats de crédit actuellement en cours pour la boutique.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/contracts/active [get]
 func (h *CreditHandler) ListActiveContracts(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -898,8 +1045,16 @@ func (h *CreditHandler) ListActiveContracts(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// ListOverdueInstallments retourne les échéances en retard
-// GET /api/credit/installments/overdue
+// @Summary Lister les échéances de crédit en retard
+// @Description Retourne la liste de toutes les échéances non payées dont la date d'échéance est dépassée.
+// @Tags Credit Management
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/credit/installments/overdue [get]
 func (h *CreditHandler) ListOverdueInstallments(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 

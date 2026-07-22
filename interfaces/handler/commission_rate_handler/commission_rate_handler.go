@@ -43,24 +43,39 @@ func NewCommissionRateHandler(
 }
 
 // ============================================================
+// REQUEST/RESPONSE TYPES
+// ============================================================
+
+// CommissionRateRequest représente la requête de mise à jour d'un taux de commission
+type CommissionRateRequest struct {
+	ShopID             string `json:"shop_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	TransactionType    string `json:"transaction_type" example:"online_payment"`
+	RateBps            int    `json:"rate_bps" example:"250"`
+	MinCommissionCents int64  `json:"min_commission_cents" example:"10000"`
+	MaxCommissionCents int64  `json:"max_commission_cents" example:"50000"`
+	IsActive           bool   `json:"is_active" example:"true"`
+}
+
+// ============================================================
 // ENDPOINTS : CONFIGURATION DES TAUX
 // ============================================================
 
-// UpdateRate met à jour le taux de commission pour une boutique
-// PUT /api/admin/commission-rates
+// @Summary Mettre à jour le taux de commission d'une boutique
+// @Description Met à jour ou crée un nouveau taux de commission pour un type de transaction spécifique. Le taux est limité à 15% (1500 bps) conformément à la BCEAO.
+// @Tags Commission Management
+// @Accept json
+// @Produce json
+// @Param request body commissionratehandler.CommissionRateRequest true "Détails du taux de commission"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou taux hors limites"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/commission-rates [put]
 func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	var req struct {
-		ShopID             string `json:"shop_id"`
-		TransactionType    string `json:"transaction_type"`
-		RateBps            int    `json:"rate_bps"`
-		MinCommissionCents int64  `json:"min_commission_cents"`
-		MaxCommissionCents int64  `json:"max_commission_cents"`
-		IsActive           bool   `json:"is_active"`
-	}
-
+	var req CommissionRateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return utils.NewAppError("INVALID_PAYLOAD", "Invalid request body", http.StatusBadRequest)
 	}
@@ -118,15 +133,23 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	return nil
 }
 
-// GetRates récupère tous les taux d'une boutique
-// GET /api/admin/commission-rates?shop_id=xxx
+// @Summary Récupérer les taux de commission d'une boutique
+// @Description Retourne la liste de tous les taux de commission configurés pour une boutique donnée.
+// @Tags Commission Management
+// @Accept json
+// @Produce json
+// @Param shop_id query string true "ID de la boutique (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "shop_id manquant"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/commission-rates [get]
 func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
 	shopID := r.URL.Query().Get("shop_id")
 	if shopID == "" {
-		// ✅ FIX : Utiliser utils.NewAppError pour que le middleware le reconnaisse et renvoie un 400
 		return utils.NewAppError("MISSING_SHOP_ID", "shop_id is required", http.StatusBadRequest)
 	}
 
@@ -149,8 +172,14 @@ func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request)
 // ENDPOINTS : TRIGGERS MANUELS
 // ============================================================
 
-// TriggerOnlineCollection déclenche manuellement la collecte en ligne
-// POST /api/admin/commission-rates/trigger-online
+// @Summary Déclencher manuellement la collecte des commissions en ligne
+// @Description Lance la collecte des commissions pour les paiements en ligne en arrière-plan (utile pour le débogage ou la récupération).
+// @Tags Commission Management
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/commission-rates/trigger-online [post]
 func (h *CommissionRateHandler) TriggerOnlineCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 	logger.Info().Msg("🔧 Manual online payment collection triggered")
@@ -172,8 +201,14 @@ func (h *CommissionRateHandler) TriggerOnlineCollection(w http.ResponseWriter, r
 	return nil
 }
 
-// TriggerTontineCollection déclenche manuellement la collecte tontine
-// POST /api/admin/commission-rates/trigger-tontine
+// @Summary Déclencher manuellement la collecte des commissions Tontine
+// @Description Lance la collecte des commissions pour les tontines en arrière-plan.
+// @Tags Commission Management
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/commission-rates/trigger-tontine [post]
 func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 	logger.Info().Msg("🎯 Manual tontine collection triggered")
@@ -197,8 +232,14 @@ func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, 
 	return nil
 }
 
-// TriggerCreditCollection déclenche manuellement la collecte credit
-// POST /api/admin/commission-rates/trigger-credit
+// @Summary Déclencher manuellement la collecte des commissions Crédit
+// @Description Lance la collecte des commissions pour les crédits en arrière-plan.
+// @Tags Commission Management
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/commission-rates/trigger-credit [post]
 func (h *CommissionRateHandler) TriggerCreditCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 	logger.Info().Msg("💰 Manual credit collection triggered")

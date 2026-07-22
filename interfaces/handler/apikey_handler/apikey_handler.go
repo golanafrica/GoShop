@@ -69,7 +69,20 @@ func NewAPIKeyHandler(
 // ENDPOINT 1 : CREATE API KEY
 // ============================================================
 
-// CreateAPIKey crée une nouvelle clé API
+// @Summary Créer une nouvelle clé API
+// @Description Génère une nouvelle clé API pour un utilisateur avec des scopes spécifiques. La clé complète n'est affichée qu'une seule fois à la création.
+// @Tags API Key Management
+// @Accept json
+// @Produce json
+// @Param request body apikeyusecase.CreateAPIKeyRequest true "Détails de la clé API (name, scopes, is_test)"
+// @Success 201 {object} apikeyusecase.CreateAPIKeyResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou champs manquants"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 429 {object} utils.AppError "Limite de clés atteinte"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/api-keys [post]
 func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -114,7 +127,21 @@ func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) err
 // ENDPOINT 2 : LIST API KEYS
 // ============================================================
 
-// ListAPIKeys liste les clés API de l'utilisateur authentifié
+// @Summary Lister les clés API
+// @Description Récupère la liste paginée des clés API d'un utilisateur (ou de tous les utilisateurs pour les admins).
+// @Tags API Key Management
+// @Accept json
+// @Produce json
+// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
+// @Param active_only query boolean false "Ne retourner que les clés actives (défaut: true)"
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Success 200 {object} apikeyusecase.ListAPIKeysResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/api-keys [get]
 func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -166,7 +193,21 @@ func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) erro
 // ENDPOINT 3 : REVOKE API KEY
 // ============================================================
 
-// RevokeAPIKey révoque une clé API spécifique
+// @Summary Révoquer une clé API
+// @Description Révoque une clé API spécifique, l'empêchant d'être utilisée pour de futures requêtes.
+// @Tags API Key Management
+// @Accept json
+// @Produce json
+// @Param request body apikeyusecase.RevokeAPIKeyRequest true "ID de la clé et motif de révocation"
+// @Success 200 {object} apikeyusecase.RevokeAPIKeyResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou api_key_id manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Clé API introuvable"
+// @Failure 409 {object} utils.AppError "Clé déjà révoquée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/api-keys/revoke [post]
 func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -205,7 +246,19 @@ func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) err
 // ENDPOINT 4 : REVOKE ALL API KEYS
 // ============================================================
 
-// RevokeAllAPIKeys révoque toutes les clés API d'un user
+// @Summary Révoquer toutes les clés API d'un utilisateur
+// @Description Révoque toutes les clés API actives associées à un utilisateur spécifique.
+// @Tags API Key Management
+// @Accept json
+// @Produce json
+// @Param request body apikeyusecase.RevokeAllAPIKeysRequest false "ID de l'utilisateur et motif de révocation"
+// @Success 200 {object} apikeyusecase.RevokeAllAPIKeysResponse
+// @Failure 400 {object} utils.AppError "Payload invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/api-keys/revoke-all [post]
 func (h *APIKeyHandler) RevokeAllAPIKeys(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -240,7 +293,18 @@ func (h *APIKeyHandler) RevokeAllAPIKeys(w http.ResponseWriter, r *http.Request)
 // ENDPOINT 5 : GET STATISTICS
 // ============================================================
 
-// GetStatistics retourne les statistiques des clés API
+// @Summary Obtenir les statistiques des clés API
+// @Description Récupère les statistiques d'utilisation et l'état des clés API pour un utilisateur ou globalement.
+// @Tags API Key Management
+// @Accept json
+// @Produce json
+// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
+// @Success 200 {object} apikeyusecase.GetAPIKeyStatsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/api-keys/stats [get]
 func (h *APIKeyHandler) GetStatistics(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

@@ -34,7 +34,19 @@ func NewTontineHandler(
 	}
 }
 
-// CreateGroup gère POST /api/tontine/groups
+// @Summary Créer un groupe de tontine
+// @Description Initialise un nouveau groupe de tontine pour un produit spécifique.
+// @Tags Tontine
+// @Accept json
+// @Produce json
+// @Param request body tontineusecase.CreateGroupRequest true "Détails du groupe à créer"
+// @Success 201 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou règles de tontine non respectées"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (KYC non validé ou droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/tontine/groups [post]
 func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -53,7 +65,21 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-// JoinGroup gère POST /api/tontine/groups/join
+// @Summary Rejoindre un groupe de tontine
+// @Description Permet à un client de rejoindre un groupe de tontine existant via un code d'invitation.
+// @Tags Tontine
+// @Accept json
+// @Produce json
+// @Param request body tontineusecase.JoinGroupRequest true "Code d'invitation et ID client"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou code incorrect"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (KYC non validé)"
+// @Failure 404 {object} utils.AppError "Groupe introuvable"
+// @Failure 409 {object} utils.AppError "Groupe déjà complet ou client déjà membre"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/tontine/groups/join [post]
 func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -72,7 +98,20 @@ func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error
 	return nil
 }
 
-// PayCycle gère POST /api/tontine/groups/{group_id}/pay
+// @Summary Payer une cotisation de tontine
+// @Description Lance le processus de paiement pour la cotisation d'un cycle spécifique.
+// @Tags Tontine
+// @Accept json
+// @Produce json
+// @Param group_id path string true "ID du groupe de tontine (UUID)"
+// @Param request body tontineusecase.PayCycleRequest true "Détails du paiement (provider, phone_number, etc.)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou cycle non éligible"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Groupe ou cycle introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/tontine/groups/{group_id}/pay [post]
 func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -98,7 +137,21 @@ func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error 
 	return nil
 }
 
-// ListCustomerPayments gère GET /api/tontine/groups/{group_id}/payments
+// @Summary Lister les paiements d'un client dans un groupe
+// @Description Retourne l'historique des cotisations payées par un client spécifique dans un groupe de tontine.
+// @Tags Tontine
+// @Accept json
+// @Produce json
+// @Param group_id path string true "ID du groupe de tontine (UUID)"
+// @Param customer_id query string true "ID du client (UUID)"
+// @Success 200 {array} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Paramètres manquants"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (accès aux données d'un autre client)"
+// @Failure 404 {object} utils.AppError "Groupe introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/tontine/groups/{group_id}/payments [get]
 func (h *TontineHandler) ListCustomerPayments(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 

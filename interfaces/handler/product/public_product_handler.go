@@ -21,6 +21,19 @@ func NewPublicProductHandler(uc *productuscase.ListPublicProductsUsecase) *Publi
 	}
 }
 
+// @Summary Obtenir le catalogue public des produits
+// @Description Retourne la liste paginée et filtrée des produits disponibles publiquement (sans authentification requise).
+// @Tags Public Products
+// @Accept json
+// @Produce json
+// @Param search query string false "Terme de recherche (Full Text Search)"
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param min_price query int false "Prix minimum en centimes"
+// @Param max_price query int false "Prix maximum en centimes"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Router /api/public/products [get]
 func (ph *PublicProductHandler) GetPublicProducts(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -28,7 +41,6 @@ func (ph *PublicProductHandler) GetPublicProducts(w http.ResponseWriter, r *http
 	logger.Info().Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Msg("Fetching public product catalog with filters")
 
 	// Parsing des paramètres pour le catalogue public
-	// On utilise 'dto.' car c'est le nom du package défini dans application/dto/product_dto/
 	req := &dto.ListProductsRequest{
 		Search: r.URL.Query().Get("search"),
 		Limit:  50,

@@ -32,16 +32,30 @@ func NewTontineSettingsHandler(
 
 // TontineSettingsRequest représente la requête de configuration tontine
 type TontineSettingsRequest struct {
-	ProductID             string `json:"product_id"`
-	IsTontineEnabled      bool   `json:"is_tontine_enabled"`
-	AllowCommercialCircle bool   `json:"allow_commercial_circle"`
-	AllowCorporateCircle  bool   `json:"allow_corporate_circle"`
-	AllowFamilyCircle     bool   `json:"allow_family_circle"`
-	MinParticipants       int    `json:"min_participants"`
-	MaxParticipants       int    `json:"max_participants"`
+	ProductID             string `json:"product_id" example:"123e4567-e89b-12d3-a456-426614174000"`
+	IsTontineEnabled      bool   `json:"is_tontine_enabled" example:"true"`
+	AllowCommercialCircle bool   `json:"allow_commercial_circle" example:"true"`
+	AllowCorporateCircle  bool   `json:"allow_corporate_circle" example:"true"`
+	AllowFamilyCircle     bool   `json:"allow_family_circle" example:"true"`
+	MinParticipants       int    `json:"min_participants" example:"4"`
+	MaxParticipants       int    `json:"max_participants" example:"12"`
 }
 
-// GetTontineSettings gère GET /api/shops/{id}/tontine-settings?product_id=...
+// @Summary Récupérer les paramètres de tontine d'un produit
+// @Description Retourne la configuration de tontine actuelle pour un produit spécifique dans une boutique donnée.
+// @Tags Tontine Settings
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param product_id query string true "ID du produit (UUID)"
+// @Success 200 {object} entity.ProductTontineSettings
+// @Failure 400 {object} utils.AppError "ID de boutique invalide ou product_id manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (vous n'êtes pas le propriétaire)"
+// @Failure 404 {object} utils.AppError "Boutique ou paramètres tontine introuvables"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{id}/tontine-settings [get]
 func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -72,7 +86,21 @@ func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *ht
 	return nil
 }
 
-// UpdateTontineSettings gère PUT /api/shops/{id}/tontine-settings
+// @Summary Mettre à jour les paramètres de tontine d'un produit
+// @Description Active ou désactive la tontine pour un produit et configure les paramètres (cercles autorisés, nombre de participants, etc.).
+// @Tags Tontine Settings
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param request body shophandler.TontineSettingsRequest true "Nouveaux paramètres de tontine"
+// @Success 200 {object} entity.ProductTontineSettings
+// @Failure 400 {object} utils.AppError "Payload invalide, ID invalide ou validation échouée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (vous n'êtes pas le propriétaire)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{id}/tontine-settings [put]
 func (h *TontineSettingsHandler) UpdateTontineSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 

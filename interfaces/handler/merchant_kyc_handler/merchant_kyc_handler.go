@@ -39,7 +39,7 @@ func NewMerchantKYCHandler(
 }
 
 // ============================================================
-// ENDPOINTS MARCHAND
+// REQUEST/RESPONSE TYPES
 // ============================================================
 
 type SubmitKYCRequest struct {
@@ -54,6 +54,34 @@ type DocumentInput struct {
 	MimeType      string `json:"mime_type"`
 }
 
+type ReviewKYCRequest struct {
+	Action          string                `json:"action"`
+	RejectionReason *string               `json:"rejection_reason,omitempty"`
+	DocumentReviews []DocumentReviewInput `json:"document_reviews,omitempty"`
+}
+
+type DocumentReviewInput struct {
+	DocumentID      string  `json:"document_id"`
+	Action          string  `json:"action"`
+	RejectionReason *string `json:"rejection_reason,omitempty"`
+}
+
+// ============================================================
+// ENDPOINTS MARCHAND
+// ============================================================
+
+// @Summary Soumettre une demande de KYC Marchand
+// @Description Permet à un marchand de soumettre ses documents d'identité pour vérification.
+// @Tags Merchant KYC
+// @Accept json
+// @Produce json
+// @Param request body merchantkychandler.SubmitKYCRequest true "Liste des documents à soumettre"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou documents manquants"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/merchant/kyc/submit [post]
 func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -98,6 +126,16 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
+// @Summary Obtenir le statut KYC du marchand
+// @Description Retourne le statut actuel de la vérification KYC du marchand connecté.
+// @Tags Merchant KYC
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/merchant/kyc/status [get]
 func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -119,18 +157,19 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 // ENDPOINTS ADMIN
 // ============================================================
 
-type ReviewKYCRequest struct {
-	Action          string                `json:"action"`
-	RejectionReason *string               `json:"rejection_reason,omitempty"`
-	DocumentReviews []DocumentReviewInput `json:"document_reviews,omitempty"`
-}
-
-type DocumentReviewInput struct {
-	DocumentID      string  `json:"document_id"`
-	Action          string  `json:"action"`
-	RejectionReason *string `json:"rejection_reason,omitempty"`
-}
-
+// @Summary Lister les demandes KYC marchand en attente (Admin)
+// @Description Retourne la liste paginée des boutiques dont le KYC est en attente de validation par un administrateur.
+// @Tags Admin Merchant KYC
+// @Accept json
+// @Produce json
+// @Param limit query int false "Nombre de résultats (défaut: 20)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/merchant-kyc/pending [get]
 func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -167,6 +206,21 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 	return nil
 }
 
+// @Summary Réviser une demande KYC marchand (Admin)
+// @Description Permet à un administrateur d'approuver ou de rejeter les documents KYC soumis par une boutique.
+// @Tags Admin Merchant KYC
+// @Accept json
+// @Produce json
+// @Param shop_id path string true "ID de la boutique (UUID)"
+// @Param request body merchantkychandler.ReviewKYCRequest true "Décision de révision (approve/reject) et motifs"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou action invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 404 {object} utils.AppError "Boutique ou demande KYC introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/merchant-kyc/{shop_id}/review [put]
 func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

@@ -68,7 +68,21 @@ func NewSessionHandler(
 // ENDPOINT 1 : LIST SESSIONS
 // ============================================================
 
-// ListSessions liste les sessions de l'utilisateur authentifié
+// @Summary Lister les sessions utilisateur
+// @Description Récupère la liste paginée et filtrée des sessions actives ou passées d'un utilisateur.
+// @Tags Session Management
+// @Accept json
+// @Produce json
+// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
+// @Param active_only query boolean false "Ne retourner que les sessions actives (défaut: true)"
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Success 200 {object} sessionusecase.ListSessionsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/sessions [get]
 func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -120,7 +134,18 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) er
 // ENDPOINT 2 : GET STATISTICS
 // ============================================================
 
-// GetStatistics retourne les statistiques des sessions
+// @Summary Obtenir les statistiques des sessions
+// @Description Retourne un résumé statistique des sessions actives, expirées et révoquées pour un utilisateur ou globalement.
+// @Tags Session Management
+// @Accept json
+// @Produce json
+// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
+// @Success 200 {object} sessionusecase.GetSessionStatsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/sessions/stats [get]
 func (h *SessionHandler) GetStatistics(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -153,7 +178,21 @@ func (h *SessionHandler) GetStatistics(w http.ResponseWriter, r *http.Request) e
 // ENDPOINT 3 : REVOKE SESSION
 // ============================================================
 
-// RevokeSession révoque une session spécifique
+// @Summary Révoquer une session spécifique
+// @Description Invalide une session active spécifique, forçant la déconnexion de l'appareil concerné.
+// @Tags Session Management
+// @Accept json
+// @Produce json
+// @Param request body sessionusecase.RevokeSessionRequest true "ID de la session cible et motif optionnel"
+// @Success 200 {object} sessionusecase.RevokeSessionResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC ou tentative de révocation de sa propre session)"
+// @Failure 404 {object} utils.AppError "Session introuvable"
+// @Failure 409 {object} utils.AppError "Session déjà révoquée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/sessions/revoke [post]
 func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -191,7 +230,19 @@ func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) e
 // ENDPOINT 4 : REVOKE ALL SESSIONS
 // ============================================================
 
-// RevokeAllSessions révoque toutes les sessions (sauf courante)
+// @Summary Révoquer toutes les sessions d'un utilisateur
+// @Description Invalide toutes les sessions actives d'un utilisateur (sauf la session courante de l'admin), forçant une déconnexion globale.
+// @Tags Session Management
+// @Accept json
+// @Produce json
+// @Param request body sessionusecase.RevokeAllSessionsRequest false "ID de l'utilisateur cible et motif optionnel"
+// @Success 200 {object} sessionusecase.RevokeAllSessionsResponse
+// @Failure 400 {object} utils.AppError "Payload invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/sessions/revoke-all [post]
 func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -225,7 +276,18 @@ func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Reques
 // ENDPOINT 5 : CLEANUP SESSIONS
 // ============================================================
 
-// CleanupSessions nettoie les sessions expirées (super_admin)
+// @Summary Nettoyer les sessions expirées ou révoquées
+// @Description Supprime physiquement les sessions expirées ou révoquées de la base de données pour libérer de l'espace (réservé aux super_admin).
+// @Tags Session Management
+// @Accept json
+// @Produce json
+// @Param request body sessionusecase.CleanupSessionsRequest false "Inclure les sessions révoquées dans le nettoyage (défaut: false)"
+// @Success 200 {object} sessionusecase.CleanupSessionsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (super_admin requis)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/sessions/cleanup [post]
 func (h *SessionHandler) CleanupSessions(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

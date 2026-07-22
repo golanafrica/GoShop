@@ -54,7 +54,19 @@ func NewShopHandler(
 	}
 }
 
-// CreateShop crée une nouvelle boutique
+// @Summary Créer une nouvelle boutique
+// @Description Crée une nouvelle boutique pour l'utilisateur authentifié.
+// @Tags Shops
+// @Accept json
+// @Produce json
+// @Param request body shopdto.CreateShopRequest true "Détails de la boutique à créer"
+// @Success 201 {object} shopdto.ShopResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou validation échouée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 409 {object} utils.AppError "Le slug ou le domaine est déjà utilisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops [post]
 func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -107,7 +119,16 @@ func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ListShops liste les boutiques de l'utilisateur authentifié
+// @Summary Lister mes boutiques
+// @Description Retourne la liste des boutiques dont l'utilisateur authentifié est propriétaire.
+// @Tags Shops
+// @Accept json
+// @Produce json
+// @Success 200 {array} shopdto.ShopResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops [get]
 func (h *ShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -140,7 +161,22 @@ func (h *ShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// UpdateShop met à jour une boutique
+// @Summary Mettre à jour une boutique
+// @Description Met à jour les informations d'une boutique existante (nom, domaine, plan, statut).
+// @Tags Shops
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param request body shopdto.UpdateShopRequest true "Nouvelles données de la boutique"
+// @Success 200 {object} shopdto.ShopResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (vous n'êtes pas le propriétaire)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 409 {object} utils.AppError "Le domaine est déjà utilisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{id} [put]
 func (h *ShopHandler) UpdateShop(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

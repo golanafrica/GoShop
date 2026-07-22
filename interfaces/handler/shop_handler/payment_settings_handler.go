@@ -32,7 +32,20 @@ func NewPaymentSettingsHandler(configureUC ConfigurePaymentUseCaseInterface) *Pa
 	}
 }
 
-// UpdatePaymentSettings met à jour les settings de paiement
+// @Summary Mettre à jour les paramètres de paiement d'une boutique
+// @Description Met à jour les configurations de paiement (Mobile Money, COD, Tontine, etc.) pour une boutique spécifique.
+// @Tags Shop Payment Settings
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param request body shopdto.UpdatePaymentSettingsRequest true "Nouvelles configurations de paiement"
+// @Success 200 {object} shopdto.PaymentSettingsResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou validation échouée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (vous n'êtes pas le propriétaire)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{id}/payment-settings [put]
 func (h *PaymentSettingsHandler) UpdatePaymentSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -79,7 +92,19 @@ func (h *PaymentSettingsHandler) UpdatePaymentSettings(w http.ResponseWriter, r 
 	return nil
 }
 
-// GetPaymentSettings récupère les settings de paiement
+// @Summary Récupérer les paramètres de paiement d'une boutique
+// @Description Retourne les configurations de paiement actuelles d'une boutique spécifique.
+// @Tags Shop Payment Settings
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Success 200 {object} shopdto.PaymentSettingsResponse
+// @Failure 400 {object} utils.AppError "ID de boutique manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (vous n'êtes pas le propriétaire)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{id}/payment-settings [get]
 func (h *PaymentSettingsHandler) GetPaymentSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -113,7 +138,17 @@ func (h *PaymentSettingsHandler) GetPaymentSettings(w http.ResponseWriter, r *ht
 	return nil
 }
 
-// GetPaymentSettingsForCurrentShop récupère les settings pour le shop du contexte
+// @Summary Récupérer les paramètres de paiement de la boutique active
+// @Description Retourne les configurations de paiement de la boutique identifiée par le contexte multi-tenant (header X-Shop-Slug).
+// @Tags Shop Payment Settings
+// @Accept json
+// @Produce json
+// @Success 200 {object} shopdto.PaymentSettingsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Contexte multi-tenant manquant ou interdit"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/payment-settings [get]
 func (h *PaymentSettingsHandler) GetPaymentSettingsForCurrentShop(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

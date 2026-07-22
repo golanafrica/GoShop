@@ -82,7 +82,19 @@ func NewCollaboratorHandler(
 // ADMIN PLATFORM ENDPOINTS
 // ============================================================
 
-// InvitePlatformCollaborator gère POST /api/admin/collaborators/platform/invite
+// @Summary Inviter un collaborateur plateforme
+// @Description Envoie une invitation par email pour ajouter un collaborateur au niveau de la plateforme.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param request body collaboratorusecase.InvitePlatformCollaboratorRequest true "Détails de l'invitation (email, role)"
+// @Success 201 {object} collaboratorusecase.InvitePlatformCollaboratorResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou email déjà invité"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC: super_admin, admin requis)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/collaborators/platform/invite [post]
 func (h *CollaboratorHandler) InvitePlatformCollaborator(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -112,7 +124,24 @@ func (h *CollaboratorHandler) InvitePlatformCollaborator(w http.ResponseWriter, 
 	return nil
 }
 
-// ListPlatformCollaborators gère GET /api/admin/collaborators/platform
+// @Summary Lister les collaborateurs plateforme
+// @Description Récupère la liste paginée et filtrée des collaborateurs de la plateforme.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param role query string false "Filtrer par rôle"
+// @Param search query string false "Recherche par email ou nom"
+// @Param is_active query boolean false "Filtrer par statut actif (true/false)"
+// @Param limit query int false "Nombre de résultats (défaut: 20)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param sort_by query string false "Colonne de tri"
+// @Param sort_order query string false "Ordre de tri (ASC/DESC)"
+// @Success 200 {object} collaboratorusecase.ListCollaboratorsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/collaborators/platform [get]
 func (h *CollaboratorHandler) ListPlatformCollaborators(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -143,7 +172,21 @@ func (h *CollaboratorHandler) ListPlatformCollaborators(w http.ResponseWriter, r
 	return nil
 }
 
-// UpdatePlatformCollaboratorRole gère PUT /api/admin/collaborators/platform/{id}/role
+// @Summary Modifier le rôle d'un collaborateur plateforme
+// @Description Met à jour le rôle d'un collaborateur existant au niveau de la plateforme.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du collaborateur (UUID)"
+// @Param request body object true "Nouveau rôle" example({"new_role": "admin"})
+// @Success 200 {object} collaboratorusecase.UpdateCollaboratorRoleResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou rôle invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (ex: tentative de modifier son propre rôle)"
+// @Failure 404 {object} utils.AppError "Collaborateur introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/collaborators/platform/{id}/role [put]
 func (h *CollaboratorHandler) UpdatePlatformCollaboratorRole(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -178,7 +221,21 @@ func (h *CollaboratorHandler) UpdatePlatformCollaboratorRole(w http.ResponseWrit
 	return nil
 }
 
-// RemovePlatformCollaborator gère DELETE /api/admin/collaborators/platform/{id}
+// @Summary Supprimer un collaborateur plateforme
+// @Description Révoque l'accès d'un collaborateur au niveau de la plateforme.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du collaborateur (UUID)"
+// @Param request body object true "Motif de la suppression" example({"reason": "Fin de contrat"})
+// @Success 200 {object} collaboratorusecase.RemoveCollaboratorResponse
+// @Failure 400 {object} utils.AppError "Motif requis ou payload invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (ex: tentative de se supprimer soi-même)"
+// @Failure 404 {object} utils.AppError "Collaborateur introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/collaborators/platform/{id} [delete]
 func (h *CollaboratorHandler) RemovePlatformCollaborator(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -217,7 +274,21 @@ func (h *CollaboratorHandler) RemovePlatformCollaborator(w http.ResponseWriter, 
 // SHOP ENDPOINTS
 // ============================================================
 
-// InviteShopCollaborator gère POST /api/shops/{shop_id}/collaborators/invite
+// @Summary Inviter un collaborateur boutique
+// @Description Envoie une invitation par email pour ajouter un collaborateur à une boutique spécifique.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param shop_id path string true "ID de la boutique (UUID)"
+// @Param request body collaboratorusecase.InviteShopCollaboratorRequest true "Détails de l'invitation (email, role)"
+// @Success 201 {object} collaboratorusecase.InviteShopCollaboratorResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou email déjà invité"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC: merchant, shop_admin requis)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{shop_id}/collaborators/invite [post]
 func (h *CollaboratorHandler) InviteShopCollaborator(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -246,7 +317,27 @@ func (h *CollaboratorHandler) InviteShopCollaborator(w http.ResponseWriter, r *h
 	return nil
 }
 
-// ListShopCollaborators gère GET /api/shops/{shop_id}/collaborators
+// @Summary Lister les collaborateurs d'une boutique
+// @Description Récupère la liste paginée et filtrée des collaborateurs d'une boutique spécifique.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param shop_id path string true "ID de la boutique (UUID)"
+// @Param role query string false "Filtrer par rôle"
+// @Param search query string false "Recherche par email ou nom"
+// @Param is_active query boolean false "Filtrer par statut actif (true/false)"
+// @Param limit query int false "Nombre de résultats (défaut: 20)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param sort_by query string false "Colonne de tri"
+// @Param sort_order query string false "Ordre de tri (ASC/DESC)"
+// @Success 200 {object} collaboratorusecase.ListCollaboratorsResponse
+// @Failure 400 {object} utils.AppError "ID de boutique manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{shop_id}/collaborators [get]
 func (h *CollaboratorHandler) ListShopCollaborators(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -283,7 +374,22 @@ func (h *CollaboratorHandler) ListShopCollaborators(w http.ResponseWriter, r *ht
 	return nil
 }
 
-// UpdateShopCollaboratorRole gère PUT /api/shops/{shop_id}/collaborators/{id}/role
+// @Summary Modifier le rôle d'un collaborateur boutique
+// @Description Met à jour le rôle d'un collaborateur existant dans une boutique spécifique.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param shop_id path string true "ID de la boutique (UUID)"
+// @Param id path string true "ID du collaborateur (UUID)"
+// @Param request body object true "Nouveau rôle" example({"new_role": "manager"})
+// @Success 200 {object} collaboratorusecase.UpdateCollaboratorRoleResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou IDs manquants"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (ex: tentative de modifier son propre rôle)"
+// @Failure 404 {object} utils.AppError "Collaborateur ou boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{shop_id}/collaborators/{id}/role [put]
 func (h *CollaboratorHandler) UpdateShopCollaboratorRole(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -320,7 +426,22 @@ func (h *CollaboratorHandler) UpdateShopCollaboratorRole(w http.ResponseWriter, 
 	return nil
 }
 
-// RemoveShopCollaborator gère DELETE /api/shops/{shop_id}/collaborators/{id}
+// @Summary Supprimer un collaborateur boutique
+// @Description Révoque l'accès d'un collaborateur à une boutique spécifique.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param shop_id path string true "ID de la boutique (UUID)"
+// @Param id path string true "ID du collaborateur (UUID)"
+// @Param request body object true "Motif de la suppression" example({"reason": "Fin de contrat"})
+// @Success 200 {object} collaboratorusecase.RemoveCollaboratorResponse
+// @Failure 400 {object} utils.AppError "Motif requis, payload invalide ou dernier admin"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (ex: tentative de se supprimer soi-même)"
+// @Failure 404 {object} utils.AppError "Collaborateur ou boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/shops/{shop_id}/collaborators/{id} [delete]
 func (h *CollaboratorHandler) RemoveShopCollaborator(w http.ResponseWriter, r *http.Request) error {
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -361,7 +482,17 @@ func (h *CollaboratorHandler) RemoveShopCollaborator(w http.ResponseWriter, r *h
 // PUBLIC ENDPOINTS (rate limited)
 // ============================================================
 
-// PreviewInvitation gère GET /api/collaborators/invitations/{token}/preview
+// @Summary Aperçu d'une invitation collaborateur
+// @Description Permet de voir les détails d'une invitation (email, rôle, entité) avant de l'accepter, sans être authentifié.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param token path string true "Token d'invitation unique"
+// @Success 200 {object} collaboratorusecase.InvitationPreview
+// @Failure 400 {object} utils.AppError "Token manquant ou format invalide"
+// @Failure 404 {object} utils.AppError "Invitation introuvable ou expirée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Router /api/collaborators/invitations/{token}/preview [get]
 func (h *CollaboratorHandler) PreviewInvitation(w http.ResponseWriter, r *http.Request) error {
 	token := chi.URLParam(r, "token")
 	if token == "" {
@@ -380,7 +511,18 @@ func (h *CollaboratorHandler) PreviewInvitation(w http.ResponseWriter, r *http.R
 	return nil
 }
 
-// AcceptInvitation gère POST /api/collaborators/invitations/{token}
+// @Summary Accepter une invitation collaborateur
+// @Description Permet à un utilisateur de rejoindre la plateforme ou une boutique en utilisant un token d'invitation valide.
+// @Tags Collaborator Management
+// @Accept json
+// @Produce json
+// @Param token path string true "Token d'invitation unique"
+// @Success 200 {object} collaboratorusecase.AcceptInvitationResponse
+// @Failure 400 {object} utils.AppError "Token manquant, expiré ou déjà utilisé"
+// @Failure 404 {object} utils.AppError "Invitation introuvable"
+// @Failure 409 {object} utils.AppError "L'utilisateur est déjà collaborateur"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Router /api/collaborators/invitations/{token} [post]
 func (h *CollaboratorHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

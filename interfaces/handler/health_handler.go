@@ -1,4 +1,3 @@
-// interfaces/handler/health_handler.go (ou handlers/health_handler.go)
 // interfaces/handler/health_handler.go
 package handler
 
@@ -28,7 +27,12 @@ type HealthResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-// Live — Liveness probe: léger, pas de dépendances
+// @Summary Liveness Probe (Sonde de vivacité)
+// @Description Vérifie que l'API est en cours d'exécution. Requête légère sans vérification des dépendances externes. Idéal pour les probes Kubernetes.
+// @Tags Health
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health/live [get]
 func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
 	if h.Logger != nil {
 		h.Logger.Debug().Msg("Liveness probe received")
@@ -43,7 +47,13 @@ func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(res)
 }
 
-// Ready — Readiness probe: vérifie les dépendances critiques
+// @Summary Readiness Probe (Sonde de disponibilité)
+// @Description Vérifie que l'API est prête à traiter les requêtes en testant les connexions aux dépendances critiques (PostgreSQL, Redis).
+// @Tags Health
+// @Produce json
+// @Success 200 {object} handler.HealthResponse "Tous les systèmes sont opérationnels"
+// @Failure 503 {object} handler.HealthResponse "Service indisponible (dépendances non prêtes)"
+// @Router /health/ready [get]
 func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -100,7 +110,12 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// SimpleHealth pour les tests sans dépendances
+// @Summary Vérification de santé simple
+// @Description Retourne un statut OK basique sans vérifier les dépendances externes. Utile pour les tests rapides.
+// @Tags Health
+// @Produce json
+// @Success 200 {object} map[string]string
+// @Router /health [get]
 func (h *HealthHandler) SimpleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{
 		"status":    "ok",

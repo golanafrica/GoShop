@@ -38,6 +38,18 @@ func NewProductHandler(
 	}
 }
 
+// @Summary Créer un nouveau produit
+// @Description Crée un nouveau produit dans le catalogue de la boutique active.
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param request body dto.CreateProductRequest true "Détails du produit à créer"
+// @Success 201 {object} dto.ProductResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou validation échouée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/products [post]
 func (ph *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -71,6 +83,21 @@ func (ph *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
+// @Summary Lister les produits de la boutique
+// @Description Retourne la liste paginée et filtrée des produits de la boutique active (supporte la recherche Full Text Search).
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param search query string false "Terme de recherche"
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param min_price query int false "Prix minimum en centimes"
+// @Param max_price query int false "Prix maximum en centimes"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/products [get]
 func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -137,6 +164,19 @@ func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request)
 	return nil
 }
 
+// @Summary Récupérer un produit par son ID
+// @Description Retourne les détails complets d'un produit spécifique de la boutique active.
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du produit (UUID)"
+// @Success 200 {object} dto.ProductResponse
+// @Failure 400 {object} utils.AppError "ID de produit manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Produit introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/products/{id} [get]
 func (ph *ProductHandler) GetProductById(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
@@ -163,6 +203,20 @@ func (ph *ProductHandler) GetProductById(w http.ResponseWriter, r *http.Request)
 	return nil
 }
 
+// @Summary Mettre à jour un produit
+// @Description Met à jour les informations d'un produit existant dans la boutique active.
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du produit (UUID)"
+// @Param request body dto.UpdateProductRequest true "Nouvelles données du produit"
+// @Success 200 {object} dto.ProductResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Produit introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/products/{id} [put]
 func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
@@ -218,6 +272,19 @@ func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
+// @Summary Supprimer un produit
+// @Description Supprime (soft delete) un produit du catalogue de la boutique active.
+// @Tags Products
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du produit (UUID)"
+// @Success 204 "Produit supprimé avec succès"
+// @Failure 400 {object} utils.AppError "ID de produit manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Produit introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/products/{id} [delete]
 func (ph *ProductHandler) DeleteProduct(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")

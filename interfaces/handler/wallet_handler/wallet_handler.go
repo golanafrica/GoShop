@@ -78,20 +78,6 @@ type UnfreezeRequest struct {
 	Resolution         string `json:"resolution"` // "paid", "waived", "escalated"
 }
 
-// TransactionResponse représente une transaction
-type TransactionResponse struct {
-	ID                string `json:"id"`
-	TransactionType   string `json:"transaction_type"`
-	AmountCents       int64  `json:"amount_cents"`
-	AmountFormatted   string `json:"amount_formatted"`
-	BalanceAfterCents int64  `json:"balance_after_cents"`
-	ReferenceType     string `json:"reference_type,omitempty"`
-	ReferenceID       string `json:"reference_id,omitempty"`
-	Description       string `json:"description,omitempty"`
-	Status            string `json:"status"`
-	CreatedAt         string `json:"created_at"`
-}
-
 // FreezeStatusResponse représente le statut de gel
 type FreezeStatusResponse struct {
 	IsFrozen        bool   `json:"is_frozen"`
@@ -107,8 +93,16 @@ type FreezeStatusResponse struct {
 // HANDLERS : WALLET INFO
 // ============================================================
 
-// GetWallet retourne les informations du wallet du marchand
-// GET /api/wallet
+// @Summary Obtenir les informations du wallet
+// @Description Retourne le solde et le statut actuel du portefeuille de la boutique active.
+// @Tags Merchant Wallet
+// @Accept json
+// @Produce json
+// @Success 200 {object} wallet_handler.WalletResponse
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/wallet [get]
 func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -169,8 +163,16 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJSON(w, http.StatusOK, response)
 }
 
-// GetFreezeStatus retourne le statut de gel du compte
-// GET /api/wallet/freeze-status
+// @Summary Obtenir le statut de gel du compte
+// @Description Vérifie si le wallet de la boutique est actuellement gelé et retourne les détails (raison, durée, montant dû).
+// @Tags Merchant Wallet
+// @Accept json
+// @Produce json
+// @Success 200 {object} wallet_handler.FreezeStatusResponse
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/wallet/freeze-status [get]
 func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -223,8 +225,18 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 // HANDLERS : DEPOSIT / WITHDRAW
 // ============================================================
 
-// Deposit crédite le wallet d'un marchand
-// POST /api/wallet/deposit
+// @Summary Effectuer un dépôt manuel dans le wallet
+// @Description Crédite manuellement le portefeuille de la boutique d'un montant spécifié.
+// @Tags Merchant Wallet
+// @Accept json
+// @Produce json
+// @Param request body wallet_handler.DepositRequest true "Montant du dépôt et description optionnelle"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Montant invalide ou payload incorrect"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/wallet/deposit [post]
 func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -281,8 +293,18 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Withdraw débite le wallet d'un marchand (vers compte bancaire)
-// POST /api/wallet/withdraw
+// @Summary Effectuer un retrait depuis le wallet
+// @Description Débite le portefeuille de la boutique pour initier un virement vers un compte bancaire ou Mobile Money.
+// @Tags Merchant Wallet
+// @Accept json
+// @Produce json
+// @Param request body wallet_handler.WithdrawRequest true "Montant du retrait et description optionnelle"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Montant invalide, solde insuffisant ou payload incorrect"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/wallet/withdraw [post]
 func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -348,8 +370,18 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 // HANDLERS : UNFREEZE
 // ============================================================
 
-// Unfreeze dégèle un compte marchand
-// POST /api/wallet/unfreeze
+// @Summary Dégeler un compte marchand
+// @Description Lève le gel du portefeuille après régularisation de la situation (paiement, annulation ou escalade).
+// @Tags Merchant Wallet
+// @Accept json
+// @Produce json
+// @Param request body wallet_handler.UnfreezeRequest true "Montant de régularisation et type de résolution (paid, waived, escalated)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Résolution invalide ou payload incorrect"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/wallet/unfreeze [post]
 func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 

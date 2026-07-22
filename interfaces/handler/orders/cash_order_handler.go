@@ -70,7 +70,19 @@ func (r *DeliverRequest) Validate() error {
 	return nil
 }
 
-// AcceptOrder accepte une commande cash
+// @Summary Accepter une commande Cash on Delivery
+// @Description Permet au marchand d'accepter une commande en attente de confirmation pour le paiement à la livraison.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Success 200 {object} entity.Order
+// @Failure 400 {object} utils.AppError "Payload invalide ou commande non éligible"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/accept [post]
 func (h *CashOrderHandler) AcceptOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -94,7 +106,20 @@ func (h *CashOrderHandler) AcceptOrder(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
-// RejectOrder rejette une commande cash
+// @Summary Rejeter une commande Cash on Delivery
+// @Description Permet au marchand de rejeter une commande avec un motif obligatoire.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Param request body orders.RejectRequest true "Motif du rejet"
+// @Success 200 {object} entity.Order
+// @Failure 400 {object} utils.AppError "Payload invalide ou motif manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/reject [post]
 func (h *CashOrderHandler) RejectOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -129,7 +154,19 @@ func (h *CashOrderHandler) RejectOrder(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
-// OutForDelivery marque une commande comme en cours de livraison
+// @Summary Marquer une commande comme en cours de livraison
+// @Description Met à jour le statut de la commande pour indiquer qu'elle est en cours de livraison.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Success 200 {object} entity.Order
+// @Failure 400 {object} utils.AppError "Commande non éligible pour la livraison"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/out-for-delivery [post]
 func (h *CashOrderHandler) OutForDelivery(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -153,7 +190,20 @@ func (h *CashOrderHandler) OutForDelivery(w http.ResponseWriter, r *http.Request
 	return nil
 }
 
-// DeliverOrder marque une commande comme livrée et crée le paiement cash
+// @Summary Confirmer la livraison d'une commande
+// @Description Marque la commande comme livrée et enregistre le paiement en espèces reçu.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Param request body orders.DeliverRequest true "Détails de la livraison (montant reçu, notes)"
+// @Success 200 {object} entity.Order
+// @Failure 400 {object} utils.AppError "Payload invalide ou montant incorrect"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/deliver [post]
 func (h *CashOrderHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -193,7 +243,19 @@ func (h *CashOrderHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-// CancelOrder annule une commande
+// @Summary Annuler une commande
+// @Description Annule une commande existante et libère le stock réservé.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Success 200 {object} entity.Order
+// @Failure 400 {object} utils.AppError "Commande non éligible à l'annulation"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/cancel [post]
 func (h *CashOrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

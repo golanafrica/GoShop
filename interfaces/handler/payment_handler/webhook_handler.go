@@ -32,7 +32,17 @@ func NewWebhookHandler(processUC ProcessWebhookUseCaseInterface) *WebhookHandler
 	}
 }
 
-// HandleWebhook traite un webhook d'un provider
+// @Summary Recevoir les webhooks de paiement
+// @Description Endpoint public sécurisé pour recevoir les notifications de changement de statut de paiement des fournisseurs (Wave, Orange, Moov, YengaPay).
+// @Tags Webhooks
+// @Accept json
+// @Produce json
+// @Param provider path string true "Code du fournisseur (wave, orange_money, moov_money, yenga_pay)"
+// @Param X-Signature header string false "Signature HMAC-SHA256 du payload"
+// @Success 200 {object} paymentdto.WebhookResponse "Webhook reçu et traité avec succès"
+// @Failure 400 {object} utils.AppError "Fournisseur inconnu ou signature invalide"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Router /webhooks/{provider} [post]
 func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

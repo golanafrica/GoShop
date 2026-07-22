@@ -34,7 +34,18 @@ func NewKYCHandler(
 	}
 }
 
-// UploadKYC gère POST /api/customers/kyc/upload
+// @Summary Soumettre un document KYC (Client)
+// @Description Permet à un client de soumettre un document d'identité pour vérification.
+// @Tags Customer KYC
+// @Accept json
+// @Produce json
+// @Param request body customerusecase.UploadKYCRequest true "Détails du document à uploader"
+// @Success 201 {object} entity.CustomerKYCDocument
+// @Failure 400 {object} utils.AppError "Payload invalide ou échec de l'upload"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers/kyc/upload [post]
 func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -53,7 +64,19 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// GetKYCStatus gère GET /api/customers/{customer_id}/kyc/status
+// @Summary Vérifier le statut KYC d'un client
+// @Description Retourne le statut actuel de la vérification d'identité d'un client spécifique.
+// @Tags Customer KYC
+// @Accept json
+// @Produce json
+// @Param customer_id path string true "ID du client (UUID)"
+// @Success 200 {object} customerusecase.KYCStatusResponse
+// @Failure 400 {object} utils.AppError "ID client manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Client ou statut introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers/{customer_id}/kyc/status [get]
 func (h *KYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -71,7 +94,21 @@ func (h *KYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error 
 	return nil
 }
 
-// ReviewKYC gère POST /api/merchant/kyc/{customer_id}/review
+// @Summary Réviser une demande KYC (Marchand)
+// @Description Permet à un marchand d'approuver ou de rejeter un document KYC soumis par un client.
+// @Tags Merchant KYC
+// @Accept json
+// @Produce json
+// @Param customer_id path string true "ID du client (UUID)"
+// @Param request body customerusecase.ReviewKYCRequest true "Décision de révision (approved/rejected) et motif"
+// @Success 200 {object} customerusecase.ReviewKYCResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 404 {object} utils.AppError "Client ou demande KYC introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/merchant/kyc/{customer_id}/review [post]
 func (h *KYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -97,7 +134,17 @@ func (h *KYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ListPendingKYC gère GET /api/merchant/kyc/pending
+// @Summary Lister les demandes KYC en attente (Marchand)
+// @Description Retourne la liste de tous les clients dont les documents KYC sont en attente de validation par le marchand.
+// @Tags Merchant KYC
+// @Accept json
+// @Produce json
+// @Success 200 {array} customerusecase.PendingKYCItem
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/merchant/kyc/pending [get]
 func (h *KYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 

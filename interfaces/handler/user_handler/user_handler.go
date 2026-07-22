@@ -53,16 +53,17 @@ func NewUserHandler(
 // REGISTER
 // -----------------------
 
-// @Summary User Registration
-// @Description Register a new user account
+// @Summary Inscription d'un nouvel utilisateur
+// @Description Crée un nouveau compte utilisateur avec un rôle par défaut "user".
 // @Tags Authentication
 // @Accept json
 // @Produce json
-// @Param request body userdto.RegisterUserRequest true "User registration data"
+// @Param request body userdto.RegisterUserRequest true "Données d'inscription (email, password)"
 // @Success 201 {object} map[string]string "{'message': 'user registered', 'user_id': 'uuid'}"
-// @Failure 400 {object} utils.AppError "Invalid request payload"
-// @Failure 422 {object} utils.AppError "Validation failed"
-// @Failure 500 {object} utils.AppError "Internal server error"
+// @Failure 400 {object} utils.AppError "Payload invalide"
+// @Failure 409 {object} utils.AppError "Email déjà enregistré"
+// @Failure 422 {object} utils.AppError "Validation échouée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Router /register [post]
 func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
@@ -136,17 +137,17 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) error {
 // LOGIN
 // -----------------------
 
-// @Summary User Login
-// @Description Authenticate user and return JWT tokens (access + refresh)
+// @Summary Connexion utilisateur
+// @Description Authentifie l'utilisateur et retourne les tokens JWT (access + refresh).
 // @Tags Authentication
 // @Accept json
 // @Produce json
-// @Param request body userdto.LoginRequest true "Login credentials"
-// @Success 200 {object} map[string]string "{'access_token': 'jwt', 'refresh_token': 'jwt', 'role': 'merchant'}"
-// @Failure 400 {object} utils.AppError "Invalid request payload"
-// @Failure 401 {object} utils.AppError "Invalid credentials"
-// @Failure 429 {object} utils.AppError "Too many attempts"
-// @Failure 500 {object} utils.AppError "Internal server error"
+// @Param request body userdto.LoginRequest true "Identifiants de connexion"
+// @Success 200 {object} map[string]interface{} "Tokens JWT et rôle"
+// @Failure 400 {object} utils.AppError "Payload invalide"
+// @Failure 401 {object} utils.AppError "Identifiants invalides"
+// @Failure 429 {object} utils.AppError "Trop de tentatives (Rate Limit)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Router /login [post]
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
@@ -210,7 +211,8 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 		Msg("✅ Connexion réussie, tokens générés")
 
 	// Extraire le rôle depuis l'access token pour le retourner au client
-	role := "merchant" // Valeur par défaut
+	// 🛡️ SÉCURITÉ v4.5.0 : Valeur par défaut "user" pour éviter l'élévation de privilèges
+	role := "user"
 	if claims, err := utils.ValidateToken(accessToken); err == nil {
 		if r, ok := claims["role"].(string); ok && r != "" {
 			role = r
@@ -232,13 +234,13 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) error {
 // ME (PROFILE)
 // -----------------------
 
-// @Summary Get User Profile
-// @Description Get current authenticated user profile
+// @Summary Obtenir le profil utilisateur
+// @Description Retourne les informations du profil de l'utilisateur authentifié.
 // @Tags Authentication
 // @Produce json
 // @Success 200 {object} userdto.MeResponse
-// @Failure 401 {object} utils.AppError "Unauthorized"
-// @Failure 500 {object} utils.AppError "Internal server error"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /auth/me [get]
 func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) error {
@@ -292,13 +294,13 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) error {
 // 🆕 v4.4.2 : LOGOUT - Révoque la session courante
 // ============================================================
 
-// @Summary User Logout
-// @Description Revoke current session and invalidate token
+// @Summary Déconnexion utilisateur
+// @Description Révoque la session courante et invalide le token d'actualisation.
 // @Tags Authentication
 // @Produce json
 // @Success 200 {object} map[string]string "{'message': 'logged out successfully'}"
-// @Failure 401 {object} utils.AppError "Unauthorized"
-// @Failure 500 {object} utils.AppError "Internal server error"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /logout [post]
 func (h *UserHandler) Logout(w http.ResponseWriter, r *http.Request) error {

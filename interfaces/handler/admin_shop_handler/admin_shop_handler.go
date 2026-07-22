@@ -73,7 +73,26 @@ func NewAdminShopHandler(
 // ENDPOINTS HTTP
 // ============================================================
 
-// ListShops gère GET /api/admin/shops
+// @Summary Liste cross-tenant des boutiques
+// @Description Récupère une liste paginée et filtrée de toutes les boutiques de la plateforme. Réservé aux administrateurs.
+// @Tags Admin Shop Management
+// @Accept json
+// @Produce json
+// @Param limit query int false "Nombre de résultats (défaut: 20)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param sort_by query string false "Colonne de tri (défaut: created_at)"
+// @Param sort_order query string false "Ordre de tri (ASC ou DESC, défaut: DESC)"
+// @Param search query string false "Recherche par nom, slug ou owner_id"
+// @Param kyc_status query string false "Filtrer par statut KYC (pending, verified, rejected)"
+// @Param plan query string false "Filtrer par plan (free, pro, business)"
+// @Param is_active query boolean false "Filtrer par statut actif (true/false)"
+// @Param health_level query string false "Filtrer par niveau de santé (excellent, good, warning, critical)"
+// @Success 200 {object} adminshopusecase.ListShopsResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/shops [get]
 func (h *AdminShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -129,7 +148,20 @@ func (h *AdminShopHandler) ListShops(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-// GetShopDetails gère GET /api/admin/shops/{id}
+// @Summary Détails complets d'une boutique
+// @Description Récupère toutes les informations d'une boutique spécifique, y compris les métadonnées KYC et d'administration.
+// @Tags Admin Shop Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Success 200 {object} adminshopusecase.GetShopDetailsResponse
+// @Failure 400 {object} utils.AppError "ID de boutique invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/shops/{id} [get]
 func (h *AdminShopHandler) GetShopDetails(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -164,7 +196,20 @@ func (h *AdminShopHandler) GetShopDetails(w http.ResponseWriter, r *http.Request
 	return nil
 }
 
-// GetShopHealth gère GET /api/admin/shops/{id}/health
+// @Summary Score de santé détaillé d'une boutique
+// @Description Récupère le score de santé, le niveau et l'historique des actions administratives pour une boutique donnée.
+// @Tags Admin Shop Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Success 200 {object} adminshopusecase.GetShopHealthResponse
+// @Failure 400 {object} utils.AppError "ID de boutique invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/shops/{id}/health [get]
 func (h *AdminShopHandler) GetShopHealth(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -204,7 +249,22 @@ type SuspendShopRequest struct {
 	Reason string `json:"reason"` // Obligatoire, min 10 caractères
 }
 
-// SuspendShop gère PUT /api/admin/shops/{id}/suspend
+// @Summary Suspendre une boutique
+// @Description Suspend l'activité d'une boutique avec un motif obligatoire. Désactive automatiquement l'accès.
+// @Tags Admin Shop Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param request body adminshophandler.SuspendShopRequest true "Motif de la suspension"
+// @Success 200 {object} adminshopusecase.SuspendShopResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou motif manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 409 {object} utils.AppError "Boutique déjà suspendue"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/shops/{id}/suspend [put]
 func (h *AdminShopHandler) SuspendShop(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -256,7 +316,22 @@ type ActivateShopRequest struct {
 	Reason *string `json:"reason,omitempty"` // Optionnel
 }
 
-// ActivateShop gère PUT /api/admin/shops/{id}/activate
+// @Summary Réactiver une boutique suspendue
+// @Description Réactive une boutique précédemment suspendue. Le motif est optionnel.
+// @Tags Admin Shop Management
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la boutique (UUID)"
+// @Param request body adminshophandler.ActivateShopRequest false "Motif optionnel de la réactivation"
+// @Success 200 {object} adminshopusecase.ActivateShopResponse
+// @Failure 400 {object} utils.AppError "Payload invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
+// @Failure 404 {object} utils.AppError "Boutique introuvable"
+// @Failure 409 {object} utils.AppError "La boutique n'est pas suspendue"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/shops/{id}/activate [put]
 func (h *AdminShopHandler) ActivateShop(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

@@ -37,7 +37,19 @@ func NewWithdrawalHandler(
 	return &WithdrawalHandler{createUC: createUC, listUC: listUC}
 }
 
-// CreateWithdrawal crée un nouveau retrait
+// @Summary Créer une demande de retrait
+// @Description Crée une nouvelle demande de retrait de fonds depuis le portefeuille de la boutique vers un compte externe (Mobile Money ou Banque).
+// @Tags Withdrawals
+// @Accept json
+// @Produce json
+// @Param request body withdrawaldto.CreateWithdrawalRequest true "Détails du retrait (montant, méthode, etc.)"
+// @Success 201 {object} withdrawaldto.WithdrawalResponse
+// @Failure 400 {object} utils.AppError "Payload invalide, solde insuffisant ou validation échouée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Compte gelé ou interdit"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/withdrawals [post]
 func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -63,7 +75,18 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 	return nil
 }
 
-// ListWithdrawals liste les retraits de la boutique
+// @Summary Lister les retraits de la boutique
+// @Description Retourne la liste paginée des demandes de retrait pour la boutique active.
+// @Tags Withdrawals
+// @Accept json
+// @Produce json
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Success 200 {array} withdrawaldto.WithdrawalResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/withdrawals [get]
 func (h *WithdrawalHandler) ListWithdrawals(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -92,7 +115,20 @@ func (h *WithdrawalHandler) ListWithdrawals(w http.ResponseWriter, r *http.Reque
 	return nil
 }
 
-// GetWithdrawal récupère un retrait par ID
+// @Summary Récupérer les détails d'un retrait
+// @Description Retourne les informations complètes et le statut d'une demande de retrait spécifique par son ID.
+// @Tags Withdrawals
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du retrait (UUID)"
+// @Success 200 {object} withdrawaldto.WithdrawalResponse
+// @Failure 400 {object} utils.AppError "ID de retrait manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Le retrait n'appartient pas à votre boutique"
+// @Failure 404 {object} utils.AppError "Retrait introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/withdrawals/{id} [get]
 func (h *WithdrawalHandler) GetWithdrawal(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

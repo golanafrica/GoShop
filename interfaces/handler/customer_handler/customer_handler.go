@@ -44,6 +44,18 @@ func NewCustomerHandler(
 	}
 }
 
+// @Summary Créer un nouveau client
+// @Description Crée un nouveau profil client pour la boutique active. Si l'email existe déjà, le client est automatiquement lié à l'utilisateur existant.
+// @Tags Customers
+// @Accept json
+// @Produce json
+// @Param request body dto.CustomerRequestDto true "Détails du client à créer"
+// @Success 201 {object} dto.CustomerResponseDto
+// @Failure 400 {object} utils.AppError "Payload invalide ou validation échouée"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers [post]
 func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -125,6 +137,19 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 	return nil
 }
 
+// @Summary Récupérer un client par son ID
+// @Description Retourne les détails d'un client spécifique appartenant à la boutique active.
+// @Tags Customers
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du client (UUID)"
+// @Success 200 {object} dto.CustomerResponseDto
+// @Failure 400 {object} utils.AppError "ID client manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 404 {object} utils.AppError "Client introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers/{id} [get]
 func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -178,6 +203,16 @@ func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.
 	return nil
 }
 
+// @Summary Lister tous les clients de la boutique
+// @Description Retourne la liste de tous les clients enregistrés pour la boutique active.
+// @Tags Customers
+// @Accept json
+// @Produce json
+// @Success 200 {array} dto.CustomerResponseDto
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers [get]
 func (h *CustomerHandler) GetAllCustomersHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -219,6 +254,20 @@ func (h *CustomerHandler) GetAllCustomersHandler(w http.ResponseWriter, r *http.
 	return nil
 }
 
+// @Summary Mettre à jour un client
+// @Description Met à jour les informations d'un client existant dans la boutique active.
+// @Tags Customers
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du client (UUID)"
+// @Param request body dto.CustomerRequestDto true "Nouvelles données du client"
+// @Success 200 {object} dto.CustomerResponseDto
+// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 404 {object} utils.AppError "Client introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers/{id} [put]
 func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -298,6 +347,19 @@ func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.R
 	return nil
 }
 
+// @Summary Supprimer un client
+// @Description Supprime un client de la boutique active.
+// @Tags Customers
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du client (UUID)"
+// @Success 204 "Client supprimé avec succès"
+// @Failure 400 {object} utils.AppError "ID client manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 404 {object} utils.AppError "Client introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/customers/{id} [delete]
 func (h *CustomerHandler) DeleteCustomerHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()

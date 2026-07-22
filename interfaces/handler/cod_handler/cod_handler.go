@@ -112,8 +112,19 @@ type CODProofResponse struct {
 // HANDLERS : GET PROOF
 // ============================================================
 
-// GetCODProof retourne les informations d'une preuve COD
-// GET /api/cod/proof/{order_id}
+// @Summary Récupérer une preuve COD
+// @Description Retourne les détails d'une preuve de paiement Cash on Delivery pour une commande spécifique.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param order_id path string true "ID de la commande (UUID)"
+// @Success 200 {object} cod_handler.CODProofResponse
+// @Failure 400 {object} utils.AppError "ID de commande manquant"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé : la preuve n'appartient pas à votre boutique"
+// @Failure 404 {object} utils.AppError "Preuve non trouvée pour cette commande"
+// @Security ApiKeyAuth
+// @Router /api/cod/proof/{order_id} [get]
 func (h *CODHandler) GetCODProof(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -152,8 +163,18 @@ func (h *CODHandler) GetCODProof(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJSON(w, http.StatusOK, response)
 }
 
-// ListCODProofsByShop retourne toutes les preuves COD d'une boutique
-// GET /api/cod/proofs
+// @Summary Lister les preuves COD d'une boutique
+// @Description Retourne la liste de toutes les preuves COD pour la boutique active, avec un filtre de statut optionnel.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param status query string false "Filtrer par statut (ex: pending_client, pending_merchant, collected)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Filtre de statut invalide"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/proofs [get]
 func (h *CODHandler) ListCODProofsByShop(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -202,8 +223,18 @@ func (h *CODHandler) ListCODProofsByShop(w http.ResponseWriter, r *http.Request)
 // HANDLERS : SUBMIT PROOFS
 // ============================================================
 
-// SubmitClientProof permet au client de soumettre sa preuve de paiement
-// POST /api/cod/client-proof
+// @Summary Soumettre une preuve de paiement client
+// @Description Permet à un client de soumettre sa preuve de paiement en espèces pour une commande COD.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param request body cod_handler.SubmitClientProofRequest true "Détails de la preuve client"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou champs manquants"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/client-proof [post]
 func (h *CODHandler) SubmitClientProof(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -284,8 +315,19 @@ func (h *CODHandler) SubmitClientProof(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SubmitMerchantProof permet au marchand de soumettre sa preuve de réception
-// POST /api/cod/merchant-proof
+// @Summary Soumettre une preuve de réception marchand
+// @Description Permet au marchand de confirmer la réception des fonds et de soumettre sa propre preuve de livraison.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param request body cod_handler.SubmitMerchantProofRequest true "Détails de la preuve marchand"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Payload invalide ou champs manquants"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé : la preuve n'appartient pas à votre boutique"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/merchant-proof [post]
 func (h *CODHandler) SubmitMerchantProof(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -372,8 +414,19 @@ func (h *CODHandler) SubmitMerchantProof(w http.ResponseWriter, r *http.Request)
 // HANDLERS : COLLECT COMMISSION
 // ============================================================
 
-// CollectCommission collecte la commission GoShop sur une vente COD
-// POST /api/cod/collect
+// @Summary Collecter la commission GoShop
+// @Description Déclenche la collecte de la commission plateforme sur une vente COD dont les preuves sont cohérentes.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param request body cod_handler.CollectCommissionRequest true "Détails de la collecte"
+// @Success 200 {object} codusecase.CollectCommissionResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou collecte impossible"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé : la preuve n'appartient pas à votre boutique"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/collect [post]
 func (h *CODHandler) CollectCommission(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -437,8 +490,16 @@ func (h *CODHandler) CollectCommission(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJSON(w, http.StatusOK, resp)
 }
 
-// ListDueCommissions retourne toutes les commissions dues (admin)
-// GET /api/cod/due
+// @Summary Lister les commissions dues
+// @Description Retourne la liste de toutes les commissions en attente de collecte pour la boutique active, avec le total dû.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/due [get]
 func (h *CODHandler) ListDueCommissions(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -474,8 +535,19 @@ func (h *CODHandler) ListDueCommissions(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// RetryCommission retente la collecte d'une commission due
-// POST /api/cod/retry/{order_id}
+// @Summary Retenter la collecte d'une commission
+// @Description Force ou retente la collecte d'une commission due pour une commande spécifique.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Param order_id path string true "ID de la commande (UUID)"
+// @Success 200 {object} codusecase.CollectCommissionResponse
+// @Failure 400 {object} utils.AppError "ID de commande manquant ou collecte impossible"
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 403 {object} utils.AppError "Accès refusé : la preuve n'appartient pas à votre boutique"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/retry/{order_id} [post]
 func (h *CODHandler) RetryCommission(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
@@ -525,8 +597,16 @@ func (h *CODHandler) RetryCommission(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJSON(w, http.StatusOK, resp)
 }
 
-// GetCommissionStats retourne les statistiques des commissions COD
-// GET /api/cod/stats
+// @Summary Obtenir les statistiques des commissions COD
+// @Description Retourne un résumé des commissions en attente, dues et collectées pour la boutique active.
+// @Tags Cash On Delivery (COD)
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/cod/stats [get]
 func (h *CODHandler) GetCommissionStats(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 

@@ -1,11 +1,38 @@
+# Changelog
+
+Toutes les modifications notables de ce projet sont documentées dans ce fichier.
+
+Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
+et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-##  `CHANGELOG.md` (AJOUTER v2.9.0 EN HAUT)
+## [v4.5.0-production-ready] - 2026-07-21
 
-**Ajouter au tout début du fichier** (après le header) :
+### 🚨 Sécurité & Durcissement (CRITIQUE)
+- **Validation du Secret JWT** : Le serveur refuse désormais de démarrer si `JWT_SECRET` est absent ou fait moins de 32 caractères.
+- **Coût Bcrypt Forcé** : Imposition d'un coût de hachage minimum de 10, ignorant les configurations d'environnement dangereuses (ex: `BCRYPT_COST=4`).
+- **Prévention d'Injection SQL** : Ajout d'une whitelist stricte (`allowedSortColumns`) pour tous les paramètres `sort_by` dans les repositories (ex: `shop_repository.go`).
+- **Prévention IDOR (Multi-tenant)** : Nouveau middleware `RequireShopAccess` garantissant qu'un utilisateur ne peut accéder/modifier que les ressources des boutiques dont il est propriétaire ou collaborateur.
+- **Logs Sécurisés** : Suppression complète des logs de `raw_body` brut dans les handlers d'authentification et de création de client pour empêcher toute fuite de mot de passe en clair.
+- **Purge de l'Historique Git** : Suppression définitive des fichiers SQL sensibles (`fix_admin_password.sql`, etc.) de *tous* les commits passés via `git filter-branch` et `git gc`.
 
-```markdown
+### 🔔 Notifications en Temps Réel (WebSocket)
+- **WebSocket Hub Scalable** : Implémentation d'une infrastructure WebSocket utilisant Redis Pub/Sub pour supporter le scaling horizontal.
+- **Notification Dispatcher** : Nouveau service orchestrant l'envoi d'événements temps réel (commande confirmée, rejetée, livrée, etc.) aux clients connectés.
+- **Liaison User ↔ Customer** : Ajout de la colonne `user_id` dans la table `customers` (Migration `033`) pour router avec précision les notifications WebSocket vers l'utilisateur authentifié derrière un profil client.
+- **Nouvel Endpoint** : `GET /ws/notifications 🔒` pour que les clients s'abonnent aux mises à jour en temps réel.
+
+### 🛠️ Architecture & Base de Données
+- **Correction Contrainte de Rôle** : La migration `034` met à jour `users_role_check` pour autoriser explicitement le rôle `'user'`, corrigeant les échecs d'inscription publique.
+- **Rôle par Défaut Sécurisé** : L'inscription publique assigne désormais correctement le rôle `'user'` au lieu de `'merchant'`, empêchant toute élévation de privilèges.
+- **Repository Customer** : Mise à jour de toutes les requêtes (`Create`, `FindByID`, `FindByEmail`, `FindAll`) pour persister et récupérer correctement le nouveau champ `user_id`.
+
+### 🧪 Tests & Outillage
+- **Test E2E WebSocket** : Ajout du script `Test-WebSocket-Notification.ps1` pour automatiser et valider le flux complet de notification en temps réel (Création User → Shop → Produit → Commande → Acceptation → Réception payload WebSocket).
+
+---
+
 ## [v2.9.0-tontine-kyc] - 2026-06-29
 
 ### 🎉 Added
@@ -116,11 +143,9 @@
    psql -U postgres -d goshop_db -f migrations/011_add_kyc.sql
    psql -U postgres -d goshop_db -f migrations/012_add_paid_status.sql
 
-   Aucun changement d'API breaking : Rétrocompatible
-Nouvelles routes disponibles : Voir docs/11-tontine-system.md et docs/KYC.md
+   Aucun changement d'API breaking : Rétrocompatible.
+Nouvelles routes disponibles : Voir docs/11-tontine-system.md et docs/KYC.md.
 📚 Documentation
 docs/11-tontine-system.md : Guide complet du système tontine
 docs/KYC.md : Guide du système KYC
 docs/payment-system.md : Mis à jour avec intégration tontine
-
-

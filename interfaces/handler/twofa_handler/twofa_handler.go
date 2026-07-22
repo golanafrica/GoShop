@@ -51,6 +51,17 @@ func NewTwoFAHandler(
 // ENDPOINT 1 : SETUP 2FA
 // ============================================================
 
+// @Summary Initialiser la configuration 2FA
+// @Description Génère un secret TOTP et un QR code pour configurer une application d'authentification (Google Authenticator, Authy, etc.).
+// @Tags Two-Factor Authentication (2FA)
+// @Accept json
+// @Produce json
+// @Success 201 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 409 {object} utils.AppError "La 2FA est déjà activée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/2fa/setup [post]
 func (h *TwoFAHandler) Setup2FA(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -82,6 +93,18 @@ func (h *TwoFAHandler) Setup2FA(w http.ResponseWriter, r *http.Request) error {
 // ENDPOINT 2 : VERIFY & ENABLE 2FA
 // ============================================================
 
+// @Summary Vérifier et activer la 2FA
+// @Description Valide le code TOTP à 6 chiffres pour activer définitivement la double authentification.
+// @Tags Two-Factor Authentication (2FA)
+// @Accept json
+// @Produce json
+// @Param request body twofausecase.VerifyAndEnable2FARequest true "Code TOTP à 6 chiffres"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Code invalide ou format incorrect"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/2fa/verify [post]
 func (h *TwoFAHandler) VerifyAndEnable2FA(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -117,6 +140,19 @@ func (h *TwoFAHandler) VerifyAndEnable2FA(w http.ResponseWriter, r *http.Request
 // ENDPOINT 3 : DISABLE 2FA
 // ============================================================
 
+// @Summary Désactiver la 2FA
+// @Description Désactive la double authentification en utilisant soit le code TOTP actuel, soit un code de récupération.
+// @Tags Two-Factor Authentication (2FA)
+// @Accept json
+// @Produce json
+// @Param request body twofausecase.Disable2FARequest true "Code TOTP ou code de récupération"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Code invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 409 {object} utils.AppError "La 2FA n'est pas activée"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/2fa/disable [post]
 func (h *TwoFAHandler) Disable2FA(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -149,6 +185,18 @@ func (h *TwoFAHandler) Disable2FA(w http.ResponseWriter, r *http.Request) error 
 // ENDPOINT 4 : GET 2FA STATUS
 // ============================================================
 
+// @Summary Obtenir le statut 2FA d'un utilisateur
+// @Description Vérifie si la double authentification est activée pour un utilisateur donné.
+// @Tags Two-Factor Authentication (2FA)
+// @Accept json
+// @Produce json
+// @Param user_id query string false "ID de l'utilisateur cible (défaut: utilisateur connecté)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/2fa/status [get]
 func (h *TwoFAHandler) Get2FAStatus(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 
@@ -184,6 +232,20 @@ func (h *TwoFAHandler) Get2FAStatus(w http.ResponseWriter, r *http.Request) erro
 // ENDPOINT 5 : REGENERATE RECOVERY CODES
 // ============================================================
 
+// @Summary Régénérer les codes de récupération 2FA
+// @Description Génère de nouveaux codes de récupération à usage unique, invalidant les anciens. Nécessite une validation TOTP.
+// @Tags Two-Factor Authentication (2FA)
+// @Accept json
+// @Produce json
+// @Param request body twofausecase.RegenerateRecoveryCodesRequest true "Code TOTP actuel pour validation"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "Code invalide"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 409 {object} utils.AppError "La 2FA n'est pas activée"
+// @Failure 429 {object} utils.AppError "Code déjà utilisé (protection anti-replay)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/2fa/regenerate-codes [post]
 func (h *TwoFAHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
 

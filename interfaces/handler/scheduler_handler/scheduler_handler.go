@@ -38,8 +38,18 @@ func NewSchedulerHandler(
 // ENDPOINTS
 // ============================================================
 
-// TriggerManualCollection déclenche manuellement la collecte
-// POST /api/admin/scheduler/trigger
+// @Summary Déclencher manuellement la collecte des commissions
+// @Description Lance la collecte des commissions en arrière-plan (utile pour le débogage ou la récupération manuelle).
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param X-Admin-ID header string false "ID de l'administrateur déclencheur"
+// @Success 202 {object} map[string]interface{} "Collecte déclenchée avec succès"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/trigger [post]
 func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -72,8 +82,18 @@ func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *htt
 	return nil
 }
 
-// GetRecentBatches retourne les N derniers batches
-// GET /api/admin/scheduler/batches?limit=10
+// @Summary Récupérer les derniers batches de commissions
+// @Description Retourne la liste des N derniers batches de collecte de commissions traités.
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param limit query int false "Nombre de résultats (défaut: 10, max: 100)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/batches [get]
 func (h *SchedulerHandler) GetRecentBatches(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -104,8 +124,20 @@ func (h *SchedulerHandler) GetRecentBatches(w http.ResponseWriter, r *http.Reque
 	return nil
 }
 
-// GetBatchDetails retourne les détails d'un batch spécifique
-// GET /api/admin/scheduler/batches/{id}
+// @Summary Obtenir les détails d'un batch de commission
+// @Description Retourne les informations complètes d'un batch spécifique, y compris la liste de ses items.
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du batch (UUID)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} utils.AppError "ID du batch manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 404 {object} utils.AppError "Batch introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/batches/{id} [get]
 func (h *SchedulerHandler) GetBatchDetails(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -143,8 +175,18 @@ func (h *SchedulerHandler) GetBatchDetails(w http.ResponseWriter, r *http.Reques
 	return nil
 }
 
-// GetDailyStats retourne les statistiques quotidiennes
-// GET /api/admin/scheduler/stats?days=30
+// @Summary Obtenir les statistiques quotidiennes des commissions
+// @Description Retourne un résumé des collectes de commissions sur les N derniers jours.
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param days query int false "Nombre de jours à analyser (défaut: 30, max: 365)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/stats [get]
 func (h *SchedulerHandler) GetDailyStats(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

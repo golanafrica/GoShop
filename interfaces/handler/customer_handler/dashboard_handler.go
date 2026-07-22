@@ -20,8 +20,17 @@ func NewCustomerDashboardHandler(getDashboardUC *customerusecase.GetClientDashbo
 	}
 }
 
-// GetDashboard retourne la vue d'ensemble financière du client connecté
-// GET /api/client/dashboard
+// @Summary Obtenir le tableau de bord financier du client
+// @Description Retourne la vue d'ensemble financière du client connecté (score de crédit, contrats actifs, prochaines échéances).
+// @Tags Customer Dashboard
+// @Accept json
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} utils.AppError "Non autorisé (JWT manquant ou invalide)"
+// @Failure 404 {object} utils.AppError "Client introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/client/dashboard [get]
 func (h *CustomerDashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)

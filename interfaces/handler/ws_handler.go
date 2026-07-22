@@ -27,8 +27,14 @@ func NewWSHandler(hub *wsinfra.Hub) *WSHandler {
 	return &WSHandler{hub: hub}
 }
 
-// HandleNotifications gère la connexion WebSocket pour les notifications
-// GET /ws/notifications
+// @Summary Connexion WebSocket pour les notifications temps réel
+// @Description Établit une connexion WebSocket persistante pour recevoir des notifications en temps réel (commandes, paiements, etc.). Nécessite une authentification JWT valide.
+// @Tags WebSocket
+// @Success 101 "Switching Protocols (Connexion WebSocket établie avec succès)"
+// @Failure 401 {object} utils.AppError "Non autorisé (JWT manquant ou invalide)"
+// @Failure 500 {object} utils.AppError "Échec de la mise à niveau vers WebSocket"
+// @Security ApiKeyAuth
+// @Router /ws/notifications [get]
 func (h *WSHandler) HandleNotifications(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 

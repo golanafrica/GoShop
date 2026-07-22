@@ -1,19 +1,19 @@
 // interfaces/handler/orders/order_handler.go
-// interfaces/handler/orders/order_handler.go
 package orders
 
 import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"time"
+
 	orderdto "Goshop/application/dto/order_dto"
 	"Goshop/application/mapper"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/interfaces/utils"
-	"database/sql"
-	"encoding/json"
-	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
@@ -24,7 +24,6 @@ type OrderHandler struct {
 	getOrderByIdUsecase *orderusecase.GetOrderByIdUsecase
 	getAllOrderUsecase  *orderusecase.GetAllOrderUsecase
 	productRepo         repository.ProductRepository
-	//logger              *setupLogging.Logger
 }
 
 func NewOrderHandler(
@@ -35,14 +34,12 @@ func NewOrderHandler(
 	customerRepo repository.CustomerRepositoryInterface,
 	orderItemRepo repository.OrderItemRepository,
 	codProofRepo repository.CODProofRepository, // 🆕 v3.0.1
-	//logger *setupLogging.Logger,
 ) *OrderHandler {
 	return &OrderHandler{
 		createOrderUsecase:  orderusecase.NewCreateOrderUsecase(txManager, productRepo, customerRepo, orderItemRepo, orderRepo, codProofRepo),
 		getOrderByIdUsecase: orderusecase.NewGetOrderByIdUsecase(orderRepo, txManager),
 		getAllOrderUsecase:  orderusecase.NewGetAllOrderUsecase(orderRepo, txManager),
 		productRepo:         productRepo,
-		//logger:              logger.WithComponent("order_handler"),
 	}
 }
 
@@ -51,13 +48,22 @@ func NewOrderHandler(
 //	CREATE ORDER
 //
 // ------------------------------------------------------------
+
+// @Summary Créer une nouvelle commande
+// @Description Crée une nouvelle commande pour un client, avec vérification du stock et calcul du total.
+// @Tags Orders
+// @Accept json
+// @Produce json
+// @Param request body orderdto.OrderRequestDto true "Détails de la commande à créer"
+// @Success 201 {object} orderdto.OrderResponseDto
+// @Failure 400 {object} utils.AppError "Payload invalide ou validation échouée"
+// @Failure 404 {object} utils.AppError "Produit ou client introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders [post]
 func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request) error {
-
 	ctx := r.Context()
-
 	start := time.Now()
-
-	//logger := h.logger.WithOperation("create_order")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -165,8 +171,6 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 		Msg("All order items enriched successfully")
 
 	// 🆕 Création de l'entité commande avec payment_method
-	// Le statut initial (pending ou pending_confirmation) sera défini dans le usecase
-	// selon le payment_method
 	paymentMethod := req.PaymentMethod
 	if paymentMethod == "" {
 		paymentMethod = string(entity.PaymentMethodMobileMoney)
@@ -176,8 +180,7 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 		CustomerID:    req.CustomerID,
 		TotalCents:    totalCents,
 		PaymentMethod: paymentMethod,
-		// Status sera défini dans le usecase selon payment_method
-		Items: items,
+		Items:         items,
 	}
 
 	logger.Debug().
@@ -232,12 +235,24 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 //	GET ORDER BY ID
 //
 // ------------------------------------------------------------
+
+// @Summary Récupérer une commande par son ID
+// @Description Retourne les détails complets d'une commande spécifique, y compris ses articles.
+// @Tags Orders
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Success 200 {object} orderdto.OrderResponseDto
+// @Failure 400 {object} utils.AppError "ID de commande manquant"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id} [get]
 func (h *OrderHandler) GetOrderByIdHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
 
 	id := chi.URLParam(r, "id")
-	//logger := h.logger.WithOperation("get_order_by_id")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -293,11 +308,24 @@ func (h *OrderHandler) GetOrderByIdHandler(w http.ResponseWriter, r *http.Reques
 //	GET ALL ORDERS
 //
 // ------------------------------------------------------------
+
+// @Summary Lister toutes les commandes
+// @Description Retourne la liste paginée des commandes (avec filtres optionnels par statut ou client).
+// @Tags Orders
+// @Accept json
+// @Produce json
+// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
+// @Param offset query int false "Décalage (défaut: 0)"
+// @Param status query string false "Filtrer par statut de commande"
+// @Param customer_id query string false "Filtrer par ID de client"
+// @Success 200 {array} orderdto.OrderResponseDto
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders [get]
 func (h *OrderHandler) GetAllOrderHandler(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
 
-	//logger := h.logger.WithOperation("get_all_orders")
 	logger := zerolog.Ctx(ctx)
 	logger.Info().
 		Str("method", r.Method).
@@ -353,7 +381,7 @@ func (h *OrderHandler) GetAllOrderHandler(w http.ResponseWriter, r *http.Request
 	return nil
 }
 
-// Helper: extract pagination params — now expects *setupLogging.Logger
+// Helper: extract pagination params
 func extractPaginationParams(r *http.Request, logger *zerolog.Logger) (limit, offset int) {
 	limit = 50 // default
 	offset = 0
@@ -392,6 +420,3 @@ func extractPaginationParams(r *http.Request, logger *zerolog.Logger) (limit, of
 
 	return limit, offset
 }
-
-// [Optionnel] Métriques et middleware restent inchangés si tu les utilises ailleurs,
-// mais ils ne sont pas nécessaires ici car ton App gère déjà le logging global.

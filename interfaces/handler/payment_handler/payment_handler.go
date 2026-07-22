@@ -71,7 +71,21 @@ func NewPaymentHandler(
 	}
 }
 
-// InitiatePayment initie un paiement pour une commande
+// @Summary Initier un paiement pour une commande
+// @Description Lance le processus de paiement pour une commande donnée via le fournisseur de paiement choisi.
+// @Tags Payments
+// @Accept json
+// @Produce json
+// @Param id path string true "ID de la commande (UUID)"
+// @Param request body paymentdto.InitiatePaymentRequest true "Détails du paiement (provider, phone_number, etc.)"
+// @Success 201 {object} paymentdto.InitiatePaymentResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou commande non éligible"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Commande introuvable"
+// @Failure 409 {object} utils.AppError "Un paiement est déjà en cours pour cette commande"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/orders/{id}/pay [post]
 func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -117,7 +131,19 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 	return nil
 }
 
-// GetPayment récupère les détails d'un paiement
+// @Summary Récupérer les détails d'un paiement
+// @Description Retourne le statut et les informations complètes d'une transaction de paiement spécifique.
+// @Tags Payments
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du paiement (UUID)"
+// @Success 200 {object} paymentdto.PaymentResponse
+// @Failure 400 {object} utils.AppError "ID de paiement manquant"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Paiement introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/payments/{id} [get]
 func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -144,7 +170,18 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
-// ListPayments liste les paiements du shop
+// @Summary Lister les paiements
+// @Description Retourne la liste paginée et filtrée des paiements pour la boutique active.
+// @Tags Payments
+// @Accept json
+// @Produce json
+// @Param status query string false "Filtrer par statut de paiement (ex: success, pending, failed)"
+// @Param provider query string false "Filtrer par fournisseur (ex: wave, orange_money)"
+// @Success 200 {array} paymentdto.PaymentResponse
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/payments [get]
 func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -174,7 +211,21 @@ func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
-// RefundPayment rembourse un paiement
+// @Summary Rembourser un paiement
+// @Description Lance une demande de remboursement pour une transaction de paiement réussie.
+// @Tags Payments
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du paiement (UUID)"
+// @Param request body paymentdto.RefundPaymentRequest true "Détails du remboursement (montant, motif)"
+// @Success 200 {object} paymentdto.PaymentResponse
+// @Failure 400 {object} utils.AppError "Payload invalide ou remboursement impossible"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Le paiement n'appartient pas à votre boutique"
+// @Failure 404 {object} utils.AppError "Paiement introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/payments/{id}/refund [post]
 func (h *PaymentHandler) RefundPayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -216,7 +267,21 @@ func (h *PaymentHandler) RefundPayment(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
-// CompletePayment complète un paiement TWO_STEP avec OTP
+// @Summary Compléter un paiement en deux étapes (OTP)
+// @Description Finalise un paiement qui nécessite une validation OTP (ex: certains flux Mobile Money).
+// @Tags Payments
+// @Accept json
+// @Produce json
+// @Param id path string true "ID du paiement (UUID)"
+// @Param request body paymentdto.CompletePaymentRequest true "Code OTP de validation"
+// @Success 200 {object} paymentdto.PaymentResponse
+// @Failure 400 {object} utils.AppError "Payload invalide, OTP incorrect ou opération non supportée"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Le paiement n'appartient pas à votre boutique"
+// @Failure 404 {object} utils.AppError "Paiement introuvable"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/payments/{id}/complete [post]
 func (h *PaymentHandler) CompletePayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
