@@ -47,9 +47,6 @@ func newCreditWalletUsecase(ctrl *gomock.Controller) (
 	return uc, walletRepo, txnRepo, txManager
 }
 
-// expectWalletRepoWithTXSelf fait en sorte que WithTX(tx) retourne le mock
-// lui-même, pour pouvoir enchaîner les expectations directement dessus
-// (pattern répété dans credit_wallet.go / debit_wallet.go / freeze_account.go).
 func expectWalletRepoWithTXSelf(walletRepo *mockrepo.MockMerchantWalletRepository, tx interface{}) {
 	walletRepo.EXPECT().WithTX(tx).Return(walletRepo).AnyTimes()
 }
@@ -143,12 +140,12 @@ func TestCreditWalletUsecase_WalletNotFound_AutoCreates_Success(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
 	walletRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	mockTx.EXPECT().Rollback().Return(nil) // appelé via defer même après commit réussi (no-op côté driver réel)
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
 
@@ -172,7 +169,7 @@ func TestCreditWalletUsecase_WalletNotFound_CreateError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
 	walletRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -197,7 +194,7 @@ func TestCreditWalletUsecase_FindWalletError_Other(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(nil, errors.New("connection reset"))
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("connection reset"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -224,7 +221,7 @@ func TestCreditWalletUsecase_WalletFrozen(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -249,7 +246,7 @@ func TestCreditWalletUsecase_UpdateWalletError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -275,7 +272,7 @@ func TestCreditWalletUsecase_CreateTransactionError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
@@ -302,7 +299,7 @@ func TestCreditWalletUsecase_CommitError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
@@ -331,7 +328,7 @@ func TestCreditWalletUsecase_Success(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
@@ -365,7 +362,7 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID.String()).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, txn *entity.WalletTransaction) error {
@@ -397,7 +394,7 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID.String()).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)

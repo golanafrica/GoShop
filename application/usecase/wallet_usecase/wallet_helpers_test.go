@@ -77,7 +77,8 @@ func simulateSuccessfulCredit(
 	wallet := entity.NewMerchantWallet(shopID)
 	wallet.BalanceCents = 50000
 
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 }
@@ -100,7 +101,8 @@ func simulateSuccessfulDebit(
 	wallet := entity.NewMerchantWallet(shopID)
 	wallet.BalanceCents = 100000
 
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 }
@@ -149,7 +151,7 @@ func TestCreditWalletUsecase_CreditFromCOD_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreditWalletUsecase - CreditFromTontine (NON COUVERT)
+// TESTS : CreditWalletUsecase - CreditFromTontine
 // ============================================================
 
 func TestCreditWalletUsecase_CreditFromTontine_Success(t *testing.T) {
@@ -170,7 +172,7 @@ func TestCreditWalletUsecase_CreditFromTontine_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreditWalletUsecase - CreditFromCreditPlan (NON COUVERT)
+// TESTS : CreditWalletUsecase - CreditFromCreditPlan
 // ============================================================
 
 func TestCreditWalletUsecase_CreditFromCreditPlan_Success(t *testing.T) {
@@ -191,7 +193,7 @@ func TestCreditWalletUsecase_CreditFromCreditPlan_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreditWalletUsecase - CreditFromDeposit (NON COUVERT)
+// TESTS : CreditWalletUsecase - CreditFromDeposit
 // ============================================================
 
 func TestCreditWalletUsecase_CreditFromDeposit_Success(t *testing.T) {
@@ -212,7 +214,7 @@ func TestCreditWalletUsecase_CreditFromDeposit_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreditWalletUsecase - CreditFromUnfreeze (NON COUVERT)
+// TESTS : CreditWalletUsecase - CreditFromUnfreeze
 // ============================================================
 
 func TestCreditWalletUsecase_CreditFromUnfreeze_Success(t *testing.T) {
@@ -254,7 +256,7 @@ func TestDebitWalletUsecase_DebitCommission_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : DebitWalletUsecase - DebitRefund (NON COUVERT)
+// TESTS : DebitWalletUsecase - DebitRefund
 // ============================================================
 
 func TestDebitWalletUsecase_DebitRefund_Success(t *testing.T) {
@@ -296,7 +298,7 @@ func TestDebitWalletUsecase_DebitPayout_Success(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : DebitWalletUsecase - DebitPenalty (NON COUVERT)
+// TESTS : DebitWalletUsecase - DebitPenalty
 // ============================================================
 
 func TestDebitWalletUsecase_DebitPenalty_Success(t *testing.T) {
@@ -342,7 +344,8 @@ func TestFreezeAccountUsecase_FreezeForNegativeBalance_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
 	freezeRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -385,7 +388,8 @@ func TestFreezeAccountUsecase_FreezeForUnpaidCommission_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
 	freezeRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -428,7 +432,8 @@ func TestFreezeAccountUsecase_FreezeForFraud_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
 	freezeRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -471,7 +476,8 @@ func TestFreezeAccountUsecase_FreezeByAdmin_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID).Return(wallet, nil)
+	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
 	freezeRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(

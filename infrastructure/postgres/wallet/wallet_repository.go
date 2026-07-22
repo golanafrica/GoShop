@@ -226,6 +226,30 @@ func (r *MerchantWalletRepositoryInfrastructure) FindByShopID(ctx context.Contex
 	return r.scanWallet(r.queryRowContext(ctx, query, shopID))
 }
 
+// 🆕 FindByShopIDForUpdate trouve un portefeuille et le verrouille pour mise à jour (SELECT ... FOR UPDATE)
+func (r *MerchantWalletRepositoryInfrastructure) FindByShopIDForUpdate(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+	// Vérifier le multi-tenant
+	currentShopID, err := r.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if shopID != currentShopID {
+		return nil, fmt.Errorf("access denied: cannot query wallet of another shop")
+	}
+
+	query := `
+		SELECT shop_id, balance_cents, is_frozen, frozen_at, frozen_reason, frozen_until,
+		       max_negative_balance_cents,
+		       total_sales_cents, total_commissions_cents, total_payouts_cents,
+		       created_at, updated_at
+		FROM merchant_wallets
+		WHERE shop_id = $1
+		FOR UPDATE
+	`
+
+	return r.scanWallet(r.queryRowContext(ctx, query, shopID))
+}
+
 // FindAll retourne tous les portefeuilles
 func (r *MerchantWalletRepositoryInfrastructure) FindAll(ctx context.Context) ([]*entity.MerchantWallet, error) {
 	query := `

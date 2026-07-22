@@ -115,11 +115,11 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 	defer tx.Rollback()
 
-	// 4. Récupérer le wallet (ou le créer s'il n'existe pas)
-	wallet, err := uc.walletRepo.WithTX(tx).FindByShopID(ctx, req.ShopID)
+	// 4. 🛡️ SÉCURITÉ : Récupérer le wallet avec verrouillage (FOR UPDATE)
+	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
 		// Wallet n'existe pas, le créer
-		if err.Error() == "merchant wallet not found" || err.Error() == "multi-tenant: no tenant in context" {
+		if err.Error() == "merchant wallet not found" {
 			wallet = entity.NewMerchantWallet(req.ShopID)
 			if err := uc.walletRepo.WithTX(tx).Create(ctx, wallet); err != nil {
 				logger.Error().Err(err).Msg("Failed to create wallet")
@@ -274,7 +274,6 @@ func (uc *CreditWalletUsecase) CreditFromTontine(
 	return uc.Execute(ctx, req)
 }
 
-// CreditFromCreditPlan crédite le wallet suite à une vente crédit
 // CreditFromCreditPlan crédite le wallet suite à un paiement de plan de crédit
 func (uc *CreditWalletUsecase) CreditFromCreditPlan(
 	ctx context.Context,
@@ -285,7 +284,6 @@ func (uc *CreditWalletUsecase) CreditFromCreditPlan(
 	refType := "credit_contract"
 	description := fmt.Sprintf("Credit plan payment from contract %s", contractID)
 
-	// ✅ CORRECTION : Éviter d'envoyer une chaîne vide "" à une colonne UUID
 	var refID *string
 	if contractID != "" {
 		refID = &contractID
@@ -296,7 +294,7 @@ func (uc *CreditWalletUsecase) CreditFromCreditPlan(
 		AmountCents:     amountCents,
 		TransactionType: entity.WalletTxSaleCreditPlan,
 		ReferenceType:   &refType,
-		ReferenceID:     refID, // ✅ Utilise le pointeur conditionnel (sera nil si vide)
+		ReferenceID:     refID,
 		Description:     &description,
 	}
 

@@ -122,8 +122,8 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 	}
 	defer tx.Rollback()
 
-	// 4. Récupérer le wallet
-	wallet, err := uc.walletRepo.WithTX(tx).FindByShopID(ctx, req.ShopID)
+	// 4. 🛡️ SÉCURITÉ : Récupérer le wallet avec verrouillage (FOR UPDATE)
+	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to find wallet")
 		return nil, fmt.Errorf("failed to find wallet: %w", err)
@@ -192,9 +192,6 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 	}
 
 	// 12. Déterminer si le wallet doit être gelé
-	// Le gel est nécessaire si :
-	// - Le wallet est maintenant négatif
-	// - ET il n'était pas déjà négatif avant
 	shouldFreeze := wallet.BalanceCents < 0 && previousBalance >= 0
 
 	// 13. Logger le résultat
@@ -328,16 +325,3 @@ func (uc *DebitWalletUsecase) DebitPenalty(
 func (uc *DebitWalletUsecase) GetWallet(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
 	return uc.walletRepo.FindByShopID(ctx, shopID)
 }
-
-// ============================================================
-// NOTE : DebitWithAutoFreeze sera ajoutée dans freeze_account.go
-// ============================================================
-// La méthode DebitWithAutoFreeze sera créée dans le fichier
-// freeze_account.go (usecase 3/9) car elle dépend de FreezeAccountUsecase.
-//
-// Elle permettra de :
-// 1. Effectuer un débit
-// 2. Si le wallet passe en négatif, geler automatiquement le compte
-// 3. Créer un AccountFreeze avec la période de grâce
-//
-// Cette approche évite les dépendances circulaires entre usecases.

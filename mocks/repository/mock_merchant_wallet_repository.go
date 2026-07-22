@@ -146,6 +146,21 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) FindByShopID(ctx, shopID any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopID", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindByShopID), ctx, shopID)
 }
 
+// FindByShopIDForUpdate mocks base method.
+func (m *MockMerchantWalletRepository) FindByShopIDForUpdate(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByShopIDForUpdate", ctx, shopID)
+	ret0, _ := ret[0].(*entity.MerchantWallet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByShopIDForUpdate indicates an expected call of FindByShopIDForUpdate.
+func (mr *MockMerchantWalletRepositoryMockRecorder) FindByShopIDForUpdate(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopIDForUpdate", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindByShopIDForUpdate), ctx, shopID)
+}
+
 // FindFrozen mocks base method.
 func (m *MockMerchantWalletRepository) FindFrozen(ctx context.Context) ([]*entity.MerchantWallet, error) {
 	m.ctrl.T.Helper()

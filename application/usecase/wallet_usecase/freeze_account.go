@@ -126,8 +126,8 @@ func (uc *FreezeAccountUsecase) Execute(ctx context.Context, req *FreezeAccountR
 		return nil, fmt.Errorf("account already has an active freeze: %s", existingFreeze.ID)
 	}
 
-	// 5. Récupérer le wallet
-	wallet, err := uc.walletRepo.WithTX(tx).FindByShopID(ctx, req.ShopID)
+	// 5. 🛡️ SÉCURITÉ : Récupérer le wallet avec verrouillage (FOR UPDATE)
+	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to find wallet")
 		return nil, fmt.Errorf("failed to find wallet: %w", err)
@@ -318,8 +318,8 @@ func (uc *UnfreezeAccountUsecase) Execute(ctx context.Context, req *UnfreezeAcco
 		return nil, fmt.Errorf("no active freeze found for this shop")
 	}
 
-	// 5. Récupérer le wallet
-	wallet, err := uc.walletRepo.WithTX(tx).FindByShopID(ctx, req.ShopID)
+	// 5. 🛡️ SÉCURITÉ : Récupérer le wallet avec verrouillage (FOR UPDATE)
+	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to find wallet")
 		return nil, fmt.Errorf("failed to find wallet: %w", err)
@@ -333,7 +333,13 @@ func (uc *UnfreezeAccountUsecase) Execute(ctx context.Context, req *UnfreezeAcco
 		return nil, fmt.Errorf("wallet is not frozen")
 	}
 
-	// 7. Si résolution par paiement, créditer le wallet
+	// 7. 🛠️ CORRECTION CRITIQUE : Dégeler le wallet EN PREMIER pour permettre les opérations suivantes (comme le crédit)
+	if err := wallet.ForceUnfreeze(); err != nil {
+		logger.Error().Err(err).Msg("Failed to unfreeze wallet")
+		return nil, fmt.Errorf("failed to unfreeze wallet: %w", err)
+	}
+
+	// 8. Si résolution par paiement, créditer le wallet
 	var transactionID string
 	if req.Resolution == entity.FreezeResolutionPaid && req.DepositAmountCents > 0 {
 		// Vérifier que le dépôt couvre la dette
@@ -345,7 +351,7 @@ func (uc *UnfreezeAccountUsecase) Execute(ctx context.Context, req *UnfreezeAcco
 			// On continue quand même, le marchand peut payer partiellement
 		}
 
-		// Créditer le wallet
+		// Créditer le wallet (maintenant que IsFrozen = false, cela fonctionnera)
 		if err := wallet.Credit(req.DepositAmountCents); err != nil {
 			logger.Error().Err(err).Msg("Failed to credit wallet")
 			return nil, fmt.Errorf("failed to credit wallet: %w", err)
@@ -372,12 +378,6 @@ func (uc *UnfreezeAccountUsecase) Execute(ctx context.Context, req *UnfreezeAcco
 			logger.Error().Err(err).Msg("Failed to create transaction")
 			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
-	}
-
-	// 8. Dégeler le wallet
-	if err := wallet.ForceUnfreeze(); err != nil {
-		logger.Error().Err(err).Msg("Failed to unfreeze wallet")
-		return nil, fmt.Errorf("failed to unfreeze wallet: %w", err)
 	}
 
 	// 9. Mettre à jour le wallet dans la base
@@ -502,11 +502,10 @@ func (uc *FreezeAccountUsecase) FreezeByAdmin(
 }
 
 // ============================================================
-// DEBIT WITH AUTO-FREEZE (manquait dans debit_wallet.go)
+// DEBIT WITH AUTO-FREEZE
 // ============================================================
 
 // DebitWithAutoFreeze débite et gèle automatiquement si nécessaire
-// Cette méthode combine DebitWalletUsecase + FreezeAccountUsecase
 func DebitWithAutoFreeze(
 	ctx context.Context,
 	debitUC *DebitWalletUsecase,

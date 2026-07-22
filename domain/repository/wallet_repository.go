@@ -22,6 +22,10 @@ type MerchantWalletRepository interface {
 	// FindByShopID trouve un portefeuille par boutique
 	FindByShopID(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
 
+	// 🆕 FindByShopIDForUpdate trouve un portefeuille et le verrouille pour mise à jour (SELECT ... FOR UPDATE)
+	// Cela empêche les Race Conditions lors de modifications concurrentes du solde.
+	FindByShopIDForUpdate(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
+
 	// FindAll retourne tous les portefeuilles
 	FindAll(ctx context.Context) ([]*entity.MerchantWallet, error)
 

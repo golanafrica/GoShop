@@ -125,7 +125,7 @@ func TestDebitWalletUsecase_FindWalletError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(nil, errors.New("not found"))
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("not found"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -151,7 +151,7 @@ func TestDebitWalletUsecase_WalletFrozen(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -169,16 +169,16 @@ func TestDebitWalletUsecase_ExceedsMaxNegative_Blocked(t *testing.T) {
 
 	ctx, shopID := walletTestContext()
 	req := debitWalletValidRequest(shopID.String())
-	req.AmountCents = 500000 // très supérieur à la limite négative
+	req.AmountCents = 500000
 	req.AllowNegative = false
 	mockTx := mockrepo.NewMockTx(ctrl)
-	wallet := entity.NewMerchantWallet(req.ShopID) // MaxNegativeBalanceCents = -100000
+	wallet := entity.NewMerchantWallet(req.ShopID)
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -204,7 +204,7 @@ func TestDebitWalletUsecase_UpdateWalletError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -231,7 +231,7 @@ func TestDebitWalletUsecase_CreateTransactionError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
@@ -259,7 +259,7 @@ func TestDebitWalletUsecase_CommitError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
@@ -282,13 +282,13 @@ func TestDebitWalletUsecase_Success_NotNegative(t *testing.T) {
 	req := debitWalletValidRequest(shopID.String())
 	mockTx := mockrepo.NewMockTx(ctrl)
 	wallet := entity.NewMerchantWallet(req.ShopID)
-	wallet.BalanceCents = 50000 // reste positif après débit de 10000
+	wallet.BalanceCents = 50000
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
@@ -315,13 +315,13 @@ func TestDebitWalletUsecase_Success_BecomesNegative_ShouldFreeze(t *testing.T) {
 	req.AllowNegative = true
 	mockTx := mockrepo.NewMockTx(ctrl)
 	wallet := entity.NewMerchantWallet(req.ShopID)
-	wallet.BalanceCents = 5000 // passera à -10000, dans la limite (-100000)
+	wallet.BalanceCents = 5000
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
@@ -333,7 +333,7 @@ func TestDebitWalletUsecase_Success_BecomesNegative_ShouldFreeze(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.Equal(t, int64(-10000), resp.BalanceCents)
 	assert.True(t, resp.IsNowNegative)
-	assert.True(t, resp.ShouldFreeze) // était positif avant, négatif après
+	assert.True(t, resp.ShouldFreeze)
 }
 
 func TestDebitWalletUsecase_Success_AlreadyNegative_NoNewFreeze(t *testing.T) {
@@ -348,13 +348,13 @@ func TestDebitWalletUsecase_Success_AlreadyNegative_NoNewFreeze(t *testing.T) {
 	req.AllowNegative = true
 	mockTx := mockrepo.NewMockTx(ctrl)
 	wallet := entity.NewMerchantWallet(req.ShopID)
-	wallet.BalanceCents = -10000 // déjà négatif avant le débit
+	wallet.BalanceCents = -10000
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), req.ShopID).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
@@ -365,7 +365,7 @@ func TestDebitWalletUsecase_Success_AlreadyNegative_NoNewFreeze(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.True(t, resp.IsNowNegative)
-	assert.False(t, resp.ShouldFreeze) // déjà négatif avant -> pas de nouveau gel
+	assert.False(t, resp.ShouldFreeze)
 }
 
 // ============================================================
@@ -387,7 +387,7 @@ func TestDebitWalletUsecase_DebitCommission_AllowsNegative_Success(t *testing.T)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID.String()).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, txn *entity.WalletTransaction) error {
@@ -420,7 +420,7 @@ func TestDebitWalletUsecase_DebitPayout_SetsCorrectFields(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopID(gomock.Any(), shopID.String()).Return(wallet, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
