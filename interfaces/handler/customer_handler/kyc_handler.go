@@ -9,6 +9,7 @@ import (
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 // KYCHandler gère les routes KYC
@@ -35,12 +36,12 @@ func NewKYCHandler(
 }
 
 // @Summary Soumettre un document KYC (Client)
-// @Description Permet à un client de soumettre un document d'identité pour vérification.
+// @Description Permet à un client de soumettre un document d'identité pour vérification. L'ID du client est automatiquement extrait du token JWT pour prévenir les failles IDOR.
 // @Tags Customer KYC
 // @Accept json
 // @Produce json
-// @Param request body customerusecase.UploadKYCRequest true "Détails du document à uploader"
-// @Success 201 {object} entity.CustomerKYCDocument
+// @Param request body customerusecase.UploadKYCRequest true "Détails du document à uploader (le customer_id du body sera ignoré et remplacé par celui du token)"
+// @Success 201 {object} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Payload invalide ou échec de l'upload"
 // @Failure 401 {object} utils.AppError "Non autorisé"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
@@ -48,12 +49,29 @@ func NewKYCHandler(
 // @Router /api/customers/kyc/upload [post]
 func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	// 🛡️ SÉCURITÉ CRITIQUE : Récupérer l'ID de l'utilisateur authentifié depuis le contexte JWT
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		logger.Warn().Msg("User ID not found in context")
+		return utils.ErrUnauthorized
+	}
 
 	var req customerusecase.UploadKYCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
+
+	// 🛡️ SÉCURITÉ CRITIQUE : Écraser le CustomerID de la requête avec l'ID authentifié.
+	// Cela empêche un client malveillant de soumettre un document KYC pour le compte d'un autre client (prévention IDOR).
+	req.CustomerID = authUserID
+
+	logger.Info().
+		Str("customer_id", authUserID).
+		Str("document_type", string(req.DocumentType)).
+		Msg("Processing KYC upload for authenticated user")
 
 	doc, err := h.uploadKYCUC.Execute(ctx, &req)
 	if err != nil {
