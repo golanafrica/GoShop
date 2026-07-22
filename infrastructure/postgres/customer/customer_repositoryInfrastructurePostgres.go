@@ -149,7 +149,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithPagination(
 		c := &entity.Customer{}
 		err := rows.Scan(
 			&c.ID,
-			&c.UserID, // ✅ AJOUTÉ
+			&c.UserID,
 			&c.FirstName,
 			&c.LastName,
 			&c.Email,
@@ -215,7 +215,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithSorting(ctx co
 		c := &entity.Customer{}
 		err := rows.Scan(
 			&c.ID,
-			&c.UserID, // ✅ AJOUTÉ
+			&c.UserID,
 			&c.FirstName,
 			&c.LastName,
 			&c.Email,
@@ -259,7 +259,7 @@ func (cr *CustomerRepoInfrastructurePostgres) Create(ctx context.Context, custom
 
 	err = cr.queryRowContext(ctx, query,
 		shopID,
-		customer.UserID, // ✅ AJOUTÉ : Sauvegarde du UserID
+		customer.UserID,
 		customer.FirstName,
 		customer.LastName,
 		customer.Email,
@@ -268,7 +268,7 @@ func (cr *CustomerRepoInfrastructurePostgres) Create(ctx context.Context, custom
 		customer.KYCValidatedBy,
 	).Scan(
 		&customer.ID,
-		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID retourné
+		&customer.UserID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -303,7 +303,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 
 	err = cr.queryRowContext(ctx, query, id, shopID).Scan(
 		&customer.ID,
-		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
+		&customer.UserID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -319,6 +319,44 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByCustomerID(ctx context.Conte
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan customer: %w", err)
+	}
+
+	return customer, nil
+}
+
+// 🆕 FindByUserID trouve un client à partir de son user_id (JWT) dans le shop courant
+func (cr *CustomerRepoInfrastructurePostgres) FindByUserID(ctx context.Context, userID string) (*entity.Customer, error) {
+	shopID, err := cr.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	customer := &entity.Customer{}
+	query := `
+		SELECT id, user_id, first_name, last_name, email,
+		       kyc_level, kyc_validated_at, kyc_validated_by,
+		       created_at, updated_at
+		FROM customers WHERE user_id = $1 AND shop_id = $2
+	`
+
+	err = cr.queryRowContext(ctx, query, userID, shopID).Scan(
+		&customer.ID,
+		&customer.UserID,
+		&customer.FirstName,
+		&customer.LastName,
+		&customer.Email,
+		&customer.KYCLevel,
+		&customer.KYCValidatedAt,
+		&customer.KYCValidatedBy,
+		&customer.CreatedAt,
+		&customer.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan customer by user_id: %w", err)
 	}
 
 	return customer, nil
@@ -349,7 +387,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomers(ctx context.Conte
 		customer := &entity.Customer{}
 		if err := rows.Scan(
 			&customer.ID,
-			&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
+			&customer.UserID,
 			&customer.FirstName,
 			&customer.LastName,
 			&customer.Email,
@@ -400,7 +438,7 @@ func (cr *CustomerRepoInfrastructurePostgres) UpdateCustomer(ctx context.Context
 		shopID,
 	).Scan(
 		&customer.ID,
-		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID retourné
+		&customer.UserID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,
@@ -452,7 +490,7 @@ func (cr *CustomerRepoInfrastructurePostgres) FindByEmail(ctx context.Context, e
 
 	err = cr.queryRowContext(ctx, query, email, shopID).Scan(
 		&customer.ID,
-		&customer.UserID, // ✅ AJOUTÉ : Lecture du UserID
+		&customer.UserID,
 		&customer.FirstName,
 		&customer.LastName,
 		&customer.Email,

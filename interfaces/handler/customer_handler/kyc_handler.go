@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	customerusecase "Goshop/application/usecase/customer_usecase"
+	"Goshop/domain/repository"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
 
@@ -18,6 +19,7 @@ type KYCHandler struct {
 	getKYCStatusUC   *customerusecase.GetKYCStatusUsecase
 	reviewKYCUC      *customerusecase.ReviewKYCUsecase
 	listPendingKYCUC *customerusecase.ListPendingKYCUsecase
+	customerRepo     repository.CustomerRepositoryInterface
 }
 
 // NewKYCHandler crée une nouvelle instance
@@ -26,17 +28,19 @@ func NewKYCHandler(
 	getKYCStatusUC *customerusecase.GetKYCStatusUsecase,
 	reviewKYCUC *customerusecase.ReviewKYCUsecase,
 	listPendingKYCUC *customerusecase.ListPendingKYCUsecase,
+	customerRepo repository.CustomerRepositoryInterface,
 ) *KYCHandler {
 	return &KYCHandler{
 		uploadKYCUC:      uploadKYCUC,
 		getKYCStatusUC:   getKYCStatusUC,
 		reviewKYCUC:      reviewKYCUC,
 		listPendingKYCUC: listPendingKYCUC,
+		customerRepo:     customerRepo,
 	}
 }
 
 // @Summary Soumettre un document KYC (Client)
-// @Description Permet à un client de soumettre un document d'identité pour vérification. L'ID du client est automatiquement extrait du token JWT pour prévenir les failles IDOR.
+// @Description Permet à un client de soumettre un document d'identité. L'ID client est résolu de manière sécurisée via le JWT et le contexte multi-tenant pour prévenir les failles IDOR.
 // @Tags Customer KYC
 // @Accept json
 // @Produce json
@@ -44,6 +48,7 @@ func NewKYCHandler(
 // @Success 201 {object} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Payload invalide ou échec de l'upload"
 // @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 404 {object} utils.AppError "Profil client introuvable pour cet utilisateur"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/customers/kyc/upload [post]
@@ -51,11 +56,18 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// 🛡️ SÉCURITÉ CRITIQUE : Récupérer l'ID de l'utilisateur authentifié depuis le contexte JWT
+	// 1. Récupérer l'ID utilisateur du JWT (users.id)
 	authUserID, ok := utils.UserIDFromContext(ctx)
 	if !ok || authUserID == "" {
 		logger.Warn().Msg("User ID not found in context")
 		return utils.ErrUnauthorized
+	}
+
+	// 2. 🛡️ TRADUCTION SÉCURISÉE : Trouver le customer.id correspondant à ce user.id dans cette boutique
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found for user")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
 	}
 
 	var req customerusecase.UploadKYCRequest
@@ -64,14 +76,14 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer r.Body.Close()
 
-	// 🛡️ SÉCURITÉ CRITIQUE : Écraser le CustomerID de la requête avec l'ID authentifié.
-	// Cela empêche un client malveillant de soumettre un document KYC pour le compte d'un autre client (prévention IDOR).
-	req.CustomerID = authUserID
+	// 3. 🛡️ SÉCURITÉ : Écraser le CustomerID de la requête avec le VRAI customer.id trouvé en base.
+	req.CustomerID = customer.ID
 
 	logger.Info().
-		Str("customer_id", authUserID).
+		Str("user_id", authUserID).
+		Str("customer_id", customer.ID).
 		Str("document_type", string(req.DocumentType)).
-		Msg("Processing KYC upload for authenticated user")
+		Msg("Processing secure KYC upload")
 
 	doc, err := h.uploadKYCUC.Execute(ctx, &req)
 	if err != nil {

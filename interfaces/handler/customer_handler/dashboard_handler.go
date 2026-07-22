@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	customerusecase "Goshop/application/usecase/customer_usecase"
+	"Goshop/domain/repository"
 	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
@@ -12,22 +13,27 @@ import (
 
 type CustomerDashboardHandler struct {
 	getDashboardUC *customerusecase.GetClientDashboardUsecase
+	customerRepo   repository.CustomerRepositoryInterface
 }
 
-func NewCustomerDashboardHandler(getDashboardUC *customerusecase.GetClientDashboardUsecase) *CustomerDashboardHandler {
+func NewCustomerDashboardHandler(
+	getDashboardUC *customerusecase.GetClientDashboardUsecase,
+	customerRepo repository.CustomerRepositoryInterface,
+) *CustomerDashboardHandler {
 	return &CustomerDashboardHandler{
 		getDashboardUC: getDashboardUC,
+		customerRepo:   customerRepo,
 	}
 }
 
 // @Summary Obtenir le tableau de bord financier du client
-// @Description Retourne la vue d'ensemble financière du client connecté (score de crédit, contrats actifs, prochaines échéances).
+// @Description Retourne la vue d'ensemble financière du client connecté. L'ID client est résolu de manière sécurisée via le JWT.
 // @Tags Customer Dashboard
 // @Accept json
 // @Produce json
 // @Success 200 {object} map[string]interface{}
 // @Failure 401 {object} utils.AppError "Non autorisé (JWT manquant ou invalide)"
-// @Failure 404 {object} utils.AppError "Client introuvable"
+// @Failure 404 {object} utils.AppError "Profil client introuvable"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/client/dashboard [get]
@@ -35,29 +41,34 @@ func (h *CustomerDashboardHandler) GetDashboard(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer l'ID du client depuis le token JWT (injecté par le middleware d'auth)
-	customerID, ok := utils.UserIDFromContext(ctx)
-	if !ok || customerID == "" {
-		logger.Warn().Msg("Customer ID not found in context")
+	// 1. Récupérer l'ID utilisateur du JWT (users.id)
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		logger.Warn().Msg("User ID not found in context")
 		return utils.ErrUnauthorized
 	}
 
-	// 2. Exécuter le usecase
-	dashboard, err := h.getDashboardUC.Execute(ctx, customerID)
+	// 2. 🛡️ TRADUCTION SÉCURISÉE : Trouver le customer.id correspondant à ce user.id
+	// (FindByUserID lit automatiquement le shop_id depuis le contexte multi-tenant)
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found for dashboard")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
+	}
+
+	// 3. Exécuter le usecase avec le VRAI customer.id
+	dashboard, err := h.getDashboardUC.Execute(ctx, customer.ID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to get dashboard")
 
 		var appErr *utils.AppError
-		if err.Error() == "customer not found" {
-			return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer not found", http.StatusNotFound)
-		}
 		if errors.As(err, &appErr) {
 			return appErr
 		}
 		return utils.ErrInternalServer
 	}
 
-	// 3. Retourner la réponse
+	// 4. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    dashboard,

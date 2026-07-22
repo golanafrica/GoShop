@@ -5,10 +5,12 @@ import (
 	"net/http"
 
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
+	"Goshop/domain/repository"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 // TontineHandler gère les routes de la tontine
@@ -17,6 +19,7 @@ type TontineHandler struct {
 	joinGroupUC            *tontineusecase.JoinTontineGroupUsecase
 	payCycleUC             *tontineusecase.PayCycleUsecase
 	listCustomerPaymentsUC *tontineusecase.ListCustomerPaymentsUsecase
+	customerRepo           repository.CustomerRepositoryInterface
 }
 
 // NewTontineHandler crée une nouvelle instance
@@ -25,12 +28,14 @@ func NewTontineHandler(
 	joinGroupUC *tontineusecase.JoinTontineGroupUsecase,
 	payCycleUC *tontineusecase.PayCycleUsecase,
 	listCustomerPaymentsUC *tontineusecase.ListCustomerPaymentsUsecase,
+	customerRepo repository.CustomerRepositoryInterface,
 ) *TontineHandler {
 	return &TontineHandler{
 		createGroupUC:          createGroupUC,
 		joinGroupUC:            joinGroupUC,
 		payCycleUC:             payCycleUC,
 		listCustomerPaymentsUC: listCustomerPaymentsUC,
+		customerRepo:           customerRepo,
 	}
 }
 
@@ -66,28 +71,44 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 }
 
 // @Summary Rejoindre un groupe de tontine
-// @Description Permet à un client de rejoindre un groupe de tontine existant via un code d'invitation.
+// @Description Permet à un client de rejoindre un groupe via un code d'invitation. L'ID client est résolu de manière sécurisée via le JWT pour prévenir les failles IDOR.
 // @Tags Tontine
 // @Accept json
 // @Produce json
-// @Param request body tontineusecase.JoinGroupRequest true "Code d'invitation et ID client"
+// @Param request body tontineusecase.JoinGroupRequest true "Code d'invitation (le customer_id du body sera ignoré et remplacé par celui du token)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Payload invalide ou code incorrect"
 // @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (KYC non validé)"
-// @Failure 404 {object} utils.AppError "Groupe introuvable"
+// @Failure 404 {object} utils.AppError "Profil client ou groupe introuvable"
 // @Failure 409 {object} utils.AppError "Groupe déjà complet ou client déjà membre"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/tontine/groups/join [post]
 func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	// 1. Récupérer l'ID utilisateur du JWT
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		return utils.ErrUnauthorized
+	}
+
+	// 2. 🛡️ TRADUCTION SÉCURISÉE
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
+	}
 
 	var req tontineusecase.JoinGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
+
+	// 3. 🛡️ SÉCURITÉ : Écraser le customer_id fourni par le client avec celui vérifié en base
+	req.CustomerID = customer.ID
 
 	response, err := h.joinGroupUC.Execute(ctx, &req)
 	if err != nil {
@@ -99,25 +120,39 @@ func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error
 }
 
 // @Summary Payer une cotisation de tontine
-// @Description Lance le processus de paiement pour la cotisation d'un cycle spécifique.
+// @Description Lance le processus de paiement pour la cotisation d'un cycle spécifique. L'ID client est résolu de manière sécurisée via le JWT.
 // @Tags Tontine
 // @Accept json
 // @Produce json
 // @Param group_id path string true "ID du groupe de tontine (UUID)"
-// @Param request body tontineusecase.PayCycleRequest true "Détails du paiement (provider, phone_number, etc.)"
+// @Param request body tontineusecase.PayCycleRequest true "Détails du paiement (le customer_id du body sera ignoré et remplacé par celui du token)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Payload invalide ou cycle non éligible"
 // @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 404 {object} utils.AppError "Groupe ou cycle introuvable"
+// @Failure 404 {object} utils.AppError "Profil client ou groupe introuvable"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/tontine/groups/{group_id}/pay [post]
 func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
 	groupID := chi.URLParam(r, "group_id")
 	if groupID == "" {
 		return utils.ErrInvalidPayload
+	}
+
+	// 1. Récupérer l'ID utilisateur du JWT
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		return utils.ErrUnauthorized
+	}
+
+	// 2. 🛡️ TRADUCTION SÉCURISÉE
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
 	}
 
 	var req tontineusecase.PayCycleRequest
@@ -126,7 +161,9 @@ func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error 
 	}
 	defer r.Body.Close()
 
+	// 3. 🛡️ SÉCURITÉ : Écraser les IDs avec ceux vérifiés en base
 	req.GroupID = groupID
+	req.CustomerID = customer.ID
 
 	response, err := h.payCycleUC.Execute(ctx, &req)
 	if err != nil {

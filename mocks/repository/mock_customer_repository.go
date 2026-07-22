@@ -163,6 +163,21 @@ func (mr *MockCustomerRepositoryInterfaceMockRecorder) FindByEmail(ctx, email an
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByEmail", reflect.TypeOf((*MockCustomerRepositoryInterface)(nil).FindByEmail), ctx, email)
 }
 
+// FindByUserID mocks base method.
+func (m *MockCustomerRepositoryInterface) FindByUserID(ctx context.Context, userID string) (*entity.Customer, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByUserID", ctx, userID)
+	ret0, _ := ret[0].(*entity.Customer)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByUserID indicates an expected call of FindByUserID.
+func (mr *MockCustomerRepositoryInterfaceMockRecorder) FindByUserID(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByUserID", reflect.TypeOf((*MockCustomerRepositoryInterface)(nil).FindByUserID), ctx, userID)
+}
+
 // GetClientDashboard mocks base method.
 func (m *MockCustomerRepositoryInterface) GetClientDashboard(ctx context.Context, customerID string) (*creditdto.ClientDashboardResponse, error) {
 	m.ctrl.T.Helper()

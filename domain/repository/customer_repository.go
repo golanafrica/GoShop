@@ -13,6 +13,10 @@ import (
 type CustomerRepositoryInterface interface {
 	Create(ctx context.Context, customer *entity.Customer) (*entity.Customer, error)
 	FindByCustomerID(ctx context.Context, id string) (*entity.Customer, error)
+
+	// 🆕 FindByUserID trouve un client à partir de son user_id (JWT) dans le shop courant
+	FindByUserID(ctx context.Context, userID string) (*entity.Customer, error)
+
 	FindByEmail(ctx context.Context, email string) (*entity.Customer, error)
 	FindAllCustomers(ctx context.Context) ([]*entity.Customer, error)
 	UpdateCustomer(ctx context.Context, customer *entity.Customer) (*entity.Customer, error)

@@ -861,7 +861,8 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 Client Dashboard Handler
-	clientDashboardHandler := customerhandler.NewCustomerDashboardHandler(getDashboardUC)
+	// 🆕 Client Dashboard Handler
+	clientDashboardHandler := customerhandler.NewCustomerDashboardHandler(getDashboardUC, postgresCustomerRepo)
 
 	orderHandler := ordershandler.NewOrderHandler(
 		a.DB,
@@ -932,19 +933,23 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 v2.9.0 : Tontine Handler
+	// 🆕 v2.9.0 : Tontine Handler
 	tontineHandler := tontinehandler.NewTontineHandler(
 		createTontineGroupUC,
 		joinTontineGroupUC,
 		payCycleUC,
 		listCustomerPaymentsUC,
+		postgresCustomerRepo, // 🆕 AJOUTÉ
 	)
 
+	// 🆕 v2.9.0 : KYC Handler (Client)
 	// 🆕 v2.9.0 : KYC Handler (Client)
 	kycHandler := customerhandler.NewKYCHandler(
 		uploadKYCUC,
 		getKYCStatusUC,
 		reviewKYCUC,
 		listPendingKYCUC,
+		postgresCustomerRepo, // 🆕 AJOUTÉ
 	)
 
 	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
