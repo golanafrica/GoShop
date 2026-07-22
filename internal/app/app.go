@@ -222,6 +222,15 @@ func (a *App) setupRouter() {
 	r.Use(middl.SecureHeaders)
 	r.Use(middl.CharsetUTF8)
 
+	// ✅ FIX AUDIT #1 : Câblage du middleware CORS
+	// Permet au frontend (React/Vue/Next.js) d'appeler l'API depuis le navigateur.
+	// En production, définissez la variable d'environnement FRONTEND_URL (ex: "https://app.goshop.africa")
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "*" // Par défaut pour le développement local
+	}
+	r.Use(middl.CORS(frontendURL)) // <-- On passe maintenant un seul string
+
 	// ============ 2. INITIALISATION ============
 	hh := handlers.HealthHandler{
 		DB:     a.DB,
@@ -1145,16 +1154,15 @@ func (a *App) setupRouter() {
 			r.Put("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.UpdateTontineSettings))
 		})
 
-		// Routes multi-tenant (AVEC TenantResolver et Vérification d'Accès)
+		// ---------------------------------------------------------
+		// ✅ FIX AUDIT #2 : GROUPE A - Routes Marchand (Nécessite RequireShopAccess)
+		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
 			// 1. Résoudre la boutique à partir du header/sous-domaine
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 
 			// 🛡️ SÉCURITÉ CRITIQUE (IDOR) : Vérifier que l'utilisateur est owner ou collaborateur
 			r.Use(middl.RequireShopAccess(shopCollabRepo))
-
-			// ✅ CORRECTION : Route Dashboard placée ici, au niveau racine du groupe multi-tenant
-			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
 
 			// Products
 			r.Route("/products", func(r chi.Router) {
@@ -1165,7 +1173,7 @@ func (a *App) setupRouter() {
 				r.Delete("/{id}", middl.ErrorHandler(productHandler.DeleteProduct))
 			})
 
-			// Customers (existants + 🆕 KYC Client)
+			// Customers (CRUD only, NOT kyc/upload)
 			r.Route("/customers", func(r chi.Router) {
 				r.Post("/", middl.ErrorHandler(customerHandler.CreateCustomerHandler))
 				r.Get("/", middl.ErrorHandler(customerHandler.GetAllCustomersHandler))
@@ -1173,8 +1181,6 @@ func (a *App) setupRouter() {
 				r.Put("/{id}", middl.ErrorHandler(customerHandler.UpdateCustomerHandler))
 				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
 
-				// 🆕 v2.9.0 : KYC routes (côté client)
-				r.Post("/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
 				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
 			})
 
@@ -1204,14 +1210,6 @@ func (a *App) setupRouter() {
 				r.Post("/", middl.ErrorHandler(withdrawalHandler.CreateWithdrawal))
 				r.Get("/", middl.ErrorHandler(withdrawalHandler.ListWithdrawals))
 				r.Get("/{id}", middl.ErrorHandler(withdrawalHandler.GetWithdrawal))
-			})
-
-			// 🆕 v2.9.0 : Tontine routes (côté client)
-			r.Route("/tontine", func(r chi.Router) {
-				r.Post("/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
-				r.Post("/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
-				r.Post("/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
-				r.Get("/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
 			})
 
 			// 🆕 v2.9.0 : Merchant KYC routes
@@ -1244,6 +1242,28 @@ func (a *App) setupRouter() {
 			r.Route("/merchant", func(r chi.Router) {
 				r.Get("/overview", middl.ErrorHandler(merchantOverviewHandler.GetOverview))
 			})
+		})
+
+		// ---------------------------------------------------------
+		// ✅ FIX AUDIT #2 : GROUPE B - Routes Client "Self-Service"
+		// ---------------------------------------------------------
+		// Ces routes sont appelées par le client final (rôle "user").
+		// Elles ont besoin du TenantResolver, mais PAS de RequireShopAccess,
+		// sinon le client reçoit un 403 Forbidden.
+		r.Group(func(r chi.Router) {
+			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
+			// PAS de middl.RequireShopAccess ici !
+
+			// Dashboard financier du client connecté
+			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
+
+			// Upload KYC par le client pour lui-même
+			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
+
+			// Actions Tontine pour le client
+			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
+			r.Post("/tontine/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
+			r.Get("/tontine/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
 		})
 
 		// ============================================================
@@ -1361,7 +1381,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.5.0: + WebSocket Notifications + API Keys Management + Merchant Overview + Public Products)")
+		Msg("✅ Router configuré avec succès (v4.5.1: + CORS + Proxy IP Fix + Client Route Separation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1428,7 +1448,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.5.0", // 🆕 v4.5.0
+		Version:     "4.5.1", // 🆕 v4.5.1
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
