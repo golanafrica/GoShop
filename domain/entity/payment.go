@@ -11,13 +11,13 @@ import (
 type PaymentStatus string
 
 const (
-	PaymentStatusPending    PaymentStatus = "pending"    // Créé, en attente
-	PaymentStatusProcessing PaymentStatus = "processing" // En cours de traitement
-	PaymentStatusSuccess    PaymentStatus = "success"    // Réussi
-	PaymentStatusFailed     PaymentStatus = "failed"     // Échoué
-	PaymentStatusRefunded   PaymentStatus = "refunded"   // Remboursé
-	PaymentStatusCancelled  PaymentStatus = "cancelled"  // Annulé
-	PaymentStatusExpired    PaymentStatus = "expired"    // Expiré
+	PaymentStatusPending    PaymentStatus = "pending"
+	PaymentStatusProcessing PaymentStatus = "processing"
+	PaymentStatusSuccess    PaymentStatus = "success"
+	PaymentStatusFailed     PaymentStatus = "failed"
+	PaymentStatusRefunded   PaymentStatus = "refunded"
+	PaymentStatusCancelled  PaymentStatus = "cancelled"
+	PaymentStatusExpired    PaymentStatus = "expired"
 )
 
 // PaymentProvider représente le fournisseur de paiement
@@ -43,8 +43,8 @@ const (
 type Currency string
 
 const (
-	CurrencyXOF Currency = "XOF" // Franc CFA (UEMOA)
-	CurrencyXAF Currency = "XAF" // Franc CFA (CEMAC)
+	CurrencyXOF Currency = "XOF"
+	CurrencyXAF Currency = "XAF"
 )
 
 // Payment représente un paiement
@@ -53,12 +53,11 @@ type Payment struct {
 	ShopID  uuid.UUID `json:"shop_id" db:"shop_id"`
 	OrderID uuid.UUID `json:"order_id" db:"order_id"`
 
-	// 🆕 Champs polymorphes pour supporter les échéances de crédit, tontines, etc.
-	ReferenceType *string `json:"reference_type,omitempty" db:"reference_type"` // ex: "order", "credit_installment"
-	ReferenceID   *string `json:"reference_id,omitempty" db:"reference_id"`     // UUID en format string
+	ReferenceType *string `json:"reference_type,omitempty" db:"reference_type"`
+	ReferenceID   *string `json:"reference_id,omitempty" db:"reference_id"`
 
 	Provider      PaymentProvider        `json:"provider" db:"provider"`
-	ProviderRef   *string                `json:"provider_ref,omitempty" db:"provider_ref"` // Référence côté provider (peut être nil avant initiation)
+	ProviderRef   *string                `json:"provider_ref,omitempty" db:"provider_ref"`
 	AmountCents   int64                  `json:"amount_cents" db:"amount_cents"`
 	Currency      Currency               `json:"currency" db:"currency"`
 	CustomerPhone *string                `json:"customer_phone,omitempty" db:"customer_phone"`
@@ -72,10 +71,14 @@ type Payment struct {
 	CreatedAt     time.Time              `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time              `json:"updated_at" db:"updated_at"`
 
+	// 🛡️ CORRECTION AUDIT : Champ pour traçabilité d'idempotence webhook
+	// Stocke l'ID unique du webhook qui a traité ce paiement en dernier
+	WebhookExternalID *string `json:"webhook_external_id,omitempty" db:"webhook_external_id"`
+
 	// Commission
 	CommissionRateBps     int        `json:"commission_rate_bps" db:"commission_rate_bps"`
 	CommissionCents       int64      `json:"commission_cents" db:"commission_cents"`
-	CommissionStatus      string     `json:"commission_status" db:"commission_status"` // pending, collected, failed
+	CommissionStatus      string     `json:"commission_status" db:"commission_status"`
 	CommissionCollectedAt *time.Time `json:"commission_collected_at,omitempty" db:"commission_collected_at"`
 }
 
@@ -85,10 +88,10 @@ func (p *Payment) IsValidStatusTransition(newStatus PaymentStatus) bool {
 		PaymentStatusPending:    {PaymentStatusProcessing, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
 		PaymentStatusProcessing: {PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
 		PaymentStatusSuccess:    {PaymentStatusRefunded},
-		PaymentStatusFailed:     {}, // Terminal
-		PaymentStatusRefunded:   {}, // Terminal
-		PaymentStatusCancelled:  {}, // Terminal
-		PaymentStatusExpired:    {}, // Terminal
+		PaymentStatusFailed:     {},
+		PaymentStatusRefunded:   {},
+		PaymentStatusCancelled:  {},
+		PaymentStatusExpired:    {},
 	}
 
 	allowed, exists := transitions[p.Status]
@@ -110,8 +113,8 @@ func NewPayment(shopID, orderID uuid.UUID, provider PaymentProvider, amountCents
 		return nil, errors.New("payment amount must be positive")
 	}
 
-	now := time.Now().UTC()                // ✅ UTC explicite
-	expiresAt := now.Add(30 * time.Minute) // Expiration par défaut : 30 min
+	now := time.Now().UTC()
+	expiresAt := now.Add(30 * time.Minute)
 
 	return &Payment{
 		ID:          uuid.New(),
@@ -133,7 +136,7 @@ func (p *Payment) MarkProcessing() error {
 	if !p.IsValidStatusTransition(PaymentStatusProcessing) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusProcessing
 	p.InitiatedAt = &now
 	p.UpdatedAt = now
@@ -145,11 +148,23 @@ func (p *Payment) MarkSuccess(providerRef string) error {
 	if !p.IsValidStatusTransition(PaymentStatusSuccess) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusSuccess
 	p.ProviderRef = &providerRef
 	p.CompletedAt = &now
 	p.UpdatedAt = now
+	return nil
+}
+
+// MarkSuccessWithWebhook marque le paiement avec traçabilité webhook
+// 🛡️ CORRECTION AUDIT : Stocke l'ID du webhook pour audit et idempotence
+func (p *Payment) MarkSuccessWithWebhook(providerRef string, webhookExternalID string) error {
+	if err := p.MarkSuccess(providerRef); err != nil {
+		return err
+	}
+	if webhookExternalID != "" {
+		p.WebhookExternalID = &webhookExternalID
+	}
 	return nil
 }
 
@@ -158,7 +173,7 @@ func (p *Payment) MarkFailed(reason string) error {
 	if !p.IsValidStatusTransition(PaymentStatusFailed) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusFailed
 	p.UpdatedAt = now
 	if p.Metadata == nil {
@@ -173,7 +188,7 @@ func (p *Payment) MarkRefunded() error {
 	if !p.IsValidStatusTransition(PaymentStatusRefunded) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusRefunded
 	p.CompletedAt = &now
 	p.UpdatedAt = now
@@ -185,7 +200,7 @@ func (p *Payment) MarkCancelled() error {
 	if !p.IsValidStatusTransition(PaymentStatusCancelled) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusCancelled
 	p.UpdatedAt = now
 	return nil
@@ -196,7 +211,7 @@ func (p *Payment) MarkExpired() error {
 	if !p.IsValidStatusTransition(PaymentStatusExpired) {
 		return errors.New("invalid status transition from " + string(p.Status))
 	}
-	now := time.Now().UTC() // ✅ UTC explicite
+	now := time.Now().UTC()
 	p.Status = PaymentStatusExpired
 	p.UpdatedAt = now
 	return nil
@@ -218,5 +233,5 @@ func (p *Payment) IsExpired() bool {
 	if p.ExpiresAt == nil {
 		return false
 	}
-	return time.Now().UTC().After(*p.ExpiresAt) && !p.IsTerminal() // ✅ UTC explicite
+	return time.Now().UTC().After(*p.ExpiresAt) && !p.IsTerminal()
 }

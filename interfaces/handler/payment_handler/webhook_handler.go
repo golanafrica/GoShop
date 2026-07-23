@@ -15,6 +15,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// 🛡️ CORRECTION AUDIT : Taille maximale du payload webhook (1 MB)
+// Protection contre les attaques DoS par gros payloads
+const maxWebhookSize = 1 << 20 // 1 MB
+
 // ProcessWebhookUseCaseInterface définit le contrat
 type ProcessWebhookUseCaseInterface interface {
 	Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error
@@ -41,6 +45,7 @@ func NewWebhookHandler(processUC ProcessWebhookUseCaseInterface) *WebhookHandler
 // @Param X-Signature header string false "Signature HMAC-SHA256 du payload"
 // @Success 200 {object} paymentdto.WebhookResponse "Webhook reçu et traité avec succès"
 // @Failure 400 {object} utils.AppError "Fournisseur inconnu ou signature invalide"
+// @Failure 413 {object} utils.AppError "Payload trop volumineux"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Router /webhooks/{provider} [post]
 func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) error {
@@ -60,19 +65,30 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		entity.ProviderMoovMoney:   true,
 		entity.ProviderWave:        true,
 		entity.ProviderYengaPay:    true,
-		entity.ProviderMock:        true,
+		// 🛡️ CORRECTION AUDIT : ProviderMock retiré en production
+		// Les mocks ne doivent jamais accepter de webhooks réels
 	}
 	if !validProviders[provider] {
 		return utils.NewAppError("INVALID_PROVIDER", "unknown provider: "+providerCode, http.StatusBadRequest)
 	}
 
-	// Lire le payload
-	payload, err := io.ReadAll(r.Body)
+	// 🛡️ CORRECTION AUDIT : Limiter la taille du payload pour éviter les attaques DoS
+	limitedBody := io.LimitReader(r.Body, maxWebhookSize+1)
+	payload, err := io.ReadAll(limitedBody)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to read webhook payload")
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
+
+	// 🛡️ Vérifier si le payload dépasse la limite
+	if int64(len(payload)) > maxWebhookSize {
+		logger.Warn().
+			Str("provider", providerCode).
+			Int64("size", int64(len(payload))).
+			Msg("Webhook payload too large")
+		return utils.NewAppError("PAYLOAD_TOO_LARGE", "webhook payload exceeds 1MB limit", http.StatusRequestEntityTooLarge)
+	}
 
 	// Récupérer la signature (header ou query param)
 	signature := r.Header.Get("X-Signature")
@@ -105,6 +121,9 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		// On log mais on retourne 200 pour éviter les retries du provider
 		if errors.Is(err, paymentusecase.ErrWebhookProcessing) {
 			logger.Warn().Err(err).Msg("Webhook processing failed (returning 200)")
+		} else if errors.Is(err, paymentusecase.ErrWebhookAlreadyProcessed) {
+			// 🛡️ CORRECTION AUDIT : Idempotence - webhook déjà traité
+			logger.Info().Msg("Webhook already processed (idempotent, returning 200)")
 		} else {
 			// Autres erreurs → 200 (pour éviter les retries)
 			logger.Error().Err(err).Msg("Webhook processing error (returning 200)")

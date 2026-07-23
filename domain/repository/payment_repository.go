@@ -36,6 +36,10 @@ type PaymentRepository interface {
 	FindCompletedWithoutCommission(ctx context.Context, limit int) ([]*entity.Payment, error)
 	UpdateCommissionStatus(ctx context.Context, paymentID string, status string, commissionCents int64) error
 
+	// 🛡️ CORRECTION AUDIT : FindByProviderRefForUpdate verrouille la ligne atomiquement
+	// Empêche les doubles traitements de webhooks concurrents (idempotence)
+	FindByProviderRefForUpdate(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error)
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) PaymentRepository
 }

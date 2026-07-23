@@ -49,7 +49,7 @@ func TestProcessWebhookUsecase_ValidationFailed(t *testing.T) {
 		false,               // signature_validated
 		"invalid signature", // processing_error
 		false,               // processed
-	).Return(nil, nil)
+	).Return(&mockResult{rowsAffected: 1}, nil)
 
 	err := uc.Execute(ctx, entity.ProviderOrangeMoney, []byte("{}"), "sig")
 	assert.Error(t, err)
@@ -94,7 +94,7 @@ func TestProcessWebhookUsecase_TontineWebhookNilHandler(t *testing.T) {
 		true,         // signature_validated
 		"",           // processing_error
 		true,         // processed
-	).Return(nil, nil)
+	).Return(&mockResult{rowsAffected: 1}, nil)
 
 	err := uc.Execute(ctx, entity.ProviderOrangeMoney, []byte("{}"), "sig")
 	assert.Error(t, err)
@@ -147,7 +147,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 		true,         // signature_validated
 		"",           // processing_error
 		true,         // processed
-	).Return(nil, nil)
+	).Return(&mockResult{rowsAffected: 1}, nil)
 
 	paymentRepo.EXPECT().
 		FindByProviderRef(gomock.Any(), entity.ProviderOrangeMoney, "prov-123").

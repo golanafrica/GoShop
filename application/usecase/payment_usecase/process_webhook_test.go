@@ -35,6 +35,15 @@ import (
 // HELPERS
 // ============================================================
 
+// mockResult est un mock simple pour sql.Result afin de tester RowsAffected
+type mockResult struct {
+	lastInsertId int64
+	rowsAffected int64
+}
+
+func (m *mockResult) LastInsertId() (int64, error) { return m.lastInsertId, nil }
+func (m *mockResult) RowsAffected() (int64, error) { return m.rowsAffected, nil }
+
 // createTestWebhookEvent crée un événement webhook de test
 func createTestWebhookEvent(providerRef string, status entity.PaymentStatus) *payment.WebhookEvent {
 	return &payment.WebhookEvent{
@@ -85,7 +94,7 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 	// Mock : Enregistrement webhook (signature invalide)
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
@@ -128,7 +137,7 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 	// Mock : Enregistrement webhook (signature invalide)
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "bad-signature")
@@ -183,7 +192,7 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
@@ -226,7 +235,7 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	// Mock : Payment non trouvé
@@ -274,7 +283,7 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	// Créer un payment
@@ -335,7 +344,7 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	// Créer un payment déjà SUCCESS (terminal)
@@ -402,7 +411,7 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	// Créer un payment PROCESSING
@@ -470,7 +479,7 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	shopID := uuid.New()
@@ -536,7 +545,7 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	shopID := uuid.New()
@@ -601,7 +610,7 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	shopID := uuid.New()
@@ -677,7 +686,7 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, nil).
+		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")

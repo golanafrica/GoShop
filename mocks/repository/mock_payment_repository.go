@@ -102,6 +102,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindByProviderRef(ctx, provider, pr
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByProviderRef", reflect.TypeOf((*MockPaymentRepository)(nil).FindByProviderRef), ctx, provider, providerRef)
 }
 
+// FindByProviderRefForUpdate mocks base method.
+func (m *MockPaymentRepository) FindByProviderRefForUpdate(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByProviderRefForUpdate", ctx, provider, providerRef)
+	ret0, _ := ret[0].(*entity.Payment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByProviderRefForUpdate indicates an expected call of FindByProviderRefForUpdate.
+func (mr *MockPaymentRepositoryMockRecorder) FindByProviderRefForUpdate(ctx, provider, providerRef any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByProviderRefForUpdate", reflect.TypeOf((*MockPaymentRepository)(nil).FindByProviderRefForUpdate), ctx, provider, providerRef)
+}
+
 // FindByShop mocks base method.
 func (m *MockPaymentRepository) FindByShop(ctx context.Context, shopID uuid.UUID, filters repository.PaymentFilters) ([]*entity.Payment, error) {
 	m.ctrl.T.Helper()
