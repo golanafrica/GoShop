@@ -4,7 +4,6 @@ import (
 	"Goshop/interfaces/utils"
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -17,7 +16,7 @@ const (
 	WINDOW     = 1 * time.Minute
 )
 
-// Mémoire locale en fallback
+// Mémoire locale en fallback (si Redis est indisponible)
 type LocalBucket struct {
 	Requests int
 	Expires  time.Time
@@ -58,13 +57,24 @@ func checkRedisLimit(ip string) (bool, error) {
 }
 
 // -------------------------
-// Fallback: In-memory limiter
+// Fallback: In-memory limiter avec nettoyage automatique
 // -------------------------
 func checkLocalLimit(ip string) bool {
 	localStoreMu.Lock()
 	defer localStoreMu.Unlock()
 
 	now := time.Now()
+
+	// 🛡️ Nettoyage périodique simple pour éviter les fuites mémoire en fallback
+	// On nettoie 1 entrée expirée au hasard à chaque appel si la map devient trop grande
+	if len(localStore) > 1000 {
+		for k, v := range localStore {
+			if now.After(v.Expires) {
+				delete(localStore, k)
+				break // On ne nettoie qu'une seule entrée par requête pour ne pas bloquer
+			}
+		}
+	}
 
 	b, exists := localStore[ip]
 	if !exists || now.After(b.Expires) {
@@ -89,7 +99,9 @@ func checkLocalLimit(ip string) bool {
 // -------------------------
 func RateLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		// 🛡️ SÉCURITÉ : Utiliser utils.GetClientIP pour supporter les reverse proxys (X-Forwarded-For)
+		// Au lieu de r.RemoteAddr qui renverrait l'IP du load balancer Kubernetes
+		ip := utils.GetClientIP(r)
 		if ip == "" {
 			ip = "unknown"
 		}

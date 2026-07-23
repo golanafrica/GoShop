@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"log" // 🆕 AJOUTÉ : Nécessaire pour le log.Fatal en cas de mauvaise config CORS
 	"net/http"
 	"os"
 	"strings"
@@ -222,14 +223,24 @@ func (a *App) setupRouter() {
 	r.Use(middl.SecureHeaders)
 	r.Use(middl.CharsetUTF8)
 
-	// ✅ FIX AUDIT #1 : Câblage du middleware CORS
-	// Permet au frontend (React/Vue/Next.js) d'appeler l'API depuis le navigateur.
-	// En production, définissez la variable d'environnement FRONTEND_URL (ex: "https://app.goshop.africa")
+	// ============================================================
+	// 🛡️ SÉCURITÉ : Configuration CORS stricte (Fail-Fast en Prod)
+	// ============================================================
 	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "*" // Par défaut pour le développement local
+
+	// En production, on refuse catégoriquement une configuration CORS ouverte ou manquante
+	if os.Getenv("APP_ENV") == "production" {
+		if frontendURL == "" || frontendURL == "*" {
+			log.Fatal("🚨 ERREUR FATALE DE SÉCURITÉ : FRONTEND_URL est manquant ou vaut '*' en production. Veuillez définir l'URL exacte de votre frontend.")
+		}
+	} else {
+		// En développement, on autorise tout par commodité, mais on logue un avertissement
+		if frontendURL == "" {
+			frontendURL = "*"
+			a.Logger.Warn().Msg("⚠️ FRONTEND_URL non défini, fallback sur '*' (DEV ONLY)")
+		}
 	}
-	r.Use(middl.CORS(frontendURL)) // <-- On passe maintenant un seul string
+	r.Use(middl.CORS(frontendURL))
 
 	// ============ 2. INITIALISATION ============
 	hh := handlers.HealthHandler{
@@ -311,19 +322,11 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.4.3 repositories initialized (all + user_2fa + user_sessions + api_keys)")
 
-	// Mock Orange Money Provider
-	orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
-	if err := paymentRegistry.Register(orangeMoneyProvider); err != nil {
-		a.Logger.Error().Err(err).Msg("Failed to register Orange Money provider")
-	}
+	// ============================================================
+	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
+	// ============================================================
 
-	// Mock Moov Money Provider
-	moovMoneyProvider := mock.NewMoovMoneyProvider(mock.DefaultMoovMoneyConfig())
-	if err := paymentRegistry.Register(moovMoneyProvider); err != nil {
-		a.Logger.Error().Err(err).Msg("Failed to register Moov Money provider")
-	}
-
-	// Yenga Pay Provider (API réelle) - config globale par défaut
+	// 1. Yenga Pay (Réel) - Seulement si les variables d'environnement sont présentes
 	yengaPayConfig := paymentinfra.YengaPayConfig{
 		APIKey:         os.Getenv("YENGA_PAY_API_KEY"),
 		OrganizationID: os.Getenv("YENGA_PAY_ORGANIZATION_ID"),
@@ -340,11 +343,33 @@ func (a *App) setupRouter() {
 			if err := paymentRegistry.Register(yengaPayProvider); err != nil {
 				a.Logger.Error().Err(err).Msg("Failed to register Yenga Pay provider")
 			} else {
-				a.Logger.Info().Msg("✅ Yenga Pay provider registered (global config)")
+				a.Logger.Info().Msg("✅ Yenga Pay provider registered")
 			}
 		}
 	} else {
 		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
+	}
+
+	// 2. Mocks Orange Money / Moov Money - STRICTEMENT INTERDIT EN PRODUCTION
+	appEnv := os.Getenv("APP_ENV")
+	if appEnv == "production" {
+		a.Logger.Info().Msg("✅ Production environment: Mock payment providers are DISABLED")
+	} else {
+		// En dev/test, on enregistre les mocks.
+		// La sécurité repose ici sur le fait que ce bloc ne s'exécute JAMAIS en production.
+		orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
+		if err := paymentRegistry.Register(orangeMoneyProvider); err != nil {
+			a.Logger.Error().Err(err).Msg("Failed to register Mock Orange Money provider")
+		} else {
+			a.Logger.Info().Msg("⚠️ Mock Orange Money provider registered (DEV/TEST ONLY)")
+		}
+
+		moovMoneyProvider := mock.NewMoovMoneyProvider(mock.DefaultMoovMoneyConfig())
+		if err := paymentRegistry.Register(moovMoneyProvider); err != nil {
+			a.Logger.Error().Err(err).Msg("Failed to register Mock Moov Money provider")
+		} else {
+			a.Logger.Info().Msg("⚠️ Mock Moov Money provider registered (DEV/TEST ONLY)")
+		}
 	}
 
 	// ============ 🆕 v4.3.2 : EMAIL SERVICE (SMTP) ============
@@ -861,7 +886,6 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 Client Dashboard Handler
-	// 🆕 Client Dashboard Handler
 	clientDashboardHandler := customerhandler.NewCustomerDashboardHandler(getDashboardUC, postgresCustomerRepo)
 
 	orderHandler := ordershandler.NewOrderHandler(
@@ -933,7 +957,6 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 v2.9.0 : Tontine Handler
-	// 🆕 v2.9.0 : Tontine Handler
 	tontineHandler := tontinehandler.NewTontineHandler(
 		createTontineGroupUC,
 		joinTontineGroupUC,
@@ -942,7 +965,6 @@ func (a *App) setupRouter() {
 		postgresCustomerRepo, // 🆕 AJOUTÉ
 	)
 
-	// 🆕 v2.9.0 : KYC Handler (Client)
 	// 🆕 v2.9.0 : KYC Handler (Client)
 	kycHandler := customerhandler.NewKYCHandler(
 		uploadKYCUC,

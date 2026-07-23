@@ -25,8 +25,7 @@ services:
       - DB_SSLMODE=disable
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - BCRYPT_COST=4
-      - APP_ENV=development
+      # 🛡️ CORRECTION AUDIT 3.3 : Suppression de BCRYPT_COST=4 (trompeur, car le code Go force déjà un min. de 10)
     depends_on:
       db:
         condition: service_healthy

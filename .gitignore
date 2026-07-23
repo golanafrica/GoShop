@@ -1,5 +1,3 @@
-# Crée le fichier .gitignore avec le contenu recommandé
-@"
 # ==========================================
 # BINAIRES ET BUILDS
 # ==========================================
@@ -12,9 +10,11 @@ _build/
 *.backup
 *.bak
 *.old
+cover
+coverage
 
 # ==========================================
-# FICHIERS D'ENVIRONNEMENT (CRITIQUE - NE JAMAIS COMMIT)
+# FICHIERS D'ENVIRONNEMENT (CRITIQUE)
 # ==========================================
 .env
 .env.local
@@ -24,46 +24,34 @@ _build/
 .env.example
 
 # ==========================================
-# DOCUMENTATION OPENAPI GÉNÉRÉE
+# DOCUMENTATION OPENAPI GÉNÉRÉE (Dédoublons)
 # ==========================================
 /docs/swagger.json
 /docs/swagger.yaml
+/docsclear/
 
 # ==========================================
 # COUVERTURE DE CODE
 # ==========================================
 coverage.out
 coverage.html
-cover
 
 # ==========================================
-# LOGS
+# LOGS ET TEMPORAIRES
 # ==========================================
 *.log
 logs/
-
-# ==========================================
-# DOSSIERS TEMPORAIRES
-# ==========================================
 tmp/
 temp/
 
 # ==========================================
-# DOCKER
+# DOCKER & ÉDITEURS
 # ==========================================
 .dockerignore
-
-# ==========================================
-# ÉDITEURS
-# ==========================================
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# ==========================================
-# SYSTÈME D'EXPLOITATION
-# ==========================================
 .DS_Store
 Thumbs.db
 
@@ -77,7 +65,7 @@ tests/loadtest/archive.tar
 !tests/loadtest/results/.gitkeep
 
 # ==========================================
-# FICHIERS TEMPORAIRES DE TEST
+# FICHIERS DE TEST LOCAUX & SCRIPTS AD-HOC
 # ==========================================
 deposit.json
 login.json
@@ -87,8 +75,7 @@ test_*.ps1
 debug_*.ps1
 
 # ==========================================
-# POSTMAN (collections vides)
+# POSTMAN (collections vides ou locales)
 # ==========================================
 .postman/
 postman/collections/New*/
-"@ | Out-File -FilePath .gitignore -Encoding utf8

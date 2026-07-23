@@ -1,0 +1,18 @@
+name: GoShop Dev
+values:
+  - key: base_url
+    value: ''
+  - key: token
+    value: ''
+  - key: shop_slug
+    value: ''
+  - key: product_id
+    value: ''
+  - key: customer_id
+    value: ''
+  - key: order_id
+    value: ''
+  - key: application_id
+    value: ''
+  - key: contract_id
+    value: ''
