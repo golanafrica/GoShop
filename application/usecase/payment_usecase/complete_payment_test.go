@@ -175,7 +175,8 @@ func TestCompletePaymentUsecase_MultiTenantError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION : Ajout de nil, nil pour les nouveaux paramètres
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := context.Background()
 	req := createValidCompleteRequest(uuid.New().String())
@@ -198,7 +199,8 @@ func TestCompletePaymentUsecase_InvalidPaymentID(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	req := &paymentdto.CompletePaymentRequest{
@@ -224,7 +226,8 @@ func TestCompletePaymentUsecase_PaymentNotFound(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	paymentID := uuid.New()
@@ -252,7 +255,8 @@ func TestCompletePaymentUsecase_PaymentNotBelongToShop(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 
@@ -278,7 +282,8 @@ func TestCompletePaymentUsecase_PaymentNotProcessing(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -304,7 +309,8 @@ func TestCompletePaymentUsecase_ProviderNotAvailable(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -334,16 +340,8 @@ func TestCompletePaymentUsecase_ProviderNotCompletable(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	// ✅ Créer un mock Provider qui N'implémente PAS ProviderCompletable
-	// On utilise MockPaymentRegistry qui retourne un provider "simple"
-	// Pour simuler un provider non-completable, on utilise newMockProviderAndCompletable
-	// mais on ne l'utilise pas pour CompletePayment
-	// En fait, il faut un mock qui implémente Provider mais PAS ProviderCompletable
-
-	// Solution : On utilise un mock Provider manuel qui n'implémente que Provider
-	mockProviderOnly := newMockProviderOnly(ctrl)
-
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -356,7 +354,7 @@ func TestCompletePaymentUsecase_ProviderNotCompletable(t *testing.T) {
 
 	mockRegistry.EXPECT().
 		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
-		Return(mockProviderOnly, nil)
+		Return(newMockProviderOnly(ctrl), nil)
 
 	req := createValidCompleteRequest(processingPayment.ID.String())
 	response, err := uc.Execute(ctx, req)
@@ -476,7 +474,8 @@ func TestCompletePaymentUsecase_MissingMetadata(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -509,7 +508,8 @@ func TestCompletePaymentUsecase_MissingOperatorCode(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -544,7 +544,8 @@ func TestCompletePaymentUsecase_MissingCustomerPhone(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -580,7 +581,8 @@ func TestCompletePaymentUsecase_MissingProviderRef(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -622,7 +624,8 @@ func TestCompletePaymentUsecase_ProviderCompletionFailed(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -667,7 +670,8 @@ func TestCompletePaymentUsecase_Success(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -713,7 +717,8 @@ func TestCompletePaymentUsecase_UnexpectedStatus(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry)
+	// ✅ CORRECTION
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)

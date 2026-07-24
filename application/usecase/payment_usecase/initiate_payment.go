@@ -24,8 +24,8 @@ type ShopPaymentSettingsRepository interface {
 type InitiatePaymentUsecase struct {
 	paymentRepo     repository.PaymentRepository
 	orderRepo       repository.OrderRepository
-	registry        PaymentRegistry // ✅ Interface
-	shopPaymentRepo ShopPaymentSettingsRepository
+	registry        PaymentRegistry               // ✅ Interface
+	shopPaymentRepo ShopPaymentSettingsRepository // Conservé pour compatibilité, mais non utilisé pour les clés YengaPay
 }
 
 // NewInitiatePaymentUsecase crée une nouvelle instance
@@ -121,39 +121,10 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		return nil, fmt.Errorf("save payment: %w", err)
 	}
 
-	// 8. Récupérer le provider
+	// 8. Récupérer le provider (Utilise TOUJOURS la configuration globale de GoShop enregistrée dans app.go)
 	provider, err := uc.registry.GetAvailable(ctx, req.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("provider not available: %w", err)
-	}
-
-	// 🆕 8.5 Pour Yenga Pay : vérifier config boutique (fallback hybride)
-	if req.Provider == entity.ProviderYengaPay && uc.shopPaymentRepo != nil {
-		settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID)
-		if err != nil {
-			logger.Warn().Err(err).Msg("Failed to get shop payment settings, using global config")
-		} else if settings.YengaPay.Enabled && settings.YengaPay.APIKey != "" {
-			// 🎯 Utiliser la config boutique
-			providerConfig := payment.YengaPayConfig{
-				APIKey:         settings.YengaPay.APIKey,
-				OrganizationID: settings.YengaPay.OrganizationID,
-				ProjectID:      settings.YengaPay.ProjectID,
-				WebhookSecret:  settings.YengaPay.WebhookSecret,
-				Env:            settings.YengaPay.Env,
-			}
-
-			// Créer un provider temporaire avec la config boutique
-			shopProvider, err := payment.NewYengaPayProvider(providerConfig)
-			if err != nil {
-				return nil, fmt.Errorf("create shop-specific provider: %w", err)
-			}
-			provider = shopProvider
-			logger.Info().
-				Str("shop_id", shop.ID.String()).
-				Msg("Using shop-specific Yenga Pay configuration")
-		} else {
-			logger.Info().Msg("Using global Yenga Pay configuration")
-		}
 	}
 
 	// 9. Initier le paiement auprès du provider
@@ -171,7 +142,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		},
 	}
 
-	// Fusionner les metadata de la requête
+	// Fusionner les metadata de la requête (ex: flow, operator)
 	if req.Metadata != nil {
 		for k, v := range req.Metadata {
 			providerReq.Metadata[k] = v
@@ -192,9 +163,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	// 10. Mettre à jour le paiement avec la référence provider
 	if providerResp.ProviderRef != "" {
 		newPayment.ProviderRef = &providerResp.ProviderRef
-	}
 
-	if providerResp.ProviderRef != "" {
 		if err := newPayment.MarkProcessing(); err != nil {
 			return nil, fmt.Errorf("mark payment as processing: %w", err)
 		}
@@ -212,7 +181,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		Str("payment_id", newPayment.ID.String()).
 		Str("provider_ref", providerResp.ProviderRef).
 		Int64("amount_cents", totalCents).
-		Msg("Payment initiated successfully")
+		Msg("Payment initiated successfully with GLOBAL GoShop provider")
 
 	// 11. Construire la réponse
 	var expiresAt int64

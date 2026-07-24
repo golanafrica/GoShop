@@ -185,6 +185,23 @@ func (w *creditUpdaterWrapper) CreditMerchantWallet(ctx context.Context, shopID 
 	return err
 }
 
+// ============================================================
+// 🆕 WRAPPER POUR WALLET UPDATER (Webhook Standard Orders)
+// ============================================================
+// Ce wrapper permet à app.go de fournir l'interface WalletUpdater requise
+// par ProcessWebhookUsecase pour créditer le wallet du marchand lors des
+// paiements de commandes standard (non-crédit).
+
+type webhookWalletUpdater struct {
+	uc *walletusecase.CreditWalletUsecase
+}
+
+func (w *webhookWalletUpdater) CreditOrderPayment(ctx context.Context, shopID string, amountCents int64, orderID string) error {
+	// On utilise la méthode existante CreditFromSale qui est faite exactement pour ça !
+	_, err := w.uc.CreditFromSale(ctx, shopID, amountCents, orderID)
+	return err
+}
+
 // ============ STRUCT App ============
 
 // App représente l'application configurable
@@ -460,7 +477,20 @@ func (a *App) setupRouter() {
 		paymentRepo,
 		paymentRegistry,
 	)
-	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(paymentRepo, paymentRegistry)
+
+	// 🆕 v3.0.0 : WALLET USECASES
+	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
+	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
+
+	// 🆕 Complete Payment Usecase (déplacé ici car il a besoin de creditWalletUC)
+	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(
+		paymentRepo,
+		paymentRegistry,
+		&webhookWalletUpdater{uc: creditWalletUC}, // 🆕 Pour créditer le wallet via /complete
+		shopRepo, // 🆕 Pour récupérer le taux de commission de la boutique
+	)
 
 	// 🆕 v2.9.0 : Process Tontine Webhook Usecase
 	processTontineWebhookUC := paymentusecase.NewProcessTontineWebhookUsecase(
@@ -471,23 +501,21 @@ func (a *App) setupRouter() {
 		shopRepo,
 	)
 
-	// 🆕 v3.0.0 : WALLET USECASES
-	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
-	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
-	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
-	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
-
-	// Process Webhook Usecase (modifié pour inclure tontine et credit)
+	// Process Webhook Usecase (modifié pour inclure tontine, credit et wallet standard)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
+		shopRepo, // 🆕 shopRepo implémente ShopPaymentSettingsRepository pour récupérer les taux de commission
 		processTontineWebhookUC,
-		&creditUpdaterWrapper{ // 🆕 AJOUT : Wrapper pour le crédit (mis à jour)
+		&creditUpdaterWrapper{
 			installmentRepo: creditInstallmentRepo,
 			contractRepo:    creditContractRepo,
 			creditWalletUC:  creditWalletUC,
+		},
+		&webhookWalletUpdater{ // 🆕 AJOUT : Pour créditer le wallet des commandes standards
+			uc: creditWalletUC,
 		},
 	)
 

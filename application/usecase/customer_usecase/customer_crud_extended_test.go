@@ -8,7 +8,6 @@ import (
 
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/entity"
-	"Goshop/mocks/repository"
 	mockrepo "Goshop/mocks/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +30,7 @@ func TestCreateCustomerUsecase_EmailAlreadyExists(t *testing.T) {
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockRepoTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
@@ -38,7 +38,10 @@ func TestCreateCustomerUsecase_EmailAlreadyExists(t *testing.T) {
 
 	existingCustomer := &entity.Customer{ID: "existing-id", Email: "john@mail.com"}
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(existingCustomer, nil)
-	mockUserRepo := new(repository.MockUserRepository)
+
+	// ✅ CORRECTION : FindUserByEmail ne prend qu'un seul argument (l'email)
+	mockUserRepo.EXPECT().FindUserByEmail("john@mail.com").Return(nil, nil).AnyTimes()
+
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
@@ -56,10 +59,14 @@ func TestCreateCustomerUsecase_FindByEmailError(t *testing.T) {
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockRepoTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+
+	// ✅ AJOUT : Mock pour FindUserByEmail qui est appelé AVANT FindByEmail
+	mockUserRepo.EXPECT().FindUserByEmail("john@mail.com").Return(nil, nil).AnyTimes()
 
 	// Erreur DB (pas ErrNoRows) → le code continue vers Create
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, errors.New("db error"))
@@ -67,7 +74,6 @@ func TestCreateCustomerUsecase_FindByEmailError(t *testing.T) {
 	// ✅ AJOUTER : Le code continue et appelle Create (qui échoue aussi)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
-	mockUserRepo := new(repository.MockUserRepository)
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
@@ -85,15 +91,16 @@ func TestCreateCustomerUsecase_CreateError(t *testing.T) {
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockRepoTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
+	mockUserRepo.EXPECT().FindUserByEmail("john@mail.com").Return(nil, nil).AnyTimes()
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
-	mockUserRepo := new(repository.MockUserRepository)
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
@@ -111,16 +118,17 @@ func TestCreateCustomerUsecase_CommitError(t *testing.T) {
 	mockTx := mockrepo.NewMockTx(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	mockRepoTx := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockRepo.EXPECT().WithTX(mockTx).Return(mockRepoTx)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
+	mockUserRepo.EXPECT().FindUserByEmail("john@mail.com").Return(nil, nil).AnyTimes()
 	mockRepoTx.EXPECT().FindByEmail(gomock.Any(), "john@mail.com").Return(nil, sql.ErrNoRows)
 	mockRepoTx.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.Customer{ID: "c123"}, nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
-	mockUserRepo := new(repository.MockUserRepository)
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "john@mail.com"}
@@ -136,8 +144,8 @@ func TestCreateCustomerUsecase_InvalidEmail(t *testing.T) {
 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
-	mockUserRepo := new(repository.MockUserRepository)
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "Doe", Email: "invalid-email"}
@@ -154,8 +162,8 @@ func TestCreateCustomerUsecase_EmptyLastName(t *testing.T) {
 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	mockUserRepo := mockrepo.NewMockUserRepository(ctrl)
 
-	mockUserRepo := new(repository.MockUserRepository)
 	uc := customerusecase.NewCreateCustomerUsecase(mockRepo, mockUserRepo, mockTxManager)
 
 	customer := &entity.Customer{FirstName: "John", LastName: "", Email: "john@mail.com"}

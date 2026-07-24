@@ -15,20 +15,25 @@ import (
 )
 
 // CompletePaymentUsecase complète un paiement TWO_STEP avec un OTP
-// CompletePaymentUsecase complète un paiement TWO_STEP avec un OTP
 type CompletePaymentUsecase struct {
-	paymentRepo repository.PaymentRepository
-	registry    PaymentRegistry // ✅ Interface
+	paymentRepo      repository.PaymentRepository
+	registry         PaymentRegistry
+	walletUpdater    WalletUpdater                 // 🆕 Ajouté pour le crédit du wallet
+	shopSettingsRepo ShopPaymentSettingsRepository // 🆕 Ajouté pour le taux de commission
 }
 
 // NewCompletePaymentUsecase crée une nouvelle instance
 func NewCompletePaymentUsecase(
 	paymentRepo repository.PaymentRepository,
-	registry PaymentRegistry, // ✅ Interface
+	registry PaymentRegistry,
+	walletUpdater WalletUpdater, // 🆕
+	shopSettingsRepo ShopPaymentSettingsRepository, // 🆕
 ) *CompletePaymentUsecase {
 	return &CompletePaymentUsecase{
-		paymentRepo: paymentRepo,
-		registry:    registry,
+		paymentRepo:      paymentRepo,
+		registry:         registry,
+		walletUpdater:    walletUpdater,
+		shopSettingsRepo: shopSettingsRepo,
 	}
 }
 
@@ -47,7 +52,7 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		Str("payment_id", req.PaymentID).
 		Msg("Completing payment with OTP")
 
-	// 2. ✅ Convertir le PaymentID (string) en UUID
+	// 2. Convertir le PaymentID (string) en UUID
 	paymentUUID, err := uuid.Parse(req.PaymentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid payment_id format: %w", err)
@@ -111,7 +116,6 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 	// 10. Appeler le provider pour compléter le paiement
 	completeResp, err := completable.CompletePayment(ctx, providerRef, operatorCode, customerPhone, req.OTP)
 	if err != nil {
-		// Marquer le paiement comme échoué
 		if markErr := paymentEntity.MarkFailed(err.Error()); markErr != nil {
 			logger.Error().Err(markErr).Msg("Failed to mark payment as failed")
 		}
@@ -130,11 +134,58 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 			Str("payment_id", paymentEntity.ID.String()).
 			Str("transaction_id", completeResp.TransactionID).
 			Msg("Payment completed successfully")
+
+		// 🆕 CRÉDIT DU WALLET MARCHAND (Idempotent)
+		// On vérifie si le wallet a déjà été crédité pour éviter le double crédit si le webhook arrive aussi
+		walletAlreadyCredited := false
+		if paymentEntity.Metadata != nil {
+			if credited, ok := paymentEntity.Metadata["wallet_credited"].(bool); ok && credited {
+				walletAlreadyCredited = true
+			}
+		}
+
+		if !walletAlreadyCredited && paymentEntity.OrderID != uuid.Nil {
+			commissionRate := 250 // Défaut 2.5% (250 basis points)
+			if uc.shopSettingsRepo != nil {
+				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
+				if err == nil && settings != nil {
+					if settings.CashCommissionRate > 0 {
+						commissionRate = settings.CashCommissionRate
+					}
+				}
+			}
+
+			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
+			netAmountCents := paymentEntity.AmountCents - commissionCents
+
+			if netAmountCents > 0 && uc.walletUpdater != nil {
+				err := uc.walletUpdater.CreditOrderPayment(ctx, paymentEntity.ShopID.String(), netAmountCents, paymentEntity.OrderID.String())
+				if err != nil {
+					logger.Error().Err(err).Msg("Failed to credit merchant wallet for order in /complete")
+				} else {
+					// 🛡️ Marquer comme crédité pour l'idempotence
+					if paymentEntity.Metadata == nil {
+						paymentEntity.Metadata = make(map[string]interface{})
+					}
+					paymentEntity.Metadata["wallet_credited"] = true
+
+					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+						logger.Error().Err(updateErr).Msg("Failed to update payment metadata with wallet_credited flag")
+					}
+
+					logger.Info().
+						Int64("gross_amount", paymentEntity.AmountCents).
+						Int64("commission_cents", commissionCents).
+						Int64("net_amount", netAmountCents).
+						Msg("✅ Merchant wallet credited successfully via /complete")
+				}
+			}
+		}
 	} else {
 		return nil, fmt.Errorf("unexpected status from provider: %s", completeResp.Status)
 	}
 
-	// 12. Sauvegarder
+	// 12. Sauvegarder (si pas déjà sauvegardé lors du crédit, mais on le fait pour être sûr)
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
 	}

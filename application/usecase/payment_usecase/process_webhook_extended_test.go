@@ -21,6 +21,9 @@ import (
 // 🆕 v4.4.24 : TESTS COMPLÉMENTAIRES - PROCESS WEBHOOK
 // ============================================================
 
+// NOTE : mockResult est déjà déclaré dans process_webhook_test.go,
+// nous l'utilisons donc directement ici sans le redéclarer.
+
 func TestProcessWebhookUsecase_ValidationFailed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -31,7 +34,8 @@ func TestProcessWebhookUsecase_ValidationFailed(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil)
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et walletUpdater)
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	registry.EXPECT().Get(entity.ProviderOrangeMoney).Return(provider, nil)
@@ -66,7 +70,8 @@ func TestProcessWebhookUsecase_TontineWebhookNilHandler(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil)
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	event := &payment.WebhookEvent{
@@ -111,7 +116,8 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil)
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	shop := createTestShopPayment()

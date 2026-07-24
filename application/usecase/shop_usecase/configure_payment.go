@@ -10,7 +10,6 @@ import (
 	shopdto "Goshop/application/dto/shop_dto"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
-	"Goshop/domain/tenant"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -71,41 +70,28 @@ func (uc *ConfigurePaymentUsecase) Execute(ctx context.Context, req *shopdto.Upd
 		return nil, fmt.Errorf("get current settings: %w", err)
 	}
 
-	// 3. Mettre à jour avec les nouvelles valeurs
-	if req.OrangeMoneyEnabled != nil {
-		currentSettings.OrangeMoney = *req.OrangeMoneyEnabled
-	}
-	if req.MoovMoneyEnabled != nil {
-		currentSettings.MoovMoney = *req.MoovMoneyEnabled
-	}
-	if req.WaveEnabled != nil {
-		currentSettings.Wave = *req.WaveEnabled
+	// 3. Mettre à jour avec les nouvelles valeurs (Modèle Marketplace Centralisé)
+	if req.CashOnDeliveryEnabled != nil {
+		currentSettings.CashOnDeliveryEnabled = *req.CashOnDeliveryEnabled
 	}
 
-	// Mise à jour Yenga Pay
-	if req.YengaPay != nil {
-		if req.YengaPay.Enabled != nil {
-			currentSettings.YengaPay.Enabled = *req.YengaPay.Enabled
-		}
-		if req.YengaPay.APIKey != nil {
-			currentSettings.YengaPay.APIKey = *req.YengaPay.APIKey
-		}
-		if req.YengaPay.OrganizationID != nil {
-			currentSettings.YengaPay.OrganizationID = *req.YengaPay.OrganizationID
-		}
-		if req.YengaPay.ProjectID != nil {
-			currentSettings.YengaPay.ProjectID = *req.YengaPay.ProjectID
-		}
-		if req.YengaPay.WebhookSecret != nil {
-			currentSettings.YengaPay.WebhookSecret = *req.YengaPay.WebhookSecret
-		}
-		if len(req.YengaPay.Operators) > 0 {
-			currentSettings.YengaPay.Operators = req.YengaPay.Operators
-		}
-		if req.YengaPay.Env != nil {
-			currentSettings.YengaPay.Env = *req.YengaPay.Env
-		}
+	// CashCommissionRate est un int dans l'entité, on déréférence le pointeur de la requête
+	if req.CashCommissionRate != nil {
+		currentSettings.CashCommissionRate = *req.CashCommissionRate
 	}
+
+	// Mise à jour de la sous-structure YengaPay (sans toucher aux clés API sensibles)
+	if req.YengaPayEnabled != nil {
+		currentSettings.YengaPay.Enabled = *req.YengaPayEnabled
+	}
+	if req.YengaPayOperators != nil {
+		currentSettings.YengaPay.Operators = req.YengaPayOperators
+	}
+
+	// 🛡️ NOTE IMPORTANTE :
+	// Les clés API YengaPay (APIKey, OrganizationID, ProjectID, WebhookSecret)
+	// ne sont PLUS mises à jour ici. Elles restent intactes en base de données.
+	// L'authentification se fait exclusivement via les variables d'environnement globales de GoShop.
 
 	// 4. Sauvegarder
 	if err := uc.paymentRepo.UpsertPaymentSettings(ctx, currentSettings); err != nil {
@@ -115,9 +101,9 @@ func (uc *ConfigurePaymentUsecase) Execute(ctx context.Context, req *shopdto.Upd
 	logger.Info().
 		Str("shop_id", shopID.String()).
 		Bool("yenga_pay_enabled", currentSettings.YengaPay.Enabled).
-		Msg("Payment settings updated")
+		Msg("Payment settings updated (Marketplace Centralized Model)")
 
-	// 5. Retourner la réponse (sans les clés sensibles)
+	// 5. Retourner la réponse
 	return uc.toResponse(currentSettings), nil
 }
 
@@ -147,29 +133,18 @@ func (uc *ConfigurePaymentUsecase) GetPaymentSettings(ctx context.Context, shopI
 
 // toResponse convertit les settings en réponse DTO
 func (uc *ConfigurePaymentUsecase) toResponse(settings *entity.ShopPaymentSettings) *shopdto.PaymentSettingsResponse {
-	return &shopdto.PaymentSettingsResponse{
-		ShopID:             settings.ShopID.String(),
-		OrangeMoneyEnabled: settings.OrangeMoney,
-		MoovMoneyEnabled:   settings.MoovMoney,
-		WaveEnabled:        settings.Wave,
-		YengaPay: shopdto.YengaPayResponseDTO{
-			Enabled:       settings.YengaPay.Enabled,
-			HasAPIKey:     settings.YengaPay.APIKey != "",
-			HasOrgID:      settings.YengaPay.OrganizationID != "",
-			HasProjectID:  settings.YengaPay.ProjectID != "",
-			HasWebhook:    settings.YengaPay.WebhookSecret != "",
-			Operators:     settings.YengaPay.Operators,
-			Env:           settings.YengaPay.Env,
-			IsUsingGlobal: !settings.YengaPay.Enabled || settings.YengaPay.APIKey == "",
-		},
+	// Valeurs par défaut sécurisées pour éviter les slices nil
+	operators := settings.YengaPay.Operators
+	if operators == nil {
+		operators = []string{}
 	}
-}
 
-// GetTenantShopID récupère le shop ID du contexte multi-tenant
-func GetTenantShopID(ctx context.Context) (uuid.UUID, error) {
-	shop, err := tenant.FromContext(ctx)
-	if err != nil {
-		return uuid.Nil, err
+	return &shopdto.PaymentSettingsResponse{
+		ShopID:                settings.ShopID.String(),
+		CashOnDeliveryEnabled: settings.CashOnDeliveryEnabled,
+		CashCommissionRate:    settings.CashCommissionRate,
+		OnlineCommissionRate:  250, // Valeur par défaut (2.5%) car le champ n'existe pas encore dans l'entité
+		YengaPayEnabled:       settings.YengaPay.Enabled,
+		YengaPayOperators:     operators,
 	}
-	return shop.ID, nil
 }

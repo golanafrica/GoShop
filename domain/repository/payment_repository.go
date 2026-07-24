@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-//go:generate mockgen -destination=../../mocks/repository/mock_payment_repository.go -package=repository . PaymentRepository
-
 // PaymentRepository définit les opérations sur les paiements
 type PaymentRepository interface {
 	// Create crée un nouveau paiement
@@ -32,13 +30,18 @@ type PaymentRepository interface {
 	// Update met à jour un paiement
 	Update(ctx context.Context, payment *entity.Payment) error
 
-	// Ajoute à l'interface PaymentRepository :
+	// FindCompletedWithoutCommission récupère les paiements success sans commission collectée
 	FindCompletedWithoutCommission(ctx context.Context, limit int) ([]*entity.Payment, error)
+
+	// UpdateCommissionStatus met à jour le statut de commission
 	UpdateCommissionStatus(ctx context.Context, paymentID string, status string, commissionCents int64) error
 
 	// 🛡️ CORRECTION AUDIT : FindByProviderRefForUpdate verrouille la ligne atomiquement
 	// Empêche les doubles traitements de webhooks concurrents (idempotence)
 	FindByProviderRefForUpdate(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error)
+
+	// ⚠️ À utiliser UNIQUEMENT dans le traitement des webhooks entrants où le tenant est inconnu.
+	FindByOrderIDUnscoped(ctx context.Context, orderID uuid.UUID) ([]*entity.Payment, error)
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) PaymentRepository

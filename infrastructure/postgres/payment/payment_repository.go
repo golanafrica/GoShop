@@ -536,4 +536,27 @@ func (r *PaymentRepositoryPostgres) UpdateCommissionStatus(
 	return nil
 }
 
+// FindByOrderIDUnscoped récupère les paiements par order_id SANS filtre de tenant.
+// Réservé aux webhooks entrants où le tenant n'est pas encore connu.
+func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, orderID uuid.UUID) ([]*entity.Payment, error) {
+	query := `
+		SELECT id, shop_id, order_id, provider, provider_ref,
+		       amount_cents, currency, customer_phone, customer_email,
+		       description, status, metadata, initiated_at, completed_at,
+		       expires_at, reference_type, reference_id, webhook_external_id,
+		       created_at, updated_at
+		FROM payments
+		WHERE order_id = $1
+		ORDER BY created_at DESC
+	`
+
+	rows, err := r.queryContext(ctx, query, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("query payments unscoped: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanPayments(rows)
+}
+
 var _ = time.Now

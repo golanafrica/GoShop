@@ -79,6 +79,15 @@ func createMockDebitWalletUsecase(ctrl *gomock.Controller) *walletusecase.DebitW
 		}, nil
 	}).AnyTimes()
 
+	// ✅ AJOUT CRITIQUE : Mock pour FindByShopIDForUpdate qui est appelé par DebitWalletUsecase
+	mockWalletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+		return &entity.MerchantWallet{
+			ShopID:       shopID,
+			BalanceCents: 1000000, // Solde suffisant pour les tests
+			IsFrozen:     false,
+		}, nil
+	}).AnyTimes()
+
 	mockWalletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mockTxnRepo.EXPECT().WithTX(mockTx).Return(mockTxnRepo).AnyTimes()
 	mockTxnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -272,7 +281,6 @@ func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	// Le débit échoue en premier à cause de la validation du montant
 	assert.Contains(t, err.Error(), "amount_cents must be positive")
 }
 

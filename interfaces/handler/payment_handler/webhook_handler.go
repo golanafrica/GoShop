@@ -42,7 +42,8 @@ func NewWebhookHandler(processUC ProcessWebhookUseCaseInterface) *WebhookHandler
 // @Accept json
 // @Produce json
 // @Param provider path string true "Code du fournisseur (wave, orange_money, moov_money, yenga_pay)"
-// @Param X-Signature header string false "Signature HMAC-SHA256 du payload"
+// @Param x-webhook-hash header string false "Signature HMAC-SHA256 du payload (YengaPay)"
+// @Param X-Signature header string false "Signature HMAC-SHA256 du payload (fallback)"
 // @Success 200 {object} paymentdto.WebhookResponse "Webhook reçu et traité avec succès"
 // @Failure 400 {object} utils.AppError "Fournisseur inconnu ou signature invalide"
 // @Failure 413 {object} utils.AppError "Payload trop volumineux"
@@ -90,10 +91,17 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		return utils.NewAppError("PAYLOAD_TOO_LARGE", "webhook payload exceeds 1MB limit", http.StatusRequestEntityTooLarge)
 	}
 
-	// Récupérer la signature (header ou query param)
-	signature := r.Header.Get("X-Signature")
+	// ✅ CORRECTION : Lire la signature depuis le bon header YengaPay
+	// YengaPay utilise "x-webhook-hash" selon la documentation officielle
+	signature := r.Header.Get("x-webhook-hash")
 	if signature == "" {
-		signature = r.URL.Query().Get("signature")
+		signature = r.Header.Get("X-Webhook-Hash") // Fallback avec majuscules
+	}
+	if signature == "" {
+		signature = r.Header.Get("X-Signature") // Fallback générique
+	}
+	if signature == "" {
+		signature = r.URL.Query().Get("signature") // Fallback query param
 	}
 
 	logger.Info().

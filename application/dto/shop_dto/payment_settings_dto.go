@@ -7,23 +7,15 @@ import (
 )
 
 // UpdatePaymentSettingsRequest représente la requête de mise à jour des settings
+// 🛡️ MODIFICATION : Les clés API sensibles ont été supprimées.
+// Tous les paiements passent par le compte YengaPay global de GoShop.
 type UpdatePaymentSettingsRequest struct {
-	ShopID             string               `json:"shop_id"`
-	OrangeMoneyEnabled *bool                `json:"orange_money_enabled,omitempty"`
-	MoovMoneyEnabled   *bool                `json:"moov_money_enabled,omitempty"`
-	WaveEnabled        *bool                `json:"wave_enabled,omitempty"`
-	YengaPay           *YengaPaySettingsDTO `json:"yenga_pay,omitempty"`
-}
-
-// YengaPaySettingsDTO représente les settings Yenga Pay
-type YengaPaySettingsDTO struct {
-	Enabled        *bool    `json:"enabled,omitempty"`
-	APIKey         *string  `json:"api_key,omitempty"`
-	OrganizationID *string  `json:"organization_id,omitempty"`
-	ProjectID      *string  `json:"project_id,omitempty"`
-	WebhookSecret  *string  `json:"webhook_secret,omitempty"`
-	Operators      []string `json:"operators,omitempty"`
-	Env            *string  `json:"env,omitempty"`
+	ShopID                string   `json:"shop_id"`
+	CashOnDeliveryEnabled *bool    `json:"cash_on_delivery_enabled,omitempty"`
+	CashCommissionRate    *int     `json:"cash_commission_rate,omitempty"`   // en basis points (ex: 250 = 2.5%)
+	OnlineCommissionRate  *int     `json:"online_commission_rate,omitempty"` // en basis points (ex: 250 = 2.5%)
+	YengaPayEnabled       *bool    `json:"yenga_pay_enabled,omitempty"`
+	YengaPayOperators     []string `json:"yenga_pay_operators,omitempty"` // ex: ["orange_money", "moov_money"]
 }
 
 // Validate valide la requête
@@ -36,28 +28,32 @@ func (r *UpdatePaymentSettingsRequest) Validate() error {
 		return errors.New("invalid shop_id format")
 	}
 
-	if r.YengaPay != nil {
-		// Valider les opérateurs
-		validOperators := map[string]bool{
-			"orange_money": true,
-			"moov_money":   true,
-			"telecel":      true,
-			"coris_money":  true,
-			"sank_money":   true,
-			"mtn":          true,
+	// Valider les taux de commission (0 à 10000 basis points, soit 0% à 100%)
+	if r.CashCommissionRate != nil {
+		if *r.CashCommissionRate < 0 || *r.CashCommissionRate > 10000 {
+			return errors.New("cash_commission_rate must be between 0 and 10000")
 		}
+	}
 
-		for _, op := range r.YengaPay.Operators {
-			if !validOperators[op] {
-				return errors.New("invalid operator: " + op)
-			}
+	if r.OnlineCommissionRate != nil {
+		if *r.OnlineCommissionRate < 0 || *r.OnlineCommissionRate > 10000 {
+			return errors.New("online_commission_rate must be between 0 and 10000")
 		}
+	}
 
-		// Valider l'environnement
-		if r.YengaPay.Env != nil {
-			if *r.YengaPay.Env != "test" && *r.YengaPay.Env != "prod" {
-				return errors.New("env must be 'test' or 'prod'")
-			}
+	// Valider les opérateurs YengaPay autorisés
+	validOperators := map[string]bool{
+		"orange_money": true,
+		"moov_money":   true,
+		"telecel":      true,
+		"coris_money":  true,
+		"sank_money":   true,
+		"mtn":          true,
+	}
+
+	for _, op := range r.YengaPayOperators {
+		if !validOperators[op] {
+			return errors.New("invalid operator: " + op)
 		}
 	}
 
@@ -65,22 +61,13 @@ func (r *UpdatePaymentSettingsRequest) Validate() error {
 }
 
 // PaymentSettingsResponse représente la réponse des settings
+// 🛡️ MODIFICATION : Plus d'indicateurs "HasAPIKey" ou "IsUsingGlobal",
+// car c'est désormais le modèle par défaut et unique.
 type PaymentSettingsResponse struct {
-	ShopID             string              `json:"shop_id"`
-	OrangeMoneyEnabled bool                `json:"orange_money_enabled"`
-	MoovMoneyEnabled   bool                `json:"moov_money_enabled"`
-	WaveEnabled        bool                `json:"wave_enabled"`
-	YengaPay           YengaPayResponseDTO `json:"yenga_pay"`
-}
-
-// YengaPayResponseDTO représente la réponse Yenga Pay (sans les clés sensibles)
-type YengaPayResponseDTO struct {
-	Enabled       bool     `json:"enabled"`
-	HasAPIKey     bool     `json:"has_api_key"` // true si configuré
-	HasOrgID      bool     `json:"has_organization_id"`
-	HasProjectID  bool     `json:"has_project_id"`
-	HasWebhook    bool     `json:"has_webhook_secret"`
-	Operators     []string `json:"operators"`
-	Env           string   `json:"env"`
-	IsUsingGlobal bool     `json:"is_using_global"` // true si fallback sur config globale
+	ShopID                string   `json:"shop_id"`
+	CashOnDeliveryEnabled bool     `json:"cash_on_delivery_enabled"`
+	CashCommissionRate    int      `json:"cash_commission_rate"`
+	OnlineCommissionRate  int      `json:"online_commission_rate"`
+	YengaPayEnabled       bool     `json:"yenga_pay_enabled"`
+	YengaPayOperators     []string `json:"yenga_pay_operators"`
 }

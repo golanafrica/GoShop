@@ -87,6 +87,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindByOrderID(ctx, orderID any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByOrderID", reflect.TypeOf((*MockPaymentRepository)(nil).FindByOrderID), ctx, orderID)
 }
 
+// FindByOrderIDUnscoped mocks base method.
+func (m *MockPaymentRepository) FindByOrderIDUnscoped(ctx context.Context, orderID uuid.UUID) ([]*entity.Payment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByOrderIDUnscoped", ctx, orderID)
+	ret0, _ := ret[0].([]*entity.Payment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByOrderIDUnscoped indicates an expected call of FindByOrderIDUnscoped.
+func (mr *MockPaymentRepositoryMockRecorder) FindByOrderIDUnscoped(ctx, orderID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByOrderIDUnscoped", reflect.TypeOf((*MockPaymentRepository)(nil).FindByOrderIDUnscoped), ctx, orderID)
+}
+
 // FindByProviderRef mocks base method.
 func (m *MockPaymentRepository) FindByProviderRef(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error) {
 	m.ctrl.T.Helper()

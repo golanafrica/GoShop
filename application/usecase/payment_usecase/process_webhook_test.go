@@ -19,17 +19,6 @@ import (
 // ============================================================
 // 🆕 v4.4.9 : TESTS UNITAIRES - PROCESS WEBHOOK USECASE
 // ============================================================
-//
-// 🎯 Stratégie :
-//   - Provider not found
-//   - Webhook validation failed
-//   - Payment not found
-//   - Shop not found
-//   - Status transitions (success, failed, cancelled, refunded)
-//   - Tontine webhook delegation
-//   - Terminal state ignored
-//
-// ============================================================
 
 // ============================================================
 // HELPERS
@@ -75,23 +64,24 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil, // shopSettingsRepo
 		mockTontineUC,
-		nil,
+		nil, // creditUpdater
+		nil, // walletUpdater
 	)
 
 	ctx := context.Background()
 
-	// Mock : Provider non trouvé
 	mockRegistry.EXPECT().
 		Get(entity.ProviderYengaPay).
 		Return(nil, errors.New("provider not found"))
 
-	// Mock : Enregistrement webhook (signature invalide)
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).
@@ -114,12 +104,15 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -129,12 +122,10 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Mock : Validation échoue (signature invalide)
 	mockProvider.EXPECT().
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, errors.New("invalid signature"))
 
-	// Mock : Enregistrement webhook (signature invalide)
 	mockDB.EXPECT().
 		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).
@@ -161,12 +152,15 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -176,11 +170,10 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Mock : Événement sans ProviderRef
 	event := &payment.WebhookEvent{
 		Provider:    entity.ProviderYengaPay,
 		EventType:   "payment.success",
-		ProviderRef: "", // ❌ Manquant
+		ProviderRef: "",
 		ExternalID:  "ext-123",
 		Status:      entity.PaymentStatusSuccess,
 		Metadata:    map[string]interface{}{},
@@ -212,12 +205,15 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -238,7 +234,6 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
-	// Mock : Payment non trouvé
 	mockPaymentRepo.EXPECT().
 		FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").
 		Return(nil, errors.New("payment not found"))
@@ -260,12 +255,15 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -286,7 +284,6 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
-	// Créer un payment
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
@@ -295,7 +292,6 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 		FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").
 		Return(paymentEntity, nil)
 
-	// Mock : Shop non trouvé
 	mockShopRepo.EXPECT().
 		FindByID(gomock.Any(), shopID).
 		Return(nil, errors.New("shop not found"))
@@ -321,12 +317,15 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -347,7 +346,6 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
-	// Créer un payment déjà SUCCESS (terminal)
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
@@ -367,7 +365,6 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 		FindByID(gomock.Any(), shopID).
 		Return(testShop, nil)
 
-	// Update ne doit PAS être appelé (état terminal)
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 
 	assert.NoError(t, err)
@@ -388,12 +385,15 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -414,7 +414,6 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 
-	// Créer un payment PROCESSING
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
@@ -433,7 +432,6 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 		FindByID(gomock.Any(), shopID).
 		Return(testShop, nil)
 
-	// Mock : Update réussit
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -455,12 +453,15 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -522,12 +523,15 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -587,12 +591,15 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -631,7 +638,6 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 		FindByID(gomock.Any(), shopID).
 		Return(testShop, nil)
 
-	// Update ne doit PAS être appelé (statut inconnu)
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 
 	assert.NoError(t, err)
@@ -651,14 +657,17 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil) // ❌ nil
+	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil,
 		mockTontineUC,
+		nil,
 		nil,
 	)
 
@@ -668,7 +677,6 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Événement avec référence TONTINE
 	event := &payment.WebhookEvent{
 		Provider:    entity.ProviderYengaPay,
 		EventType:   "payment.success",

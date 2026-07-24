@@ -733,8 +733,6 @@ func TestProcessTontineWebhookUsecase_VoucherCollision(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(errors.New("duplicate voucher code"))
 
-	// ❌ PAS DE MOCK IncrementCycle - il n'est jamais appelé si Create échoue
-
 	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
 
 	// Le usecase retourne l'erreur de Create
@@ -753,13 +751,16 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et walletUpdater)
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
+		nil, // shopSettingsRepo
 		mockTontineUC,
-		nil,
+		nil, // creditUpdater
+		nil, // walletUpdater
 	)
 
 	ctx := context.Background()
