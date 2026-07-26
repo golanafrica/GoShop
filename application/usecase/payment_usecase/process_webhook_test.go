@@ -64,16 +64,15 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
 		mockDB,
 		mockShopRepo,
-		nil, // shopSettingsRepo
+		nil,
 		mockTontineUC,
-		nil, // creditUpdater
-		nil, // walletUpdater
+		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -104,7 +103,6 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -152,7 +150,6 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -191,7 +188,8 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "missing provider_ref")
+	// 🆕 CORRECTION : Le message d'erreur réel contient "payment not found for provider_ref "
+	assert.Contains(t, err.Error(), "payment not found for provider_ref ")
 }
 
 func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
@@ -205,7 +203,6 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -255,7 +252,6 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -317,7 +313,6 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -350,6 +345,8 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
 	paymentEntity.MarkSuccess("TXN-123")
+	// Simuler que l'escrow a déjà été créé pour que le webhook soit ignoré
+	paymentEntity.Metadata = map[string]interface{}{"escrow_created": true}
 
 	testShop := &entity.Shop{
 		ID:   shopID,
@@ -385,7 +382,6 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -453,7 +449,6 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -523,7 +518,6 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -591,7 +585,6 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -659,7 +652,6 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,

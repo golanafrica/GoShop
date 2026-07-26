@@ -24,35 +24,25 @@ type ShopPaymentSettingsRepository interface {
 type InitiatePaymentUsecase struct {
 	paymentRepo     repository.PaymentRepository
 	orderRepo       repository.OrderRepository
-	registry        PaymentRegistry               // ✅ Interface
-	shopPaymentRepo ShopPaymentSettingsRepository // Conservé pour compatibilité, mais non utilisé pour les clés YengaPay
+	registry        PaymentRegistry
+	shopPaymentRepo ShopPaymentSettingsRepository
+	escrowRepo      repository.EscrowAccountRepository
 }
 
 // NewInitiatePaymentUsecase crée une nouvelle instance
 func NewInitiatePaymentUsecase(
 	paymentRepo repository.PaymentRepository,
 	orderRepo repository.OrderRepository,
-	registry PaymentRegistry, // ✅ Interface
-) *InitiatePaymentUsecase {
-	return &InitiatePaymentUsecase{
-		paymentRepo: paymentRepo,
-		orderRepo:   orderRepo,
-		registry:    registry,
-	}
-}
-
-// NewInitiatePaymentUsecaseWithShopSettings crée une instance avec support config boutique
-func NewInitiatePaymentUsecaseWithShopSettings(
-	paymentRepo repository.PaymentRepository,
-	orderRepo repository.OrderRepository,
-	registry PaymentRegistry, // ✅ Interface
+	registry PaymentRegistry,
 	shopPaymentRepo ShopPaymentSettingsRepository,
+	escrowRepo repository.EscrowAccountRepository,
 ) *InitiatePaymentUsecase {
 	return &InitiatePaymentUsecase{
 		paymentRepo:     paymentRepo,
 		orderRepo:       orderRepo,
 		registry:        registry,
 		shopPaymentRepo: shopPaymentRepo,
+		escrowRepo:      escrowRepo,
 	}
 }
 
@@ -84,7 +74,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// 4. Vérifier que la commande n'a pas déjà un paiement réussi
+	// 4. Vérifier que la commande n'a pas déjà un paiement actif
 	existingPayments, err := uc.paymentRepo.FindByOrderID(ctx, orderUUID)
 	if err != nil {
 		return nil, fmt.Errorf("check existing payments: %w", err)
@@ -116,12 +106,20 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		newPayment.Description = &req.Description
 	}
 
+	// Préparer les metadata dès le départ (operator, flow, otp…)
+	newPayment.Metadata = make(map[string]interface{})
+	if req.Metadata != nil {
+		for k, v := range req.Metadata {
+			newPayment.Metadata[k] = v
+		}
+	}
+
 	// 7. Sauvegarder en statut PENDING
 	if err := uc.paymentRepo.Create(ctx, newPayment); err != nil {
 		return nil, fmt.Errorf("save payment: %w", err)
 	}
 
-	// 8. Récupérer le provider (Utilise TOUJOURS la configuration globale de GoShop enregistrée dans app.go)
+	// 8. Récupérer le provider
 	provider, err := uc.registry.GetAvailable(ctx, req.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("provider not available: %w", err)
@@ -142,7 +140,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		},
 	}
 
-	// Fusionner les metadata de la requête (ex: flow, operator)
+	// Fusionner les metadata de la requête (ex: flow, operator, otp)
 	if req.Metadata != nil {
 		for k, v := range req.Metadata {
 			providerReq.Metadata[k] = v
@@ -160,19 +158,99 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		return nil, fmt.Errorf("initiate payment with provider: %w", err)
 	}
 
-	// 10. Mettre à jour le paiement avec la référence provider
+	// 10. Mettre à jour la référence si elle existe
 	if providerResp.ProviderRef != "" {
 		newPayment.ProviderRef = &providerResp.ProviderRef
+	}
 
+	// 11. Fusionner les metadata du provider (sans écraser operator/flow/otp)
+	if providerResp.Metadata != nil {
+		for k, v := range providerResp.Metadata {
+			newPayment.Metadata[k] = v
+		}
+	}
+
+	// 12. Mettre à jour le statut selon la réponse du provider
+	if providerResp.Status == entity.PaymentStatusSuccess {
+		// ONE_STEP : succès immédiat (OTP fourni dès /pay)
+		if err := newPayment.MarkProcessing(); err != nil {
+			return nil, fmt.Errorf("mark payment as processing: %w", err)
+		}
+		if err := newPayment.MarkSuccess(providerResp.ProviderRef); err != nil {
+			return nil, fmt.Errorf("mark payment as success: %w", err)
+		}
+
+		// --- Escrow + confirmation commande ---
+		providerFeesCents := int64(25000) // 250 FCFA (défaut E2E / mock)
+
+		commissionRate := 250 // 2.5%
+		if uc.shopPaymentRepo != nil {
+			if settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID); err == nil && settings != nil {
+				if settings.CashCommissionRate > 0 {
+					commissionRate = settings.CashCommissionRate
+				}
+			}
+		}
+
+		commissionCents := (totalCents * int64(commissionRate)) / 10000
+		grossAmountCents := totalCents - providerFeesCents
+		netAmountCents := grossAmountCents - commissionCents
+
+		if netAmountCents > 0 && uc.escrowRepo != nil {
+			orderIDStr := req.OrderID
+			now := time.Now().UTC()
+
+			escrow := &entity.EscrowAccount{
+				OrderID:             &orderIDStr,
+				SourceType:          entity.EscrowSourceOrder,
+				TotalAmountCents:    grossAmountCents,
+				ReleasedAmountCents: 0,
+				CommissionCents:     commissionCents,
+				Status:              entity.EscrowAccountFundsHeld,
+				FundsHeldAt:         now,
+				CreatedAt:           now,
+				UpdatedAt:           now,
+			}
+
+			if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
+				logger.Error().Err(err).Msg("Failed to create escrow on immediate success")
+			} else {
+				newPayment.Metadata["escrow_created"] = true
+				logger.Info().
+					Str("escrow_id", escrow.ID).
+					Int64("gross_amount", grossAmountCents).
+					Int64("provider_fees", providerFeesCents).
+					Int64("commission", commissionCents).
+					Int64("net_amount", netAmountCents).
+					Msg("✅ Escrow created for ONE_STEP success")
+			}
+		}
+
+		if uc.orderRepo != nil {
+			orderToUpdate, err := uc.orderRepo.FindByID(ctx, req.OrderID)
+			if err == nil && orderToUpdate != nil && orderToUpdate.Status == string(entity.OrderStatusPending) {
+				orderToUpdate.Status = string(entity.OrderStatusConfirmed)
+				acceptedAt := time.Now().UTC()
+				orderToUpdate.AcceptedAt = &acceptedAt
+				orderToUpdate.UpdatedAt = acceptedAt
+
+				if err := uc.orderRepo.UpdateOrder(ctx, orderToUpdate); err != nil {
+					logger.Error().Err(err).Msg("Failed to update order status to confirmed")
+				} else {
+					logger.Info().
+						Str("order_id", req.OrderID).
+						Msg("✅ Order status automatically updated to 'confirmed' (ONE_STEP)")
+				}
+			}
+		}
+	} else {
+		// TWO_STEP ou ONE_STEP sans OTP : en attente
 		if err := newPayment.MarkProcessing(); err != nil {
 			return nil, fmt.Errorf("mark payment as processing: %w", err)
 		}
 	}
 
-	if providerResp.Metadata != nil {
-		newPayment.Metadata = providerResp.Metadata
-	}
-
+	// 13. Persister
 	if err := uc.paymentRepo.Update(ctx, newPayment); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
 	}
@@ -180,10 +258,11 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	logger.Info().
 		Str("payment_id", newPayment.ID.String()).
 		Str("provider_ref", providerResp.ProviderRef).
+		Str("status", string(newPayment.Status)).
 		Int64("amount_cents", totalCents).
 		Msg("Payment initiated successfully with GLOBAL GoShop provider")
 
-	// 11. Construire la réponse
+	// 14. Construire la réponse
 	var expiresAt int64
 	if newPayment.ExpiresAt != nil {
 		expiresAt = newPayment.ExpiresAt.Unix()
@@ -198,8 +277,8 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		USSDCode:    providerResp.USSDCode,
 		RedirectURL: providerResp.RedirectURL,
 		ExpiresAt:   expiresAt,
-		Message:     getMessageFromMetadata(providerResp.Metadata),
-		Metadata:    providerResp.Metadata,
+		Message:     getMessageFromMetadata(newPayment.Metadata),
+		Metadata:    newPayment.Metadata,
 	}, nil
 }
 
@@ -214,6 +293,9 @@ func calculateOrderTotal(order *entity.Order) int64 {
 }
 
 func getMessageFromMetadata(metadata map[string]interface{}) string {
+	if metadata == nil {
+		return "Payment initiated. Follow the instructions to complete."
+	}
 	if msg, ok := metadata["notification"]; ok {
 		if s, ok := msg.(string); ok {
 			return s

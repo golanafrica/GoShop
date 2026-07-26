@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -16,26 +17,18 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Erreurs typées pour le traitement des webhooks
 var (
 	ErrWebhookValidation       = errors.New("webhook validation failed")
 	ErrWebhookProcessing       = errors.New("webhook processing failed")
-	ErrWebhookAlreadyProcessed = errors.New("webhook already processed") // 🛡️ IDEMPOTENCE
+	ErrWebhookAlreadyProcessed = errors.New("webhook already processed")
 )
 
-// CreditUpdater définit l'interface minimale pour mettre à jour les entités de crédit
 type CreditUpdater interface {
 	MarkInstallmentPaid(ctx context.Context, installmentID string, paymentID string) error
 	MarkContractDownPaymentPaid(ctx context.Context, contractID string, paymentID string) error
 	CreditMerchantWallet(ctx context.Context, shopID string, amountCents int64, contractID string) error
 }
 
-// WalletUpdater définit l'interface pour créditer le wallet du marchand
-type WalletUpdater interface {
-	CreditOrderPayment(ctx context.Context, shopID string, amountCents int64, orderID string) error
-}
-
-// ProcessWebhookUsecase traite les webhooks reçus des providers
 type ProcessWebhookUsecase struct {
 	paymentRepo      repository.PaymentRepository
 	registry         PaymentRegistry
@@ -44,10 +37,9 @@ type ProcessWebhookUsecase struct {
 	shopSettingsRepo ShopPaymentSettingsRepository
 	tontineWebhookUC *ProcessTontineWebhookUsecase
 	creditUpdater    CreditUpdater
-	walletUpdater    WalletUpdater
+	escrowRepo       repository.EscrowAccountRepository
 }
 
-// NewProcessWebhookUsecase crée une nouvelle instance
 func NewProcessWebhookUsecase(
 	paymentRepo repository.PaymentRepository,
 	registry PaymentRegistry,
@@ -56,7 +48,7 @@ func NewProcessWebhookUsecase(
 	shopSettingsRepo ShopPaymentSettingsRepository,
 	tontineWebhookUC *ProcessTontineWebhookUsecase,
 	creditUpdater CreditUpdater,
-	walletUpdater WalletUpdater,
+	escrowRepo repository.EscrowAccountRepository,
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
@@ -66,11 +58,10 @@ func NewProcessWebhookUsecase(
 		shopSettingsRepo: shopSettingsRepo,
 		tontineWebhookUC: tontineWebhookUC,
 		creditUpdater:    creditUpdater,
-		walletUpdater:    walletUpdater,
+		escrowRepo:       escrowRepo,
 	}
 }
 
-// Execute traite un webhook
 func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error {
 	logger := zerolog.Ctx(ctx)
 
@@ -79,13 +70,11 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		Int("payload_size", len(payload)).
 		Msg("Processing webhook")
 
-	// 1. Récupérer le provider
 	provider, err := uc.registry.Get(providerCode)
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
 
-	// 2. Valider et parser le webhook
 	event, err := provider.ValidateWebhook(ctx, payload, signature)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Invalid webhook")
@@ -93,7 +82,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
 	}
 
-	// 3. 🛡️ Enregistrer le webhook et vérifier l'idempotence via RowsAffected
 	err = uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
 	if err != nil {
 		if errors.Is(err, ErrWebhookAlreadyProcessed) {
@@ -103,7 +91,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		logger.Error().Err(err).Msg("Failed to record webhook audit")
 	}
 
-	// 🆕 3b. v2.9.0 : Détecter si c'est un webhook tontine
 	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
 		logger.Info().
 			Str("reference", reference).
@@ -125,16 +112,13 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	// 4. Trouver le paiement associé (flux standard)
 	var paymentEntity *entity.Payment
 	var findErr error
 
-	// 4a. Essayer d'abord par provider_ref
 	if event.ProviderRef != "" {
 		paymentEntity, findErr = uc.paymentRepo.FindByProviderRef(ctx, providerCode, event.ProviderRef)
 	}
 
-	// 4b. 🛡️ FALLBACK ROBUSTE AVEC LOGS DÉTAILLÉS
 	if findErr != nil || paymentEntity == nil {
 		logger.Warn().
 			Err(findErr).
@@ -144,7 +128,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 		var orderIDStr string
 
-		// Essai 1 : order_id direct dans les métadonnées
 		if oid, ok := event.Metadata["order_id"].(string); ok && oid != "" {
 			orderIDStr = oid
 			logger.Info().Str("found_order_id", orderIDStr).Msg("DEBUG: Found order_id directly in metadata")
@@ -159,7 +142,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		if orderIDStr != "" {
 			logger.Info().Str("fallback_order_id", orderIDStr).Msg("Tentative de fallback par order_id")
 			if orderUUID, parseErr := uuid.Parse(orderIDStr); parseErr == nil {
-				// Note: FindByOrderIDUnscoped est utilisé ici car le contexte tenant n'est pas encore injecté.
 				payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
 				if searchErr != nil {
 					logger.Error().Err(searchErr).Msg("DEBUG: FindByOrderIDUnscoped returned an error")
@@ -178,7 +160,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		}
 	}
 
-	// 4c. Si toujours pas trouvé, on échoue proprement
 	if findErr != nil || paymentEntity == nil {
 		logger.Warn().
 			Err(findErr).
@@ -187,7 +168,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
 	}
 
-	// 4d. Injecter le shop du paiement dans le contexte
 	shop, err := uc.shopRepo.FindByID(ctx, paymentEntity.ShopID)
 	if err != nil {
 		return fmt.Errorf("%w: shop not found for payment: %v", ErrWebhookProcessing, err)
@@ -196,37 +176,67 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 	logger.Debug().Str("shop_id", shop.ID.String()).Str("shop_slug", shop.Slug).Msg("Tenant context injected for webhook processing")
 
-	// 5. Vérifier si le paiement est déjà dans un état terminal
+	needsEscrowCreation := false
+
 	if paymentEntity.IsTerminal() {
-		// 🛡️ VÉRIFICATION D'IDEMPOTENCE : Le wallet a-t-il déjà été crédité ?
-		walletAlreadyCredited := false
+		escrowAlreadyCreated := false
 		if paymentEntity.Metadata != nil {
-			if credited, ok := paymentEntity.Metadata["wallet_credited"].(bool); ok && credited {
-				walletAlreadyCredited = true
+			if created, ok := paymentEntity.Metadata["escrow_created"].(bool); ok && created {
+				escrowAlreadyCreated = true
 			}
 		}
 
-		if walletAlreadyCredited {
-			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and wallet already credited, ignoring webhook")
+		if escrowAlreadyCreated {
+			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
 			return nil
 		}
 
-		logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment is terminal but wallet not credited yet, proceeding with wallet credit")
+		logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment is terminal but escrow not created yet, proceeding with escrow creation")
+		needsEscrowCreation = true
+	} else {
+		switch event.Status {
+		case entity.PaymentStatusSuccess:
+			if err := paymentEntity.MarkSuccess(event.ProviderRef); err != nil {
+				return fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, err)
+			}
+			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as SUCCESS")
+			needsEscrowCreation = true
+
+		case entity.PaymentStatusFailed:
+			reason := "unknown"
+			if r, ok := event.Metadata["failure_reason"]; ok {
+				if s, ok := r.(string); ok {
+					reason = s
+				}
+			}
+			if err := paymentEntity.MarkFailed(reason); err != nil {
+				return fmt.Errorf("%w: mark failed: %v", ErrWebhookProcessing, err)
+			}
+			logger.Info().Str("payment_id", paymentEntity.ID.String()).Str("reason", reason).Msg("Payment marked as FAILED")
+
+		case entity.PaymentStatusCancelled:
+			if err := paymentEntity.MarkCancelled(); err != nil {
+				return fmt.Errorf("%w: mark cancelled: %v", ErrWebhookProcessing, err)
+			}
+			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as CANCELLED")
+
+		case entity.PaymentStatusRefunded:
+			if err := paymentEntity.MarkRefunded(); err != nil {
+				return fmt.Errorf("%w: mark refunded: %v", ErrWebhookProcessing, err)
+			}
+			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as REFUNDED")
+
+		default:
+			logger.Warn().Str("status", string(event.Status)).Msg("Unknown webhook status, ignoring")
+			return nil
+		}
 	}
 
-	// 6. Transition de statut selon l'événement (flux standard)
-	switch event.Status {
-	case entity.PaymentStatusSuccess:
-		if err := paymentEntity.MarkSuccess(event.ProviderRef); err != nil {
-			return fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, err)
-		}
-		logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as SUCCESS")
-
-		// 🆕 CRÉDIT DU WALLET MARCHAND (Modèle Marketplace Centralisé)
+	if needsEscrowCreation && (event.Status == entity.PaymentStatusSuccess || paymentEntity.Status == entity.PaymentStatusSuccess) {
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
 
 		if !isCredit && paymentEntity.OrderID != uuid.Nil {
-			commissionRate := 250 // Défaut 2.5% (250 basis points)
+			commissionRate := 250
 			if uc.shopSettingsRepo != nil {
 				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
 				if err == nil && settings != nil {
@@ -237,61 +247,55 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			}
 
 			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
-			netAmountCents := paymentEntity.AmountCents - commissionCents
 
-			if netAmountCents > 0 && uc.walletUpdater != nil {
-				err := uc.walletUpdater.CreditOrderPayment(ctx, paymentEntity.ShopID.String(), netAmountCents, paymentEntity.OrderID.String())
-				if err != nil {
-					logger.Error().Err(err).Msg("Failed to credit merchant wallet for order")
-				} else {
-					// 🛡️ MARQUER COMME CRÉDITÉ POUR L'IDEMPOTENCE
-					if paymentEntity.Metadata == nil {
-						paymentEntity.Metadata = make(map[string]interface{})
-					}
-					paymentEntity.Metadata["wallet_credited"] = true
-					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
-						logger.Error().Err(updateErr).Msg("Failed to update payment metadata with wallet_credited flag")
-					}
+			providerFeesCents := int64(0)
+			if fees, ok := event.Metadata["payment_fees"].(float64); ok {
+				providerFeesCents = int64(fees * 100)
+			}
+			paymentEntity.ProviderFeesCents = providerFeesCents
 
-					logger.Info().
-						Int64("gross_amount", paymentEntity.AmountCents).
-						Int64("commission_cents", commissionCents).
-						Int64("net_amount", netAmountCents).
-						Msg("✅ Merchant wallet credited successfully")
+			netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
+
+			if netAmountCents > 0 && uc.escrowRepo != nil {
+				orderIDStr := paymentEntity.OrderID.String()
+				now := time.Now().UTC()
+
+				escrow := &entity.EscrowAccount{
+					OrderID:             &orderIDStr,
+					SourceType:          entity.EscrowSourceOrder,
+					TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents,
+					ReleasedAmountCents: 0,
+					CommissionCents:     commissionCents,
+					Status:              entity.EscrowAccountFundsHeld,
+					FundsHeldAt:         now,
+					CreatedAt:           now,
+					UpdatedAt:           now,
 				}
+
+				if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
+					logger.Error().Err(err).Msg("Failed to create escrow account")
+					return fmt.Errorf("failed to create escrow: %w", err)
+				}
+
+				if paymentEntity.Metadata == nil {
+					paymentEntity.Metadata = make(map[string]interface{})
+				}
+				paymentEntity.Metadata["escrow_created"] = true
+				if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+					logger.Error().Err(updateErr).Msg("Failed to update payment metadata with escrow_created flag")
+				}
+
+				logger.Info().
+					Int64("gross_amount", paymentEntity.AmountCents).
+					Int64("provider_fees_cents", providerFeesCents).
+					Int64("commission_cents", commissionCents).
+					Int64("escrow_amount", netAmountCents).
+					Str("escrow_id", escrow.ID).
+					Msg("✅ Funds successfully locked in Escrow")
 			}
 		}
-
-	case entity.PaymentStatusFailed:
-		reason := "unknown"
-		if r, ok := event.Metadata["failure_reason"]; ok {
-			if s, ok := r.(string); ok {
-				reason = s
-			}
-		}
-		if err := paymentEntity.MarkFailed(reason); err != nil {
-			return fmt.Errorf("%w: mark failed: %v", ErrWebhookProcessing, err)
-		}
-		logger.Info().Str("payment_id", paymentEntity.ID.String()).Str("reason", reason).Msg("Payment marked as FAILED")
-
-	case entity.PaymentStatusCancelled:
-		if err := paymentEntity.MarkCancelled(); err != nil {
-			return fmt.Errorf("%w: mark cancelled: %v", ErrWebhookProcessing, err)
-		}
-		logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as CANCELLED")
-
-	case entity.PaymentStatusRefunded:
-		if err := paymentEntity.MarkRefunded(); err != nil {
-			return fmt.Errorf("%w: mark refunded: %v", ErrWebhookProcessing, err)
-		}
-		logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as REFUNDED")
-
-	default:
-		logger.Warn().Str("status", string(event.Status)).Msg("Unknown webhook status, ignoring")
-		return nil
 	}
 
-	// 7. Sauvegarder les changements
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		return fmt.Errorf("%w: update payment: %v", ErrWebhookProcessing, err)
 	}
@@ -300,7 +304,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	return nil
 }
 
-// recordWebhook enregistre le webhook dans la table d'audit
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,

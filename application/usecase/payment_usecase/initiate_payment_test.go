@@ -61,11 +61,14 @@ func TestInitiatePaymentUsecase_MultiTenantError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil, // shopPaymentRepo
+		mockEscrowRepo,
 	)
 
 	ctx := context.Background()
@@ -89,11 +92,14 @@ func TestInitiatePaymentUsecase_InvalidOrderID(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -121,11 +127,14 @@ func TestInitiatePaymentUsecase_OrderNotFound(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -150,11 +159,14 @@ func TestInitiatePaymentUsecase_ExistingActivePayment(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -189,11 +201,14 @@ func TestInitiatePaymentUsecase_OrderTotalZero(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -233,11 +248,14 @@ func TestInitiatePaymentUsecase_ProviderNotAvailable(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -277,12 +295,15 @@ func TestInitiatePaymentUsecase_ProviderInitiationFailed(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -334,12 +355,15 @@ func TestInitiatePaymentUsecase_Success(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -398,12 +422,15 @@ func TestInitiatePaymentUsecase_Success_WithCustomerEmail(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -457,12 +484,15 @@ func TestInitiatePaymentUsecase_Success_WithMetadata(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -526,11 +556,14 @@ func TestInitiatePaymentUsecase_CheckExistingPaymentsError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -562,11 +595,14 @@ func TestInitiatePaymentUsecase_SavePaymentError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -602,12 +638,15 @@ func TestInitiatePaymentUsecase_UpdatePaymentError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -658,12 +697,15 @@ func TestInitiatePaymentUsecase_EmptyProviderRef(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -710,25 +752,25 @@ func TestInitiatePaymentUsecase_EmptyProviderRef(t *testing.T) {
 }
 
 // ============================================================
-// TEST : InitiatePaymentUsecase - Constructor with ShopSettings
+// TEST : InitiatePaymentUsecase - Constructor with ShopSettings (using nil)
 // ============================================================
 
-func TestInitiatePaymentUsecase_WithShopPaymentSettings(t *testing.T) {
+func TestInitiatePaymentUsecase_WithNilShopPaymentSettings(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
-	// ✅ Utiliser le constructeur avec shopPaymentRepo = nil
-	// (pour tester juste le constructeur, pas la logique YengaPay shop config)
-	uc := paymentusecase.NewInitiatePaymentUsecaseWithShopSettings(
+	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
-		nil, // shopPaymentRepo = nil → pas de config boutique
+		nil, // shopPaymentRepo = nil
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -779,12 +821,15 @@ func TestInitiatePaymentUsecase_DatabaseFailure(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 
 	uc := paymentusecase.NewInitiatePaymentUsecase(
 		mockPaymentRepo,
 		mockOrderRepo,
 		mockRegistry,
+		nil,
+		mockEscrowRepo,
 	)
 
 	ctx := createTestContextForPayment()
@@ -801,7 +846,6 @@ func TestInitiatePaymentUsecase_DatabaseFailure(t *testing.T) {
 		FindByOrderID(gomock.Any(), orderUUID).
 		Return([]*entity.Payment{}, nil)
 
-	// ✅ Mock : Create réussit mais Update échoue (DB failure après initiation)
 	mockPaymentRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -817,7 +861,6 @@ func TestInitiatePaymentUsecase_DatabaseFailure(t *testing.T) {
 			Status:      entity.PaymentStatusProcessing,
 		}, nil)
 
-	// ✅ Mock : Update échoue (DB failure)
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
 		Return(errors.New("connection lost"))

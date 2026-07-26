@@ -185,23 +185,6 @@ func (w *creditUpdaterWrapper) CreditMerchantWallet(ctx context.Context, shopID 
 	return err
 }
 
-// ============================================================
-// 🆕 WRAPPER POUR WALLET UPDATER (Webhook Standard Orders)
-// ============================================================
-// Ce wrapper permet à app.go de fournir l'interface WalletUpdater requise
-// par ProcessWebhookUsecase pour créditer le wallet du marchand lors des
-// paiements de commandes standard (non-crédit).
-
-type webhookWalletUpdater struct {
-	uc *walletusecase.CreditWalletUsecase
-}
-
-func (w *webhookWalletUpdater) CreditOrderPayment(ctx context.Context, shopID string, amountCents int64, orderID string) error {
-	// On utilise la méthode existante CreditFromSale qui est faite exactement pour ça !
-	_, err := w.uc.CreditFromSale(ctx, shopID, amountCents, orderID)
-	return err
-}
-
 // ============ STRUCT App ============
 
 // App représente l'application configurable
@@ -298,7 +281,7 @@ func (a *App) setupRouter() {
 	creditScoreRepo := creditinfra.NewCreditScoreRepositoryInfrastructure(a.DB)
 
 	// 🆕 v3.0.0 : Repositories Escrow
-	_ = escrowinfra.NewEscrowAccountRepositoryInfrastructure(a.DB)
+	escrowRepo := escrowinfra.NewEscrowAccountRepositoryInfrastructure(a.DB) // 🆕 Assigné à une variable
 	_ = escrowinfra.NewDeliveryProofRepositoryInfrastructure(a.DB)
 
 	// 🆕 v3.0.0 : Repositories Wallet
@@ -461,11 +444,13 @@ func (a *App) setupRouter() {
 	configureTontineUC := shopusecase.NewConfigureTontineUsecase(tontineSettingsRepo, postgreProductRepo)
 
 	// Payment Usecases
-	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecaseWithShopSettings(
+	// Payment Usecases
+	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecase(
 		paymentRepo,
 		postgresOrderRepo,
 		paymentRegistry,
 		shopRepo,
+		escrowRepo,
 	)
 	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
 		paymentRepo,
@@ -484,12 +469,13 @@ func (a *App) setupRouter() {
 	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
 	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
 
-	// 🆕 Complete Payment Usecase (déplacé ici car il a besoin de creditWalletUC)
+	// 🆕 Complete Payment Usecase (utilise maintenant l'Escrow)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(
 		paymentRepo,
+		postgresOrderRepo,
 		paymentRegistry,
-		&webhookWalletUpdater{uc: creditWalletUC}, // 🆕 Pour créditer le wallet via /complete
-		shopRepo, // 🆕 Pour récupérer le taux de commission de la boutique
+		shopRepo,   // ShopPaymentSettingsRepository
+		escrowRepo, // EscrowAccountRepository
 	)
 
 	// 🆕 v2.9.0 : Process Tontine Webhook Usecase
@@ -501,22 +487,20 @@ func (a *App) setupRouter() {
 		shopRepo,
 	)
 
-	// Process Webhook Usecase (modifié pour inclure tontine, credit et wallet standard)
+	// Process Webhook Usecase (utilise maintenant l'Escrow)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
-		shopRepo, // 🆕 shopRepo implémente ShopPaymentSettingsRepository pour récupérer les taux de commission
+		shopRepo, // ShopPaymentSettingsRepository
 		processTontineWebhookUC,
 		&creditUpdaterWrapper{
 			installmentRepo: creditInstallmentRepo,
 			contractRepo:    creditContractRepo,
 			creditWalletUC:  creditWalletUC,
 		},
-		&webhookWalletUpdater{ // 🆕 AJOUT : Pour créditer le wallet des commandes standards
-			uc: creditWalletUC,
-		},
+		escrowRepo, // 🆕 EscrowAccountRepository
 	)
 
 	// Withdrawal Usecases
@@ -552,6 +536,9 @@ func (a *App) setupRouter() {
 		postgresOrderRepo,
 		paymentRepo,
 		shopRepo,
+		escrowRepo,    // 🆕 EscrowAccountRepository
+		walletRepo,    // 🆕 MerchantWalletRepository
+		walletTxnRepo, // 🆕 WalletTransactionRepository
 		notifService,
 		txmanagerRepo,
 	)
@@ -711,6 +698,7 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE
+	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE (avec Escrow pour le solde en attente)
 	getMerchantOverviewUC := merchantusecase.NewGetMerchantOverviewUsecase(
 		postgresOrderRepo,
 		paymentRepo,
@@ -719,6 +707,7 @@ func (a *App) setupRouter() {
 		walletRepo,
 		freezeRepo,
 		batchRepo,
+		escrowRepo, // 🆕 AJOUTÉ ICI
 	)
 
 	// 🆕 v3.6.0 : PUBLIC PRODUCT CATALOG USECASE & HANDLER

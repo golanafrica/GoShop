@@ -72,8 +72,10 @@ type Payment struct {
 	UpdatedAt     time.Time              `json:"updated_at" db:"updated_at"`
 
 	// 🛡️ CORRECTION AUDIT : Champ pour traçabilité d'idempotence webhook
-	// Stocke l'ID unique du webhook qui a traité ce paiement en dernier
 	WebhookExternalID *string `json:"webhook_external_id,omitempty" db:"webhook_external_id"`
+
+	// 🆕 CORRECTION DOUBLE PRÉLÈVEMENT : Frais prélevés par le PSP (YengaPay)
+	ProviderFeesCents int64 `json:"provider_fees_cents" db:"provider_fees_cents"`
 
 	// Commission
 	CommissionRateBps     int        `json:"commission_rate_bps" db:"commission_rate_bps"`
@@ -85,7 +87,8 @@ type Payment struct {
 // IsValidStatusTransition vérifie si une transition de statut est valide
 func (p *Payment) IsValidStatusTransition(newStatus PaymentStatus) bool {
 	transitions := map[PaymentStatus][]PaymentStatus{
-		PaymentStatusPending:    {PaymentStatusProcessing, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
+		// 🆕 AJOUT CRITIQUE : PaymentStatusSuccess autorisé depuis Pending pour gérer le flux ONE_STEP (ex: Orange Money sandbox avec OTP immédiat)
+		PaymentStatusPending:    {PaymentStatusProcessing, PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
 		PaymentStatusProcessing: {PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
 		PaymentStatusSuccess:    {PaymentStatusRefunded},
 		PaymentStatusFailed:     {},
@@ -157,7 +160,6 @@ func (p *Payment) MarkSuccess(providerRef string) error {
 }
 
 // MarkSuccessWithWebhook marque le paiement avec traçabilité webhook
-// 🛡️ CORRECTION AUDIT : Stocke l'ID du webhook pour audit et idempotence
 func (p *Payment) MarkSuccessWithWebhook(providerRef string, webhookExternalID string) error {
 	if err := p.MarkSuccess(providerRef); err != nil {
 		return err

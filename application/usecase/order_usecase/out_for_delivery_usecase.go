@@ -63,9 +63,9 @@ func (uc *OutForDeliveryUsecase) Execute(ctx context.Context, orderID string) (*
 		return nil, fmt.Errorf("failed to find order: %w", err)
 	}
 
-	// 5. Vérifier que c'est une commande cash
-	if !order.IsCashOnDelivery() {
-		return nil, fmt.Errorf("order is not cash on delivery")
+	// 5. 🆕 CORRECTION : Autoriser aussi bien le Cash on Delivery que le Mobile Money
+	if order.PaymentMethod != string(entity.PaymentMethodCashOnDelivery) && order.PaymentMethod != string(entity.PaymentMethodMobileMoney) {
+		return nil, fmt.Errorf("order payment method not supported for this flow")
 	}
 
 	// 6. Vérifier la transition autorisée

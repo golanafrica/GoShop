@@ -20,12 +20,13 @@ type MerchantOverviewResponse struct {
 	OverdueAmountCents  int64   `json:"overdue_amount_cents"`
 	OverdueCount        int     `json:"overdue_count"`
 
-	// Wallet
-	WalletBalanceCents int64      `json:"wallet_balance_cents"`
-	IsFrozen           bool       `json:"is_frozen"`
-	FreezeReason       *string    `json:"freeze_reason,omitempty"`
-	AmountDueCents     int64      `json:"amount_due_cents,omitempty"`
-	GracePeriodEndsAt  *time.Time `json:"grace_period_ends_at,omitempty"`
+	// Wallet & Escrow (Fonds)
+	WalletBalanceCents        int64      `json:"wallet_balance_cents"`
+	PendingEscrowBalanceCents int64      `json:"pending_escrow_balance_cents"` // 🆕 AJOUT : Fonds bloqués en attente de livraison
+	IsFrozen                  bool       `json:"is_frozen"`
+	FreezeReason              *string    `json:"freeze_reason,omitempty"`
+	AmountDueCents            int64      `json:"amount_due_cents,omitempty"`
+	GracePeriodEndsAt         *time.Time `json:"grace_period_ends_at,omitempty"`
 
 	// Commissions
 	MonthlyCommissionCents int64 `json:"monthly_commission_cents"`

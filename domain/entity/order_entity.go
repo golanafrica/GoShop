@@ -77,6 +77,7 @@ func (o *Order) CanTransitionTo(target OrderStatus) bool {
 	transitions := map[OrderStatus][]OrderStatus{
 		OrderStatusPending: {
 			OrderStatusCancelled,
+			OrderStatusConfirmed,
 		},
 		OrderStatusPendingConfirmation: {
 			OrderStatusConfirmed,

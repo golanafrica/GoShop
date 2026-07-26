@@ -72,8 +72,8 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 			id, shop_id, order_id, provider, provider_ref,
 			amount_cents, currency, customer_phone, customer_email,
 			description, status, metadata, initiated_at, completed_at, expires_at,
-			reference_type, reference_id, webhook_external_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			reference_type, reference_id, webhook_external_id, provider_fees_cents
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 
 	_, err = r.execContext(ctx, query,
@@ -95,6 +95,7 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		payment.ReferenceType,
 		payment.ReferenceID,
 		payment.WebhookExternalID,
+		payment.ProviderFeesCents,
 	)
 
 	if err != nil {
@@ -114,7 +115,7 @@ func (r *PaymentRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUID) 
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE id = $1 AND shop_id = $2
@@ -133,7 +134,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderID(ctx context.Context, orderID u
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1 AND shop_id = $2
@@ -154,7 +155,7 @@ func (r *PaymentRepositoryPostgres) FindByProviderRef(ctx context.Context, provi
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -163,14 +164,12 @@ func (r *PaymentRepositoryPostgres) FindByProviderRef(ctx context.Context, provi
 	return r.scanPayment(r.queryRowContext(ctx, query, provider, providerRef))
 }
 
-// 🛡️ CORRECTION AUDIT : FindByProviderRefForUpdate avec verrou FOR UPDATE
-// Verrouille la ligne atomiquement pour empêcher les doubles traitements de webhooks
 func (r *PaymentRepositoryPostgres) FindByProviderRefForUpdate(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error) {
 	query := `
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -185,7 +184,7 @@ func (r *PaymentRepositoryPostgres) FindByShop(ctx context.Context, shopID uuid.
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE shop_id = $1
@@ -249,8 +248,9 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 			reference_type = $6,
 			reference_id = $7,
 			webhook_external_id = $8,
+			provider_fees_cents = $9,
 			updated_at = NOW()
-		WHERE id = $9 AND shop_id = $10
+		WHERE id = $10 AND shop_id = $11
 	`
 
 	result, err := r.execContext(ctx, query,
@@ -262,6 +262,7 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		payment.ReferenceType,
 		payment.ReferenceID,
 		payment.WebhookExternalID,
+		payment.ProviderFeesCents,
 		payment.ID,
 		shopID,
 	)
@@ -303,6 +304,7 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&referenceType,
 		&referenceID,
 		&webhookExternalID,
+		&p.ProviderFeesCents,
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)
@@ -374,6 +376,7 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 			&referenceType,
 			&referenceID,
 			&webhookExternalID,
+			&p.ProviderFeesCents,
 			&p.CreatedAt,
 			&p.UpdatedAt,
 		)
@@ -421,7 +424,6 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 	return payments, nil
 }
 
-// FindCompletedWithoutCommission récupère les paiements success sans commission collectée
 func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
 	ctx context.Context,
 	limit int,
@@ -436,7 +438,8 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
             COALESCE(commission_rate_bps, 0) as commission_rate_bps,
             COALESCE(commission_cents, 0) as commission_cents,
             COALESCE(commission_status, 'pending') as commission_status,
-            commission_collected_at
+            commission_collected_at,
+            COALESCE(provider_fees_cents, 0) as provider_fees_cents
         FROM payments
         WHERE status = 'success'
           AND (commission_status IS NULL OR commission_status = 'pending')
@@ -478,6 +481,7 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
 			&p.CommissionCents,
 			&p.CommissionStatus,
 			&p.CommissionCollectedAt,
+			&p.ProviderFeesCents,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
@@ -514,7 +518,6 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
 	return payments, nil
 }
 
-// UpdateCommissionStatus met à jour le statut de commission
 func (r *PaymentRepositoryPostgres) UpdateCommissionStatus(
 	ctx context.Context,
 	paymentID string,
@@ -536,14 +539,12 @@ func (r *PaymentRepositoryPostgres) UpdateCommissionStatus(
 	return nil
 }
 
-// FindByOrderIDUnscoped récupère les paiements par order_id SANS filtre de tenant.
-// Réservé aux webhooks entrants où le tenant n'est pas encore connu.
 func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, orderID uuid.UUID) ([]*entity.Payment, error) {
 	query := `
 		SELECT id, shop_id, order_id, provider, provider_ref,
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
-		       expires_at, reference_type, reference_id, webhook_external_id,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1

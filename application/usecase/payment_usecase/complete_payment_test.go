@@ -175,8 +175,8 @@ func TestCompletePaymentUsecase_MultiTenantError(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
-	// ✅ CORRECTION : Ajout de nil, nil pour les nouveaux paramètres
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	// ✅ CORRECTION : Ajout des nouveaux paramètres (nil pour ceux non testés ici)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := context.Background()
 	req := createValidCompleteRequest(uuid.New().String())
@@ -200,7 +200,7 @@ func TestCompletePaymentUsecase_InvalidPaymentID(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	req := &paymentdto.CompletePaymentRequest{
@@ -227,7 +227,7 @@ func TestCompletePaymentUsecase_PaymentNotFound(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	paymentID := uuid.New()
@@ -256,7 +256,7 @@ func TestCompletePaymentUsecase_PaymentNotBelongToShop(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 
@@ -283,7 +283,7 @@ func TestCompletePaymentUsecase_PaymentNotProcessing(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -310,7 +310,7 @@ func TestCompletePaymentUsecase_ProviderNotAvailable(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -341,7 +341,7 @@ func TestCompletePaymentUsecase_ProviderNotCompletable(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -475,7 +475,7 @@ func TestCompletePaymentUsecase_MissingMetadata(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -509,7 +509,7 @@ func TestCompletePaymentUsecase_MissingOperatorCode(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -545,7 +545,7 @@ func TestCompletePaymentUsecase_MissingCustomerPhone(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -582,7 +582,7 @@ func TestCompletePaymentUsecase_MissingProviderRef(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -625,7 +625,7 @@ func TestCompletePaymentUsecase_ProviderCompletionFailed(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -671,7 +671,7 @@ func TestCompletePaymentUsecase_Success(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
@@ -718,7 +718,7 @@ func TestCompletePaymentUsecase_UnexpectedStatus(t *testing.T) {
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
 	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, mockRegistry, nil, nil)
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)

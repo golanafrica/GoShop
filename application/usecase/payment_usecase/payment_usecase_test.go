@@ -230,13 +230,9 @@ func TestPayment_IsValidStatusTransition_FailedToAnything(t *testing.T) {
 }
 
 func TestPayment_IsValidStatusTransition_InvalidTransition(t *testing.T) {
-	shopID := uuid.New()
-	orderID := uuid.New()
-
-	payment, _ := entity.NewPayment(shopID, orderID, entity.ProviderYengaPay, 50000)
-
-	// Pending → Success n'est PAS valide (doit passer par Processing)
-	assert.False(t, payment.IsValidStatusTransition(entity.PaymentStatusSuccess))
+	p := &entity.Payment{Status: entity.PaymentStatusFailed}
+	// Une fois échoué, on ne peut pas passer à Success
+	assert.False(t, p.IsValidStatusTransition(entity.PaymentStatusSuccess))
 }
 
 // ============================================================

@@ -21,6 +21,7 @@ type GetMerchantOverviewUsecase struct {
 	walletRepo      repository.MerchantWalletRepository
 	freezeRepo      repository.AccountFreezeRepository
 	batchRepo       repository.CommissionBatchRepository
+	escrowRepo      repository.EscrowAccountRepository // 🆕 AJOUT pour le solde en attente
 }
 
 // NewGetMerchantOverviewUsecase crée une nouvelle instance
@@ -32,6 +33,7 @@ func NewGetMerchantOverviewUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	freezeRepo repository.AccountFreezeRepository,
 	batchRepo repository.CommissionBatchRepository,
+	escrowRepo repository.EscrowAccountRepository, // 🆕 AJOUT
 ) *GetMerchantOverviewUsecase {
 	return &GetMerchantOverviewUsecase{
 		orderRepo:       orderRepo,
@@ -41,6 +43,7 @@ func NewGetMerchantOverviewUsecase(
 		walletRepo:      walletRepo,
 		freezeRepo:      freezeRepo,
 		batchRepo:       batchRepo,
+		escrowRepo:      escrowRepo, // 🆕 AJOUT
 	}
 }
 
@@ -57,7 +60,7 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 
 	logger.Info().Str("shop_id", shopID).Msg("Generating merchant overview")
 
-	// 2. Ventes totales (à implémenter plus tard, 0 pour l'instant)
+	// 2. Ventes totales (à implémenter avec des requêtes agrégées plus tard, 0 pour l'instant)
 	totalSales := int64(0)
 	ordersCount := 0
 	onlineSales := int64(0)
@@ -97,8 +100,6 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 		if isFrozen {
 			freeze, err := uc.freezeRepo.FindActiveByShopID(ctx, shopID)
 			if err == nil && freeze != nil {
-				// ✅ CORRECTION : Utilisation de FreezeReason (le nom standard dans entity.AccountFreeze)
-				// Si ton champ s'appelle réellement "Reason", remplace freeze.FreezeReason par freeze.Reason
 				reasonStr := string(freeze.FreezeReason)
 				freezeReason = &reasonStr
 				amountDue = freeze.AmountDueCents
@@ -114,24 +115,39 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 		monthlyCommission = 0
 	}
 
-	// 7. Construire la réponse
+	// 7. 🆕 CALCUL DU SOLDE EN ATTENTE (ESCROW)
+	var pendingEscrowBalanceCents int64
+	heldEscrows, err := uc.escrowRepo.FindHeldByShopID(ctx, shopID)
+	if err == nil {
+		for _, esc := range heldEscrows {
+			// GetMerchantAmount() retourne déjà (TotalAmountCents - CommissionCents)
+			pendingEscrowBalanceCents += esc.GetMerchantAmount()
+		}
+	} else {
+		logger.Warn().Err(err).Msg("Failed to get held escrows for overview")
+	}
+
+	// 8. Construire la réponse
+	// ⚠️ NOTE : Assure-toi d'ajouter le champ `PendingEscrowBalanceCents int64`
+	// dans la struct `MerchantOverviewResponse` de ton fichier DTO.
 	return &merchantdto.MerchantOverviewResponse{
-		TotalSalesCents:        totalSales,
-		TotalOrdersCount:       ordersCount,
-		OnlineSalesCents:       onlineSales,
-		CashSalesCents:         cashSales,
-		ActiveContractsCount:   creditStats.ActiveContractsCount,
-		TotalFinancedCents:     creditStats.TotalFinancedCents,
-		TotalOutstandingCents:  creditStats.TotalOutstandingCents,
-		RecoveryRatePercent:    recoveryStats.RecoveryRatePercent,
-		OverdueAmountCents:     recoveryStats.OverdueAmountCents,
-		OverdueCount:           recoveryStats.OverdueCount,
-		WalletBalanceCents:     walletBalance,
-		IsFrozen:               isFrozen,
-		FreezeReason:           freezeReason,
-		AmountDueCents:         amountDue,
-		GracePeriodEndsAt:      gracePeriodEnds,
-		MonthlyCommissionCents: monthlyCommission,
-		GeneratedAt:            time.Now().UTC(),
+		TotalSalesCents:           totalSales,
+		TotalOrdersCount:          ordersCount,
+		OnlineSalesCents:          onlineSales,
+		CashSalesCents:            cashSales,
+		ActiveContractsCount:      creditStats.ActiveContractsCount,
+		TotalFinancedCents:        creditStats.TotalFinancedCents,
+		TotalOutstandingCents:     creditStats.TotalOutstandingCents,
+		RecoveryRatePercent:       recoveryStats.RecoveryRatePercent,
+		OverdueAmountCents:        recoveryStats.OverdueAmountCents,
+		OverdueCount:              recoveryStats.OverdueCount,
+		WalletBalanceCents:        walletBalance,
+		PendingEscrowBalanceCents: pendingEscrowBalanceCents, // 🆕 CHAMP AJOUTÉ
+		IsFrozen:                  isFrozen,
+		FreezeReason:              freezeReason,
+		AmountDueCents:            amountDue,
+		GracePeriodEndsAt:         gracePeriodEnds,
+		MonthlyCommissionCents:    monthlyCommission,
+		GeneratedAt:               time.Now().UTC(),
 	}, nil
 }

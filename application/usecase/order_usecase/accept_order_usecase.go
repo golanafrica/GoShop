@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// AcceptOrderUsecase gère l'acceptation d'une commande cash par le marchand
+// AcceptOrderUsecase gère l'acceptation d'une commande par le marchand
 type AcceptOrderUsecase struct {
 	orderRepo    repository.OrderRepository
 	productRepo  repository.ProductRepository
@@ -35,7 +35,7 @@ func NewAcceptOrderUsecase(
 	}
 }
 
-// Execute accepte une commande cash
+// Execute accepte une commande
 func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*entity.Order, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -48,7 +48,7 @@ func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 	logger.Info().
 		Str("order_id", orderID).
 		Str("shop_id", shop.ID.String()).
-		Msg("Accepting cash order")
+		Msg("Accepting order")
 
 	// 2. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -71,9 +71,11 @@ func (uc *AcceptOrderUsecase) Execute(ctx context.Context, orderID string) (*ent
 		return nil, fmt.Errorf("failed to find order: %w", err)
 	}
 
-	// 5. Vérifier que c'est une commande cash
-	if !order.IsCashOnDelivery() {
-		return nil, fmt.Errorf("order is not cash on delivery")
+	// 5. 🆕 Vérifier que c'est une commande éligible (Cash on Delivery ou Mobile Money)
+	// Nous devons autoriser Mobile Money ici pour permettre au marchand d'accepter la commande
+	// et de déclencher ensuite la livraison et la libération de l'Escrow.
+	if order.PaymentMethod != string(entity.PaymentMethodCashOnDelivery) && order.PaymentMethod != string(entity.PaymentMethodMobileMoney) {
+		return nil, fmt.Errorf("order payment method not supported for this flow")
 	}
 
 	// 6. Vérifier l'expiration lazy

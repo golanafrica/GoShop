@@ -36,9 +36,10 @@ func TestInitiatePaymentUsecase_ProviderInitiateError(t *testing.T) {
 	paymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	registry := mockusecase.NewMockPaymentRegistry(ctrl)
-	provider := mockusecase.NewMockProvider(ctrl) // ✅ Nom corrigé
+	escrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
+	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewInitiatePaymentUsecase(paymentRepo, orderRepo, registry)
+	uc := paymentusecase.NewInitiatePaymentUsecase(paymentRepo, orderRepo, registry, nil, escrowRepo)
 
 	shop := createTestShopPayment()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -63,10 +64,8 @@ func TestInitiatePaymentUsecase_ProviderInitiateError(t *testing.T) {
 
 	registry.EXPECT().GetAvailable(ctx, entity.ProviderOrangeMoney).Return(provider, nil)
 
-	// Le provider échoue
 	provider.EXPECT().InitiatePayment(ctx, gomock.Any()).Return(nil, errors.New("provider error"))
 
-	// Le usecase doit appeler MarkFailed puis Update pour enregistrer l'échec
 	paymentRepo.EXPECT().Update(ctx, gomock.Any()).Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -82,8 +81,9 @@ func TestInitiatePaymentUsecase_OrderAlreadyHasActivePayment(t *testing.T) {
 	paymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	registry := mockusecase.NewMockPaymentRegistry(ctrl)
+	escrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 
-	uc := paymentusecase.NewInitiatePaymentUsecase(paymentRepo, orderRepo, registry)
+	uc := paymentusecase.NewInitiatePaymentUsecase(paymentRepo, orderRepo, registry, nil, escrowRepo)
 
 	shop := createTestShopPayment()
 	ctx := tenant.WithTenant(context.Background(), shop)

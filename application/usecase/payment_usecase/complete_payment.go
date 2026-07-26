@@ -3,6 +3,7 @@ package paymentusecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
@@ -14,34 +15,33 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// CompletePaymentUsecase complète un paiement TWO_STEP avec un OTP
 type CompletePaymentUsecase struct {
 	paymentRepo      repository.PaymentRepository
+	orderRepo        repository.OrderRepository
 	registry         PaymentRegistry
-	walletUpdater    WalletUpdater                 // 🆕 Ajouté pour le crédit du wallet
-	shopSettingsRepo ShopPaymentSettingsRepository // 🆕 Ajouté pour le taux de commission
+	shopSettingsRepo ShopPaymentSettingsRepository
+	escrowRepo       repository.EscrowAccountRepository
 }
 
-// NewCompletePaymentUsecase crée une nouvelle instance
 func NewCompletePaymentUsecase(
 	paymentRepo repository.PaymentRepository,
+	orderRepo repository.OrderRepository,
 	registry PaymentRegistry,
-	walletUpdater WalletUpdater, // 🆕
-	shopSettingsRepo ShopPaymentSettingsRepository, // 🆕
+	shopSettingsRepo ShopPaymentSettingsRepository,
+	escrowRepo repository.EscrowAccountRepository,
 ) *CompletePaymentUsecase {
 	return &CompletePaymentUsecase{
 		paymentRepo:      paymentRepo,
+		orderRepo:        orderRepo,
 		registry:         registry,
-		walletUpdater:    walletUpdater,
 		shopSettingsRepo: shopSettingsRepo,
+		escrowRepo:       escrowRepo,
 	}
 }
 
-// Execute complète le paiement avec l'OTP
 func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.CompletePaymentRequest) (*paymentdto.PaymentResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le shop du contexte
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
@@ -52,41 +52,34 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		Str("payment_id", req.PaymentID).
 		Msg("Completing payment with OTP")
 
-	// 2. Convertir le PaymentID (string) en UUID
 	paymentUUID, err := uuid.Parse(req.PaymentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid payment_id format: %w", err)
 	}
 
-	// 3. Récupérer le paiement avec l'UUID
 	paymentEntity, err := uc.paymentRepo.FindByID(ctx, paymentUUID)
 	if err != nil {
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
-	// 4. Vérifier que le paiement appartient au shop courant
 	if paymentEntity.ShopID != shop.ID {
 		return nil, fmt.Errorf("payment does not belong to current shop")
 	}
 
-	// 5. Vérifier que le paiement est en statut PROCESSING
 	if paymentEntity.Status != entity.PaymentStatusProcessing {
 		return nil, fmt.Errorf("payment is not in processing state (current: %s)", paymentEntity.Status)
 	}
 
-	// 6. Récupérer le provider
 	provider, err := uc.registry.GetAvailable(ctx, paymentEntity.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("provider not available: %w", err)
 	}
 
-	// 7. Vérifier que le provider supporte la complétion
 	completable, ok := provider.(payment.ProviderCompletable)
 	if !ok {
 		return nil, fmt.Errorf("provider %s does not support payment completion", paymentEntity.Provider)
 	}
 
-	// 8. Récupérer les métadonnées nécessaires
 	if paymentEntity.Metadata == nil {
 		return nil, fmt.Errorf("payment has no metadata (operator info missing)")
 	}
@@ -104,7 +97,6 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		return nil, fmt.Errorf("customer phone not found")
 	}
 
-	// 9. Récupérer la référence provider
 	providerRef := ""
 	if paymentEntity.ProviderRef != nil {
 		providerRef = *paymentEntity.ProviderRef
@@ -113,7 +105,6 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		return nil, fmt.Errorf("provider reference not found")
 	}
 
-	// 10. Appeler le provider pour compléter le paiement
 	completeResp, err := completable.CompletePayment(ctx, providerRef, operatorCode, customerPhone, req.OTP)
 	if err != nil {
 		if markErr := paymentEntity.MarkFailed(err.Error()); markErr != nil {
@@ -125,7 +116,6 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		return nil, fmt.Errorf("complete payment with provider: %w", err)
 	}
 
-	// 11. Mettre à jour le statut selon la réponse
 	if completeResp.Status == "DONE" {
 		if err := paymentEntity.MarkSuccess(completeResp.TransactionID); err != nil {
 			return nil, fmt.Errorf("mark payment as success: %w", err)
@@ -135,17 +125,15 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 			Str("transaction_id", completeResp.TransactionID).
 			Msg("Payment completed successfully")
 
-		// 🆕 CRÉDIT DU WALLET MARCHAND (Idempotent)
-		// On vérifie si le wallet a déjà été crédité pour éviter le double crédit si le webhook arrive aussi
-		walletAlreadyCredited := false
+		escrowAlreadyCreated := false
 		if paymentEntity.Metadata != nil {
-			if credited, ok := paymentEntity.Metadata["wallet_credited"].(bool); ok && credited {
-				walletAlreadyCredited = true
+			if created, ok := paymentEntity.Metadata["escrow_created"].(bool); ok && created {
+				escrowAlreadyCreated = true
 			}
 		}
 
-		if !walletAlreadyCredited && paymentEntity.OrderID != uuid.Nil {
-			commissionRate := 250 // Défaut 2.5% (250 basis points)
+		if !escrowAlreadyCreated && paymentEntity.OrderID != uuid.Nil {
+			commissionRate := 250
 			if uc.shopSettingsRepo != nil {
 				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
 				if err == nil && settings != nil {
@@ -156,28 +144,60 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 			}
 
 			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
-			netAmountCents := paymentEntity.AmountCents - commissionCents
+			providerFeesCents := completeResp.Fees * 100
+			paymentEntity.ProviderFeesCents = providerFeesCents
+			netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
 
-			if netAmountCents > 0 && uc.walletUpdater != nil {
-				err := uc.walletUpdater.CreditOrderPayment(ctx, paymentEntity.ShopID.String(), netAmountCents, paymentEntity.OrderID.String())
-				if err != nil {
-					logger.Error().Err(err).Msg("Failed to credit merchant wallet for order in /complete")
-				} else {
-					// 🛡️ Marquer comme crédité pour l'idempotence
-					if paymentEntity.Metadata == nil {
-						paymentEntity.Metadata = make(map[string]interface{})
+			if netAmountCents > 0 && uc.escrowRepo != nil {
+				orderIDStr := paymentEntity.OrderID.String()
+				now := time.Now().UTC()
+
+				escrow := &entity.EscrowAccount{
+					OrderID:             &orderIDStr,
+					SourceType:          entity.EscrowSourceOrder,
+					TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents, // 🆕 CORRECTION : Le montant séquestré est le Brut moins les frais opérateur
+					ReleasedAmountCents: 0,
+					CommissionCents:     commissionCents,
+					Status:              entity.EscrowAccountFundsHeld,
+					FundsHeldAt:         now,
+					CreatedAt:           now,
+					UpdatedAt:           now,
+				}
+
+				if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
+					logger.Error().Err(err).Msg("Failed to create escrow account in /complete")
+					return nil, fmt.Errorf("failed to create escrow: %w", err)
+				}
+
+				if paymentEntity.Metadata == nil {
+					paymentEntity.Metadata = make(map[string]interface{})
+				}
+				paymentEntity.Metadata["escrow_created"] = true
+
+				logger.Info().
+					Int64("gross_amount", paymentEntity.AmountCents).
+					Int64("provider_fees_cents", providerFeesCents).
+					Int64("commission_cents", commissionCents).
+					Int64("escrow_amount", netAmountCents).
+					Str("escrow_id", escrow.ID).
+					Msg("✅ Funds successfully locked in Escrow via /complete")
+
+				if uc.orderRepo != nil {
+					order, err := uc.orderRepo.FindByID(ctx, orderIDStr)
+					if err == nil && order != nil && order.Status == string(entity.OrderStatusPending) {
+						order.Status = string(entity.OrderStatusConfirmed)
+						acceptedAt := time.Now().UTC()
+						order.AcceptedAt = &acceptedAt
+						order.UpdatedAt = acceptedAt
+
+						if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
+							logger.Error().Err(err).Msg("Failed to update order status to confirmed")
+						} else {
+							logger.Info().
+								Str("order_id", orderIDStr).
+								Msg("✅ Order status automatically updated to 'confirmed' (payment guaranteed)")
+						}
 					}
-					paymentEntity.Metadata["wallet_credited"] = true
-
-					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
-						logger.Error().Err(updateErr).Msg("Failed to update payment metadata with wallet_credited flag")
-					}
-
-					logger.Info().
-						Int64("gross_amount", paymentEntity.AmountCents).
-						Int64("commission_cents", commissionCents).
-						Int64("net_amount", netAmountCents).
-						Msg("✅ Merchant wallet credited successfully via /complete")
 				}
 			}
 		}
@@ -185,12 +205,10 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		return nil, fmt.Errorf("unexpected status from provider: %s", completeResp.Status)
 	}
 
-	// 12. Sauvegarder (si pas déjà sauvegardé lors du crédit, mais on le fait pour être sûr)
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
 	}
 
-	// 13. Construire la réponse
 	description := ""
 	if paymentEntity.Description != nil {
 		description = *paymentEntity.Description
