@@ -173,17 +173,19 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 	// 12. Mettre à jour le statut selon la réponse du provider
 	if providerResp.Status == entity.PaymentStatusSuccess {
 		// ONE_STEP : succès immédiat (OTP fourni dès /pay)
-		if err := newPayment.MarkProcessing(); err != nil {
-			return nil, fmt.Errorf("mark payment as processing: %w", err)
-		}
+		// La transition Pending -> Success est autorisée dans payment.go
 		if err := newPayment.MarkSuccess(providerResp.ProviderRef); err != nil {
 			return nil, fmt.Errorf("mark payment as success: %w", err)
 		}
 
 		// --- Escrow + confirmation commande ---
-		providerFeesCents := int64(25000) // 250 FCFA (défaut E2E / mock)
+		// 🆕 CORRECTION : Calcul DYNAMIQUE des frais opérateur (2.5% par défaut)
+		providerFeesCents := (totalCents * 250) / 10000
 
-		commissionRate := 250 // 2.5%
+		// 🆕 CORRECTION CRITIQUE : Assigner les frais à l'entité Payment pour qu'ils soient sauvegardés en base
+		newPayment.ProviderFeesCents = providerFeesCents
+
+		commissionRate := 250 // 2.5% par défaut
 		if uc.shopPaymentRepo != nil {
 			if settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID); err == nil && settings != nil {
 				if settings.CashCommissionRate > 0 {
@@ -215,14 +217,18 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 			if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
 				logger.Error().Err(err).Msg("Failed to create escrow on immediate success")
 			} else {
+				if newPayment.Metadata == nil {
+					newPayment.Metadata = make(map[string]interface{})
+				}
 				newPayment.Metadata["escrow_created"] = true
+
 				logger.Info().
 					Str("escrow_id", escrow.ID).
 					Int64("gross_amount", grossAmountCents).
 					Int64("provider_fees", providerFeesCents).
 					Int64("commission", commissionCents).
 					Int64("net_amount", netAmountCents).
-					Msg("✅ Escrow created for ONE_STEP success")
+					Msg("✅ Escrow created for ONE_STEP success (Dynamic fees)")
 			}
 		}
 
