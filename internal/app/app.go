@@ -45,6 +45,9 @@ import (
 	// 🆕 v4.4.3 : API Key Management Usecases
 	apikeyusecase "Goshop/application/usecase/apikey_usecase"
 
+	// 🆕 v4.6.0 : Dispute Usecases
+	disputeusecase "Goshop/application/usecase/dispute_usecase"
+
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
@@ -85,6 +88,9 @@ import (
 	escrowinfra "Goshop/infrastructure/postgres/escrow"
 	freezeinfra "Goshop/infrastructure/postgres/freeze"
 	walletinfra "Goshop/infrastructure/postgres/wallet"
+
+	// 🆕 v4.6.0 : Dispute Repository
+	disputeinfra "Goshop/infrastructure/postgres/dispute"
 
 	// 🆕 v3.1.0 : Scheduler Infrastructure
 	commissionbatch "Goshop/infrastructure/postgres/commission_batch"
@@ -138,6 +144,9 @@ import (
 
 	// 🆕 v4.4.3 : API Key Management Handler
 	apikeyhandler "Goshop/interfaces/handler/apikey_handler"
+
+	// 🆕 v4.6.0 : Dispute Handler
+	disputehandler "Goshop/interfaces/handler/dispute_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -320,7 +329,10 @@ func (a *App) setupRouter() {
 	// 🆕 v4.4.3 : Repository API Keys
 	apiKeyRepo := apikeyinfra.NewAPIKeyRepository(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.4.3 repositories initialized (all + user_2fa + user_sessions + api_keys)")
+	// 🆕 v4.6.0 : Repository Dispute
+	disputeRepo := disputeinfra.NewDisputeRepositoryPostgres(a.DB)
+
+	a.Logger.Info().Msg("✅ v4.6.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute)")
 
 	// ============================================================
 	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
@@ -444,7 +456,6 @@ func (a *App) setupRouter() {
 	configureTontineUC := shopusecase.NewConfigureTontineUsecase(tontineSettingsRepo, postgreProductRepo)
 
 	// Payment Usecases
-	// Payment Usecases
 	initiatePaymentUC := paymentusecase.NewInitiatePaymentUsecase(
 		paymentRepo,
 		postgresOrderRepo,
@@ -541,6 +552,7 @@ func (a *App) setupRouter() {
 		walletTxnRepo, // 🆕 WalletTransactionRepository
 		notifService,
 		txmanagerRepo,
+		disputeRepo,
 	)
 
 	cancelOrderUC := orderusecase.NewCancelOrderUsecase(
@@ -698,7 +710,6 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE
-	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE (avec Escrow pour le solde en attente)
 	getMerchantOverviewUC := merchantusecase.NewGetMerchantOverviewUsecase(
 		postgresOrderRepo,
 		paymentRepo,
@@ -830,6 +841,25 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ v4.4.3 API Key Management usecases initialized (create, list, revoke, revoke-all, stats)")
+
+	// ============ 🆕 v4.6.0 : DISPUTE USECASES ============
+	openDisputeUC := disputeusecase.NewOpenDisputeUsecase(
+		disputeRepo,
+		postgresOrderRepo,
+		escrowRepo,
+	)
+
+	resolveDisputeUC := disputeusecase.NewResolveDisputeUsecase(
+		disputeRepo,
+		escrowRepo,
+		walletRepo,
+		walletTxnRepo,
+		txmanagerRepo,
+		paymentRepo,     // 🆕 AJOUTÉ : pour retrouver la transaction à rembourser
+		paymentRegistry, // 🆕 AJOUTÉ : pour appeler la méthode Refund du provider
+	)
+
+	a.Logger.Info().Msg("✅ v4.6.0 Dispute usecases initialized")
 
 	// ============ 🆕 CLIENT DASHBOARD USECASE ============
 	getDashboardUC := customerusecase.NewGetClientDashboardUsecase(postgresCustomerRepo)
@@ -1089,13 +1119,20 @@ func (a *App) setupRouter() {
 		getAPIKeyStatsUC,
 	)
 
+	// ============ 🆕 v4.6.0 : DISPUTE HANDLER ============
+	disputeHandler := disputehandler.NewDisputeHandler(
+		openDisputeUC,
+		resolveDisputeUC,
+		disputeRepo,
+	)
+
 	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
 	var wsHandler *handlers.WSHandler
 	if wsHub != nil {
 		wsHandler = handlers.NewWSHandler(wsHub)
 	}
 
-	a.Logger.Info().Msg("✅ v4.5.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products)")
+	a.Logger.Info().Msg("✅ v4.6.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1228,7 +1265,7 @@ func (a *App) setupRouter() {
 				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
 			})
 
-			// Orders (existant + cash workflow)
+			// Orders (existant + cash workflow + dispute)
 			r.Route("/orders", func(r chi.Router) {
 				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
 				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
@@ -1239,6 +1276,7 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/out-for-delivery", middl.ErrorHandler(cashOrderHandler.OutForDelivery))
 				r.Post("/{id}/deliver", middl.ErrorHandler(cashOrderHandler.DeliverOrder))
 				r.Post("/{id}/cancel", middl.ErrorHandler(cashOrderHandler.CancelOrder))
+
 			})
 
 			// Payments
@@ -1308,6 +1346,8 @@ func (a *App) setupRouter() {
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
 			r.Post("/tontine/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
 			r.Get("/tontine/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
+
+			r.Post("/orders/{id}/dispute", middl.ErrorHandler(disputeHandler.OpenDispute))
 		})
 
 		// ============================================================
@@ -1374,6 +1414,17 @@ func (a *App) setupRouter() {
 			r.Use(middl.RequireRoles("super_admin", "admin"))
 			apiKeyHandler.RegisterRoutes(r)
 		})
+
+		// ============ 🆕 v4.6.0 : ADMIN DISPUTE ROUTES ============
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(middl.RequireRoles("super_admin", "admin"))
+
+			// Résoudre un litige par dispute_id
+			r.Post("/disputes/{id}/resolve", middl.ErrorHandler(disputeHandler.ResolveDispute))
+
+			// 🆕 Résoudre un litige par order_id (utilisé par le script E2E)
+			r.Post("/orders/{id}/dispute/resolve", middl.ErrorHandler(disputeHandler.ResolveOrderByDispute))
+		})
 	})
 
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
@@ -1417,7 +1468,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.5.0 Commission schedulers started")
+			Msg("✅ v4.6.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1425,7 +1476,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.5.1: + CORS + Proxy IP Fix + Client Route Separation)")
+		Msg("✅ Router configuré avec succès (v4.6.0: + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1492,7 +1543,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.5.1", // 🆕 v4.5.1
+		Version:     "4.6.0", // 🆕 v4.6.0
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

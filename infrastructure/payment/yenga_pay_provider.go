@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"Goshop/domain/entity"
@@ -817,8 +818,100 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 	}, nil
 }
 
-func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amountCents int64) error {
-	return fmt.Errorf("refund not supported via API, please use Yenga Pay dashboard")
+// Refund initie un remboursement via l'API de Yenga Pay
+// Basé sur la structure de l'API YengaPay (voir méthode CheckStatus fallback)
+// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
+// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
+// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
+func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
+	logger := zerolog.Ctx(ctx)
+
+	amountFCFA := float64(amountCents) / 100.0
+
+	// ✅ FORMATAGE DU NUMÉRO : YengaPay Cash-Out exige le format international avec '+'
+	destNumber := customerPhone
+	if len(destNumber) > 0 && destNumber[0] != '+' {
+		destNumber = "+" + destNumber
+	}
+
+	// ✅ DÉTERMINATION DYNAMIQUE DE L'OPÉRATEUR POUR LE CASH-OUT
+	cashoutMethod := "ORANGE_MONEY" // Valeur par défaut de secours
+	if operator != "" {
+		switch strings.ToUpper(operator) {
+		case "ORANGE", "ORANGE_MONEY":
+			cashoutMethod = "ORANGE_MONEY"
+		case "MOOV", "MOOV_MONEY":
+			cashoutMethod = "MOOV_MONEY"
+		case "TELECEL":
+			cashoutMethod = "TELECEL"
+		case "CORIS", "CORIS_MONEY":
+			cashoutMethod = "CORIS_MONEY"
+		case "SANK", "SANK_MONEY":
+			cashoutMethod = "SANK_MONEY"
+		default:
+			cashoutMethod = strings.ToUpper(operator)
+		}
+	}
+
+	yengaReq := map[string]interface{}{
+		"cashoutMethod": cashoutMethod,
+		"amount":        amountFCFA,
+		"destNumber":    destNumber,
+		"groupId":       p.organizationID,
+		"projectId":     p.projectID,
+		"description":   fmt.Sprintf("Refund for payment %s", providerRef),
+	}
+
+	reqBody, err := json.Marshal(yengaReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal refund request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/groups/%s/cash-out", p.baseURL, p.organizationID)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to create refund request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+
+	logger.Info().
+		Str("url", url).
+		Str("provider_ref", providerRef).
+		Int64("amount_cents", amountCents).
+		Str("dest_number", destNumber).
+		Str("cashout_method", cashoutMethod).
+		Msg("Calling Yenga Pay cash-out for refund")
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send refund request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read refund response: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+		// Succès
+	default:
+		logger.Error().
+			Int("status_code", resp.StatusCode).
+			Str("response", string(respBody)).
+			Msg("Yenga Pay refund API error")
+		return fmt.Errorf("Yenga Pay refund error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	logger.Info().
+		Str("provider_ref", providerRef).
+		Msg("Refund (cash-out) initiated successfully via Yenga Pay")
+
+	return nil
 }
 
 func (p *YengaPayProvider) IsAvailable(ctx context.Context) bool {

@@ -22,9 +22,11 @@ type MerchantWalletRepository interface {
 	// FindByShopID trouve un portefeuille par boutique
 	FindByShopID(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
 
-	// 🆕 FindByShopIDForUpdate trouve un portefeuille et le verrouille pour mise à jour (SELECT ... FOR UPDATE)
-	// Cela empêche les Race Conditions lors de modifications concurrentes du solde.
+	// FindByShopIDForUpdate trouve un portefeuille et le verrouille pour mise à jour (SELECT ... FOR UPDATE)
 	FindByShopIDForUpdate(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
+
+	// FindByShopIDForUpdateAdmin trouve un portefeuille et le verrouille pour mise à jour, SANS vérifier le tenant.
+	FindByShopIDForUpdateAdmin(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
 
 	// FindAll retourne tous les portefeuilles
 	FindAll(ctx context.Context) ([]*entity.MerchantWallet, error)
@@ -48,7 +50,6 @@ type MerchantWalletRepository interface {
 	FindAboveThreshold(ctx context.Context, thresholdCents int64) ([]*entity.MerchantWallet, error)
 
 	// FindGracePeriodExpiringSoon retourne les wallets dont la période de grâce expire bientôt
-	// daysRemaining : nombre de jours restants ou moins
 	FindGracePeriodExpiringSoon(ctx context.Context, daysRemaining int) ([]*entity.MerchantWallet, error)
 
 	// FindGracePeriodExpired retourne les wallets dont la période de grâce est expirée
@@ -72,17 +73,11 @@ type MerchantWalletRepository interface {
 	// Update met à jour un portefeuille
 	Update(ctx context.Context, wallet *entity.MerchantWallet) error
 
-	// UpdateBalance met à jour uniquement le solde
-	UpdateBalance(ctx context.Context, shopID string, balanceCents int64) error
+	// UpdateAdmin met à jour un portefeuille sans vérification de tenant (réservé aux admins)
+	UpdateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error
 
-	// Freeze gèle un portefeuille
-	Freeze(ctx context.Context, shopID string, reason string, details string) error
-
-	// Unfreeze dégèle un portefeuille
-	Unfreeze(ctx context.Context, shopID string) error
-
-	// UpdateStats met à jour les statistiques du portefeuille
-	UpdateStats(ctx context.Context, wallet *entity.MerchantWallet) error
+	// 🆕 CreateAdmin crée un portefeuille sans vérification de tenant (réservé aux opérations système/admin)
+	CreateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) MerchantWalletRepository
@@ -96,6 +91,9 @@ type MerchantWalletRepository interface {
 type WalletTransactionRepository interface {
 	// Create crée une nouvelle transaction
 	Create(ctx context.Context, tx *entity.WalletTransaction) error
+
+	// CreateAdmin crée une transaction sans vérification de tenant (réservé aux opérations système/admin)
+	CreateAdmin(ctx context.Context, tx *entity.WalletTransaction) error
 
 	// FindByID trouve une transaction par ID
 	FindByID(ctx context.Context, id string) (*entity.WalletTransaction, error)

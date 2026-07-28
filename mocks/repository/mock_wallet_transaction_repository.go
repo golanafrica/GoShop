@@ -87,6 +87,20 @@ func (mr *MockWalletTransactionRepositoryMockRecorder) Create(ctx, tx any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockWalletTransactionRepository)(nil).Create), ctx, tx)
 }
 
+// CreateAdmin mocks base method.
+func (m *MockWalletTransactionRepository) CreateAdmin(ctx context.Context, tx *entity.WalletTransaction) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateAdmin", ctx, tx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateAdmin indicates an expected call of CreateAdmin.
+func (mr *MockWalletTransactionRepositoryMockRecorder) CreateAdmin(ctx, tx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAdmin", reflect.TypeOf((*MockWalletTransactionRepository)(nil).CreateAdmin), ctx, tx)
+}
+
 // FindByDateRange mocks base method.
 func (m *MockWalletTransactionRepository) FindByDateRange(ctx context.Context, shopID string, startDate, endDate time.Time) ([]*entity.WalletTransaction, error) {
 	m.ctrl.T.Helper()

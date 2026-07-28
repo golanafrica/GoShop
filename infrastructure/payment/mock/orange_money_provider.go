@@ -178,22 +178,18 @@ func (p *OrangeMoneyProvider) ValidateWebhook(ctx context.Context, payload []byt
 		return nil, payment.ErrProviderUnavailable
 	}
 
-	// ✅ VALIDATION HMAC-SHA256
 	if signature == "" {
 		return nil, fmt.Errorf("missing webhook signature")
 	}
 
-	// Calculer le HMAC attendu
 	mac := hmac.New(sha256.New, []byte(MockWebhookSecret))
 	mac.Write(payload)
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 
-	// Comparaison sécurisée (timing-safe)
 	if !hmac.Equal([]byte(signature), []byte(expectedMAC)) {
 		return nil, fmt.Errorf("invalid webhook signature")
 	}
 
-	// Parser le payload JSON
 	var webhookData struct {
 		EventType   string `json:"event"`
 		ProviderRef string `json:"provider_ref"`
@@ -237,11 +233,13 @@ func GenerateWebhookSignature(payload []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Refund simule un remboursement
-func (p *OrangeMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64) error {
+// Refund simule un remboursement (Cash-Out vers le client)
+// Refund simule un remboursement (Cash-Out vers le client)
+func (p *MoovMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
 	if !p.available {
 		return payment.ErrProviderUnavailable
 	}
+	// ... (le reste de la méthode reste identique)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -263,6 +261,7 @@ func (p *OrangeMoneyProvider) Refund(ctx context.Context, providerRef string, am
 	now := time.Now().UTC()
 	mp.CompletedAt = &now
 	mp.Metadata["refund_amount"] = amountCents
+	mp.Metadata["refund_phone"] = customerPhone // 🆕 Enregistrement du numéro pour traçabilité
 
 	return nil
 }

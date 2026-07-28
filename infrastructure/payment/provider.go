@@ -77,8 +77,8 @@ type Provider interface {
 	// ValidateWebhook valide et parse un webhook reçu
 	ValidateWebhook(ctx context.Context, payload []byte, signature string) (*WebhookEvent, error)
 
-	// Refund initie un remboursement (si supporté)
-	Refund(ctx context.Context, providerRef string, amountCents int64) error
+	// Refund initie un remboursement vers le client (via Cash-Out dynamique)
+	Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error
 
 	// IsAvailable vérifie si le provider est disponible
 	IsAvailable(ctx context.Context) bool

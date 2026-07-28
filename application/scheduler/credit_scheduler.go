@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strings" // 🆕 AJOUTÉ pour la détection de l'erreur
 	"time"
 
 	creditusecase "Goshop/application/usecase/credit_usecase"
@@ -116,7 +117,6 @@ func (s *CreditScheduler) triggerInstallmentPayment(ctx context.Context, install
 		return
 	}
 
-	// ✅ CORRECTION : Utilise le champ PhoneNumber que nous venons d'ajouter à l'entité Customer
 	if customer.PhoneNumber == "" {
 		itemLogger.Warn().Msg("Customer has no phone number, skipping payment trigger")
 		return
@@ -128,12 +128,10 @@ func (s *CreditScheduler) triggerInstallmentPayment(ctx context.Context, install
 	// 4. Initier le paiement via le usecase existant
 	req := &creditusecase.PayInstallmentRequest{
 		InstallmentID: installment.ID,
-		PhoneNumber:   customer.PhoneNumber, // ✅ CORRECTION : Utilise le bon champ
+		PhoneNumber:   customer.PhoneNumber,
 		Operator:      operator,
-		// Pas d'OTP ici, car c'est un push qui demandera au client de confirmer sur son téléphone
 	}
 
-	// On utilise un contexte avec le tenant du shop
 	shopUUID, err := uuid.Parse(contract.ShopID)
 	if err != nil {
 		itemLogger.Error().Err(err).Msg("Invalid shop UUID")
@@ -149,12 +147,12 @@ func (s *CreditScheduler) triggerInstallmentPayment(ctx context.Context, install
 	}
 
 	itemLogger.Info().
-		Str("phone", customer.PhoneNumber). // ✅ CORRECTION : Utilise le bon champ
+		Str("phone", customer.PhoneNumber).
 		Str("operator", operator).
 		Msg("✅ Installment payment push triggered successfully")
 }
 
-// RunCollection exécute la collecte des commissions sur échéances de crédit (existant)
+// RunCollection exécute la collecte des commissions sur échéances de crédit
 func (s *CreditScheduler) RunCollection(ctx context.Context) error {
 	startTime := time.Now()
 	s.logger.Info().
@@ -202,7 +200,7 @@ func (s *CreditScheduler) RunCollection(ctx context.Context) error {
 	return nil
 }
 
-// processInstallment traite une échéance de crédit individuelle (existant, inchangé)
+// processInstallment traite une échéance de crédit individuelle
 func (s *CreditScheduler) processInstallment(ctx context.Context, batch *repository.CommissionBatch, installment *entity.CreditInstallment) {
 	itemLogger := s.logger.With().
 		Str("installment_id", installment.ID).
@@ -274,6 +272,8 @@ func (s *CreditScheduler) processInstallment(ctx context.Context, batch *reposit
 	itemLogger.Info().Int64("amount_cents", installment.AmountCents).Int64("commission_cents", commissionCents).Int("rate_bps", rate.RateBps).Msg("Processing credit commission")
 
 	var lastErr error
+	skippedNoWallet := false // 🆕 Flag pour gérer le skip silencieux
+
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		debitReq := &walletusecase.DebitWalletRequest{
 			ShopID:          installment.ShopID,
@@ -284,6 +284,13 @@ func (s *CreditScheduler) processInstallment(ctx context.Context, batch *reposit
 
 		resp, err := s.debitUC.Execute(shopCtx, debitReq)
 		if err != nil {
+			// 🆕 AMÉLIORATION : Skipper silencieusement si le wallet n'existe pas
+			if strings.Contains(err.Error(), "merchant wallet not found") {
+				itemLogger.Info().Msg("Merchant wallet not found, skipping commission collection")
+				skippedNoWallet = true
+				break
+			}
+
 			lastErr = err
 			itemLogger.Warn().Err(err).Int("attempt", attempt).Msg("Debit attempt failed")
 			if attempt < s.maxRetries {
@@ -319,6 +326,14 @@ func (s *CreditScheduler) processInstallment(ctx context.Context, batch *reposit
 		}
 
 		itemLogger.Info().Int64("commission_cents", commissionCents).Int64("balance_before", resp.PreviousBalance).Int64("balance_after", resp.BalanceAfterCents).Bool("account_frozen", resp.IsNowNegative).Msg("✅ Credit commission collected")
+		s.batchRepo.CreateBatchItem(ctx, item)
+		return
+	}
+
+	// 🆕 AMÉLIORATION : Gestion du skip si pas de wallet
+	if skippedNoWallet {
+		item.Status = "skipped"
+		batch.SkippedProofs++
 		s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}

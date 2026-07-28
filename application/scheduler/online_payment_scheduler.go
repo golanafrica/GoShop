@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strings" // 🆕 AJOUTÉ pour la détection de l'erreur
 	"time"
 
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -191,6 +192,8 @@ func (s *OnlinePaymentScheduler) processPayment(
 
 	// 4. Tenter de débiter le wallet avec retries
 	var lastErr error
+	skippedNoWallet := false // 🆕 Flag pour gérer le skip silencieux
+
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		debitReq := &walletusecase.DebitWalletRequest{
 			ShopID:          payment.ShopID.String(),
@@ -201,6 +204,13 @@ func (s *OnlinePaymentScheduler) processPayment(
 
 		resp, err := s.debitUC.Execute(shopCtx, debitReq)
 		if err != nil {
+			// 🆕 AMÉLIORATION : Skipper silencieusement si le wallet n'existe pas
+			if strings.Contains(err.Error(), "merchant wallet not found") {
+				itemLogger.Info().Msg("Merchant wallet not found, skipping commission collection")
+				skippedNoWallet = true
+				break
+			}
+
 			lastErr = err
 			itemLogger.Warn().
 				Err(err).
@@ -256,6 +266,14 @@ func (s *OnlinePaymentScheduler) processPayment(
 			Bool("account_frozen", resp.IsNowNegative).
 			Msg("✅ Online payment commission collected")
 
+		s.batchRepo.CreateBatchItem(ctx, item)
+		return
+	}
+
+	// 🆕 AMÉLIORATION : Gestion du skip si pas de wallet
+	if skippedNoWallet {
+		item.Status = "skipped"
+		batch.SkippedProofs++
 		s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}

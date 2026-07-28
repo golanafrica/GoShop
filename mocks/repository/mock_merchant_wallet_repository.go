@@ -86,6 +86,20 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) Create(ctx, wallet any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockMerchantWalletRepository)(nil).Create), ctx, wallet)
 }
 
+// CreateAdmin mocks base method.
+func (m *MockMerchantWalletRepository) CreateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateAdmin", ctx, wallet)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateAdmin indicates an expected call of CreateAdmin.
+func (mr *MockMerchantWalletRepositoryMockRecorder) CreateAdmin(ctx, wallet any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateAdmin", reflect.TypeOf((*MockMerchantWalletRepository)(nil).CreateAdmin), ctx, wallet)
+}
+
 // FindAboveThreshold mocks base method.
 func (m *MockMerchantWalletRepository) FindAboveThreshold(ctx context.Context, thresholdCents int64) ([]*entity.MerchantWallet, error) {
 	m.ctrl.T.Helper()
@@ -159,6 +173,21 @@ func (m *MockMerchantWalletRepository) FindByShopIDForUpdate(ctx context.Context
 func (mr *MockMerchantWalletRepositoryMockRecorder) FindByShopIDForUpdate(ctx, shopID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopIDForUpdate", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindByShopIDForUpdate), ctx, shopID)
+}
+
+// FindByShopIDForUpdateAdmin mocks base method.
+func (m *MockMerchantWalletRepository) FindByShopIDForUpdateAdmin(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByShopIDForUpdateAdmin", ctx, shopID)
+	ret0, _ := ret[0].(*entity.MerchantWallet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByShopIDForUpdateAdmin indicates an expected call of FindByShopIDForUpdateAdmin.
+func (mr *MockMerchantWalletRepositoryMockRecorder) FindByShopIDForUpdateAdmin(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopIDForUpdateAdmin", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindByShopIDForUpdateAdmin), ctx, shopID)
 }
 
 // FindFrozen mocks base method.
@@ -251,20 +280,6 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) FindPositiveBalance(ctx any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPositiveBalance", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindPositiveBalance), ctx)
 }
 
-// Freeze mocks base method.
-func (m *MockMerchantWalletRepository) Freeze(ctx context.Context, shopID, reason, details string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Freeze", ctx, shopID, reason, details)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Freeze indicates an expected call of Freeze.
-func (mr *MockMerchantWalletRepositoryMockRecorder) Freeze(ctx, shopID, reason, details any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Freeze", reflect.TypeOf((*MockMerchantWalletRepository)(nil).Freeze), ctx, shopID, reason, details)
-}
-
 // SumFrozenBalance mocks base method.
 func (m *MockMerchantWalletRepository) SumFrozenBalance(ctx context.Context) (int64, error) {
 	m.ctrl.T.Helper()
@@ -310,20 +325,6 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) SumTotalBalance(ctx any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SumTotalBalance", reflect.TypeOf((*MockMerchantWalletRepository)(nil).SumTotalBalance), ctx)
 }
 
-// Unfreeze mocks base method.
-func (m *MockMerchantWalletRepository) Unfreeze(ctx context.Context, shopID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Unfreeze", ctx, shopID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Unfreeze indicates an expected call of Unfreeze.
-func (mr *MockMerchantWalletRepositoryMockRecorder) Unfreeze(ctx, shopID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Unfreeze", reflect.TypeOf((*MockMerchantWalletRepository)(nil).Unfreeze), ctx, shopID)
-}
-
 // Update mocks base method.
 func (m *MockMerchantWalletRepository) Update(ctx context.Context, wallet *entity.MerchantWallet) error {
 	m.ctrl.T.Helper()
@@ -338,32 +339,18 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) Update(ctx, wallet any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockMerchantWalletRepository)(nil).Update), ctx, wallet)
 }
 
-// UpdateBalance mocks base method.
-func (m *MockMerchantWalletRepository) UpdateBalance(ctx context.Context, shopID string, balanceCents int64) error {
+// UpdateAdmin mocks base method.
+func (m *MockMerchantWalletRepository) UpdateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateBalance", ctx, shopID, balanceCents)
+	ret := m.ctrl.Call(m, "UpdateAdmin", ctx, wallet)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// UpdateBalance indicates an expected call of UpdateBalance.
-func (mr *MockMerchantWalletRepositoryMockRecorder) UpdateBalance(ctx, shopID, balanceCents any) *gomock.Call {
+// UpdateAdmin indicates an expected call of UpdateAdmin.
+func (mr *MockMerchantWalletRepositoryMockRecorder) UpdateAdmin(ctx, wallet any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateBalance", reflect.TypeOf((*MockMerchantWalletRepository)(nil).UpdateBalance), ctx, shopID, balanceCents)
-}
-
-// UpdateStats mocks base method.
-func (m *MockMerchantWalletRepository) UpdateStats(ctx context.Context, wallet *entity.MerchantWallet) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateStats", ctx, wallet)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UpdateStats indicates an expected call of UpdateStats.
-func (mr *MockMerchantWalletRepositoryMockRecorder) UpdateStats(ctx, wallet any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStats", reflect.TypeOf((*MockMerchantWalletRepository)(nil).UpdateStats), ctx, wallet)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateAdmin", reflect.TypeOf((*MockMerchantWalletRepository)(nil).UpdateAdmin), ctx, wallet)
 }
 
 // WithTX mocks base method.

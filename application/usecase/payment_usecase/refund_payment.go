@@ -90,7 +90,22 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			return nil, fmt.Errorf("provider not found: %w", err)
 		}
 
-		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount); err != nil {
+		// ✅ Récupérer le numéro de téléphone du client pour le cash-out
+		customerPhone := ""
+		if paymentEntity.CustomerPhone != nil {
+			customerPhone = *paymentEntity.CustomerPhone
+		}
+
+		// 🆕 Récupérer l'opérateur utilisé pour le paiement initial (pour le cash-out dynamique)
+		operator := ""
+		if paymentEntity.Metadata != nil {
+			if op, ok := paymentEntity.Metadata["operator"].(string); ok {
+				operator = op
+			}
+		}
+
+		// ✅ Appel corrigé avec le 5ème paramètre (operator)
+		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			return nil, fmt.Errorf("refund failed at provider: %w", err)
 		}
 	}

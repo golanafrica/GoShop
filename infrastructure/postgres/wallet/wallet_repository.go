@@ -1305,3 +1305,148 @@ func (r *WalletTransactionRepositoryInfrastructure) UpdateStatus(ctx context.Con
 
 	return nil
 }
+
+// ============================================================
+// MÉTHODES ADMINISTRATIVES (Bypass Tenant Check)
+// ============================================================
+
+// FindByShopIDForUpdateAdmin récupère le wallet pour une mise à jour, SANS vérifier le tenant dans le contexte.
+// Réservé exclusivement aux usecases administratifs (ex: résolution de litige par un super_admin).
+func (r *MerchantWalletRepositoryInfrastructure) FindByShopIDForUpdateAdmin(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+	query := `
+		SELECT shop_id, balance_cents, is_frozen, frozen_at, frozen_reason, frozen_until, 
+               max_negative_balance_cents, total_sales_cents, total_commissions_cents, total_payouts_cents, created_at, updated_at 
+		FROM merchant_wallets 
+		WHERE shop_id = $1 
+		FOR UPDATE
+	`
+
+	var wallet entity.MerchantWallet
+	err := r.queryRowContext(ctx, query, shopID).Scan(
+		&wallet.ShopID,
+		&wallet.BalanceCents,
+		&wallet.IsFrozen,
+		&wallet.FrozenAt,
+		&wallet.FrozenReason,
+		&wallet.FrozenUntil,
+		&wallet.MaxNegativeBalanceCents,
+		&wallet.TotalSalesCents,
+		&wallet.TotalCommissionsCents,
+		&wallet.TotalPayoutsCents,
+		&wallet.CreatedAt,
+		&wallet.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("merchant wallet not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find merchant wallet for update: %w", err)
+	}
+
+	return &wallet, nil
+}
+
+// UpdateAdmin met à jour un portefeuille sans vérification de tenant (réservé aux opérations administratives)
+func (r *MerchantWalletRepositoryInfrastructure) UpdateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error {
+	// On valide le wallet, mais on ne vérifie PAS le tenant via getShopID(ctx)
+	if err := wallet.Validate(); err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+
+	query := `
+		UPDATE merchant_wallets
+		SET balance_cents = $2,
+		    is_frozen = $3,
+		    frozen_at = $4,
+		    frozen_reason = $5,
+		    frozen_until = $6,
+		    max_negative_balance_cents = $7,
+		    total_sales_cents = $8,
+		    total_commissions_cents = $9,
+		    total_payouts_cents = $10,
+		    updated_at = NOW()
+		WHERE shop_id = $1
+		RETURNING updated_at
+	`
+
+	err := r.queryRowContext(ctx, query,
+		wallet.ShopID,
+		wallet.BalanceCents,
+		wallet.IsFrozen,
+		wallet.FrozenAt,
+		wallet.FrozenReason,
+		wallet.FrozenUntil,
+		wallet.MaxNegativeBalanceCents,
+		wallet.TotalSalesCents,
+		wallet.TotalCommissionsCents,
+		wallet.TotalPayoutsCents,
+	).Scan(&wallet.UpdatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to update merchant wallet: %w", err)
+	}
+
+	return nil
+}
+
+// CreateAdmin crée un nouveau portefeuille sans vérification de tenant (pour les cas où le wallet n'a pas été créé à l'inscription)
+func (r *MerchantWalletRepositoryInfrastructure) CreateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error {
+	if err := wallet.Validate(); err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+
+	query := `
+		INSERT INTO merchant_wallets (
+			shop_id, balance_cents,
+			max_negative_balance_cents,
+			total_sales_cents, total_commissions_cents, total_payouts_cents,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+		RETURNING created_at, updated_at
+	`
+
+	err := r.queryRowContext(ctx, query,
+		wallet.ShopID,
+		wallet.BalanceCents,
+		wallet.MaxNegativeBalanceCents,
+		wallet.TotalSalesCents,
+		wallet.TotalCommissionsCents,
+		wallet.TotalPayoutsCents,
+	).Scan(&wallet.CreatedAt, &wallet.UpdatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to create merchant wallet: %w", err)
+	}
+
+	return nil
+}
+
+// CreateAdmin crée une nouvelle transaction sans vérification de tenant (pour les opérations admin/système)
+func (r *WalletTransactionRepositoryInfrastructure) CreateAdmin(ctx context.Context, txn *entity.WalletTransaction) error {
+	query := `
+		INSERT INTO wallet_transactions (
+			shop_id, transaction_type, amount_cents, balance_after_cents,
+			reference_type, reference_id, description, status,
+			created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		RETURNING id, created_at
+	`
+
+	err := r.queryRowContext(ctx, query,
+		txn.ShopID,
+		txn.TransactionType,
+		txn.AmountCents,
+		txn.BalanceAfterCents,
+		txn.ReferenceType,
+		txn.ReferenceID,
+		txn.Description,
+		txn.Status,
+	).Scan(&txn.ID, &txn.CreatedAt)
+
+	if err != nil {
+		return fmt.Errorf("failed to create wallet transaction: %w", err)
+	}
+
+	return nil
+}

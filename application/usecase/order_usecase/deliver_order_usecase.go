@@ -24,6 +24,7 @@ type DeliverOrderUsecase struct {
 	walletTxnRepo repository.WalletTransactionRepository
 	notifService  service.NotificationService
 	txManager     repository.TxManager
+	disputeRepo   repository.DisputeRepository // 🆕 AJOUTÉ pour la sécurité métier
 }
 
 // NewDeliverOrderUsecase crée une nouvelle instance
@@ -36,6 +37,7 @@ func NewDeliverOrderUsecase(
 	walletTxnRepo repository.WalletTransactionRepository,
 	notifService service.NotificationService,
 	txManager repository.TxManager,
+	disputeRepo repository.DisputeRepository, // 🆕 AJOUTÉ
 ) *DeliverOrderUsecase {
 	return &DeliverOrderUsecase{
 		orderRepo:     orderRepo,
@@ -46,6 +48,7 @@ func NewDeliverOrderUsecase(
 		walletTxnRepo: walletTxnRepo,
 		notifService:  notifService,
 		txManager:     txManager,
+		disputeRepo:   disputeRepo, // 🆕 AJOUTÉ
 	}
 }
 
@@ -92,6 +95,19 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		return nil, fmt.Errorf("failed to find order: %w", err)
 	}
 
+	// 🛡️ SÉCURITÉ MÉTIER : Bloquer la livraison si un litige actif existe sur cette commande
+	orderUUID, err := uuid.Parse(orderID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid order ID: %w", err)
+	}
+
+	if uc.disputeRepo != nil {
+		hasActiveDispute, _ := uc.disputeRepo.ExistsByOrderID(ctx, orderUUID)
+		if hasActiveDispute {
+			return nil, fmt.Errorf("cannot deliver order: an active dispute is pending resolution")
+		}
+	}
+
 	// 🆕 Autoriser la livraison pour Mobile Money (pour libérer l'Escrow) ET Cash on Delivery
 	if order.PaymentMethod != string(entity.PaymentMethodMobileMoney) && order.PaymentMethod != string(entity.PaymentMethodCashOnDelivery) {
 		return nil, fmt.Errorf("order payment method not supported for this delivery flow")
@@ -114,11 +130,6 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 
 		commissionRate := settings.GetCashCommissionRate()
 		commissionFees, netAmount := order.CalculateCashCommission(commissionRate)
-
-		orderUUID, err := uuid.Parse(order.ID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid order ID: %w", err)
-		}
 
 		payment, err := entity.NewPayment(shop.ID, orderUUID, entity.ProviderCash, req.AmountReceived)
 		if err != nil {

@@ -231,11 +231,13 @@ func GenerateMoovWebhookSignature(payload []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Refund simule un remboursement
-func (p *MoovMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64) error {
+// Refund simule un remboursement (Cash-Out vers le client)
+// Refund simule un remboursement (Cash-Out vers le client)
+func (p *OrangeMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
 	if !p.available {
 		return payment.ErrProviderUnavailable
 	}
+	// ... (le reste de la méthode reste identique)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -257,6 +259,7 @@ func (p *MoovMoneyProvider) Refund(ctx context.Context, providerRef string, amou
 	now := time.Now().UTC()
 	mp.CompletedAt = &now
 	mp.Metadata["refund_amount"] = amountCents
+	mp.Metadata["refund_phone"] = customerPhone // 🆕 Enregistrement du numéro pour traçabilité
 
 	return nil
 }

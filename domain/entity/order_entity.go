@@ -13,13 +13,14 @@ const (
 	OrderStatusPending   OrderStatus = "pending"
 	OrderStatusCancelled OrderStatus = "cancelled"
 
-	// 🆕 Statuts pour cash à la livraison
+	// 🆕 Statuts pour cash à la livraison et litiges
 	OrderStatusPendingConfirmation OrderStatus = "pending_confirmation"
 	OrderStatusConfirmed           OrderStatus = "confirmed"
 	OrderStatusRejected            OrderStatus = "rejected"
 	OrderStatusExpired             OrderStatus = "expired"
 	OrderStatusOutForDelivery      OrderStatus = "out_for_delivery"
 	OrderStatusDelivered           OrderStatus = "delivered"
+	OrderStatusDisputed            OrderStatus = "disputed" // 🆕 Ajouté pour la gestion des litiges
 )
 
 // PaymentMethod représente la méthode de paiement
@@ -33,6 +34,7 @@ const (
 // Order représente une commande dans le système
 type Order struct {
 	ID         string       `json:"id"`
+	ShopID     string       `json:"shop_id"` // 🆕 AJOUT CRITIQUE : Identifiant de la boutique pour le multi-tenant et les litiges
 	CustomerID string       `json:"customer_id"`
 	TotalCents int64        `json:"total_cents"`
 	Status     string       `json:"status"`
@@ -40,7 +42,7 @@ type Order struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 	Items      []*OrderItem `json:"items,omitempty"`
 
-	// 🆕 Champs cash à la livraison
+	// 🆕 Champs cash à la livraison et suivi
 	PaymentMethod       string     `json:"payment_method"`
 	AcceptedAt          *time.Time `json:"accepted_at,omitempty"`
 	RejectedAt          *time.Time `json:"rejected_at,omitempty"`
@@ -88,16 +90,19 @@ func (o *Order) CanTransitionTo(target OrderStatus) bool {
 		OrderStatusConfirmed: {
 			OrderStatusOutForDelivery,
 			OrderStatusCancelled,
+			OrderStatusDisputed, // 🆕 Permet d'ouvrir un litige sur une commande confirmée
 		},
 		OrderStatusOutForDelivery: {
 			OrderStatusDelivered,
 			OrderStatusCancelled,
+			OrderStatusDisputed, // 🆕 Permet d'ouvrir un litige sur une commande en livraison
 		},
 		// Statuts terminaux - pas de transition possible
 		OrderStatusDelivered: {},
 		OrderStatusRejected:  {},
 		OrderStatusExpired:   {},
 		OrderStatusCancelled: {},
+		OrderStatusDisputed:  {}, // Un litige doit être résolu avant de changer de statut
 	}
 
 	allowed, exists := transitions[OrderStatus(o.Status)]
@@ -183,6 +188,17 @@ func (o *Order) MarkDelivered(amountReceived int64, notes string) error {
 	if notes != "" {
 		o.DeliveryNotes = &notes
 	}
+	o.UpdatedAt = now
+	return nil
+}
+
+// MarkDisputed marque la commande comme étant en litige
+func (o *Order) MarkDisputed() error {
+	if !o.CanTransitionTo(OrderStatusDisputed) {
+		return errors.New("invalid status transition to disputed from " + o.Status)
+	}
+	now := time.Now().UTC()
+	o.Status = string(OrderStatusDisputed)
 	o.UpdatedAt = now
 	return nil
 }
