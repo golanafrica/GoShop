@@ -422,6 +422,7 @@ func (a *App) setupRouter() {
 			wsHub,
 			emailService,
 			postgresCustomerRepo, // ✅ AJOUTÉ : Permet au dispatcher de résoudre le UserID depuis le CustomerID
+			shopRepo,
 			a.Logger.Logger,
 		)
 		a.Logger.Info().Msg("✅ v4.5.0 Notification Dispatcher initialized (WebSocket + Email)")
@@ -855,8 +856,10 @@ func (a *App) setupRouter() {
 		walletRepo,
 		walletTxnRepo,
 		txmanagerRepo,
-		paymentRepo,     // 🆕 AJOUTÉ : pour retrouver la transaction à rembourser
-		paymentRegistry, // 🆕 AJOUTÉ : pour appeler la méthode Refund du provider
+		paymentRepo,       // 🆕 AJOUTÉ : pour retrouver la transaction à rembourser
+		paymentRegistry,   // 🆕 AJOUTÉ : pour appeler la méthode Refund du provider
+		postgresOrderRepo, // 🆕 AJOUTE CET ARGUMENT
+		notifService,
 	)
 
 	a.Logger.Info().Msg("✅ v4.6.0 Dispute usecases initialized")

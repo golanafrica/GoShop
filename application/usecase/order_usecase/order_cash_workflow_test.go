@@ -156,7 +156,7 @@ func TestAcceptOrderUsecase_OrderNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to find order")
 }
 
-func TestAcceptOrderUsecase_NotCashOnDelivery(t *testing.T) {
+func TestAcceptOrderUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -177,15 +177,16 @@ func TestAcceptOrderUsecase_NotCashOnDelivery(t *testing.T) {
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
-	mobileOrder := createTestOrder(string(entity.OrderStatusPending))
-	mobileOrder.PaymentMethod = string(entity.PaymentMethodMobileMoney)
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(mobileOrder, nil)
+	// ❌ Méthode de paiement non supportée (ni COD ni Mobile Money)
+	unsupportedOrder := createTestOrder(string(entity.OrderStatusPending))
+	unsupportedOrder.PaymentMethod = "card"
+	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(unsupportedOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "not cash on delivery")
+	assert.Contains(t, err.Error(), "not supported for this flow")
 }
 
 func TestAcceptOrderUsecase_OrderExpired(t *testing.T) {
@@ -686,7 +687,7 @@ func TestOutForDeliveryUsecase_OrderNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to find order")
 }
 
-func TestOutForDeliveryUsecase_NotCashOnDelivery(t *testing.T) {
+func TestOutForDeliveryUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -704,15 +705,16 @@ func TestOutForDeliveryUsecase_NotCashOnDelivery(t *testing.T) {
 
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 
-	mobileOrder := createTestOrder(string(entity.OrderStatusConfirmed))
-	mobileOrder.PaymentMethod = string(entity.PaymentMethodMobileMoney)
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(mobileOrder, nil)
+	// ❌ Méthode de paiement non supportée (ni COD ni Mobile Money)
+	unsupportedOrder := createTestOrder(string(entity.OrderStatusConfirmed))
+	unsupportedOrder.PaymentMethod = "card"
+	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(unsupportedOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "not cash on delivery")
+	assert.Contains(t, err.Error(), "not supported for this flow")
 }
 
 func TestOutForDeliveryUsecase_InvalidStatusTransition(t *testing.T) {

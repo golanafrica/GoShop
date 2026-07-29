@@ -34,14 +34,12 @@ func TestProcessWebhookUsecase_ValidationFailed(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et walletUpdater)
 	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	registry.EXPECT().Get(entity.ProviderOrangeMoney).Return(provider, nil)
 	provider.EXPECT().ValidateWebhook(ctx, []byte("{}"), "sig").Return(nil, errors.New("invalid signature"))
 
-	// 10 arguments exacts : ctx, query, provider, event_type, external_id, payload, signature, signature_validated, processing_error, processed
 	db.EXPECT().ExecContext(
 		ctx,
 		gomock.Any(),        // query
@@ -70,7 +68,6 @@ func TestProcessWebhookUsecase_TontineWebhookNilHandler(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -87,7 +84,6 @@ func TestProcessWebhookUsecase_TontineWebhookNilHandler(t *testing.T) {
 	registry.EXPECT().Get(entity.ProviderOrangeMoney).Return(provider, nil)
 	provider.EXPECT().ValidateWebhook(ctx, []byte("{}"), "sig").Return(event, nil)
 
-	// 10 arguments exacts
 	db.EXPECT().ExecContext(
 		ctx,
 		gomock.Any(), // query
@@ -116,7 +112,6 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil
 	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
 	ctx := context.Background()
 
@@ -141,7 +136,6 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	registry.EXPECT().Get(entity.ProviderOrangeMoney).Return(provider, nil)
 	provider.EXPECT().ValidateWebhook(ctx, []byte("{}"), "sig").Return(event, nil)
 
-	// 10 arguments exacts (gomock.Any() pour ctx car modifié par tenant.WithTenant)
 	db.EXPECT().ExecContext(
 		gomock.Any(), // ctx
 		gomock.Any(), // query
@@ -163,7 +157,12 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 		FindByID(gomock.Any(), shop.ID).
 		Return(shop, nil)
 
-	err := uc.Execute(ctx, entity.ProviderOrangeMoney, []byte("{}"), "sig")
+	// ✅ AJOUT CRITIQUE : Le usecase appelle Update pour mettre à jour le flag escrow_created
+	// DOIT être déclaré AVANT l'appel à uc.Execute
+	paymentRepo.EXPECT().
+		Update(gomock.Any(), gomock.Any()).
+		Return(nil)
 
-	assert.NoError(t, err) // Retourne nil silencieusement car déjà terminal
+	err := uc.Execute(ctx, entity.ProviderOrangeMoney, []byte("{}"), "sig")
+	assert.NoError(t, err) // Retourne nil silencieusement car déjà terminal et escrow géré
 }

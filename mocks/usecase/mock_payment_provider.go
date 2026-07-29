@@ -101,17 +101,17 @@ func (mr *MockProviderMockRecorder) IsAvailable(ctx any) *gomock.Call {
 }
 
 // Refund mocks base method.
-func (m *MockProvider) Refund(ctx context.Context, providerRef string, amountCents int64) error {
+func (m *MockProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone, operator string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents)
+	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents, customerPhone, operator)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Refund indicates an expected call of Refund.
-func (mr *MockProviderMockRecorder) Refund(ctx, providerRef, amountCents any) *gomock.Call {
+func (mr *MockProviderMockRecorder) Refund(ctx, providerRef, amountCents, customerPhone, operator any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refund", reflect.TypeOf((*MockProvider)(nil).Refund), ctx, providerRef, amountCents)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Refund", reflect.TypeOf((*MockProvider)(nil).Refund), ctx, providerRef, amountCents, customerPhone, operator)
 }
 
 // ValidateWebhook mocks base method.

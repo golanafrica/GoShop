@@ -19,42 +19,35 @@ const (
 	NotificationMerchantDeliveryReady  NotificationType = "merchant_delivery_ready"
 	NotificationClientOrderDelivered   NotificationType = "client_order_delivered"
 	NotificationMerchantCommissionPaid NotificationType = "merchant_commission_paid"
+
+	// 🆕 NOUVEAUX TYPES POUR LES LITIGES
+	NotificationClientDisputeResolved   NotificationType = "client_dispute_resolved"
+	NotificationMerchantDisputeResolved NotificationType = "merchant_dispute_resolved"
 )
 
 // NotificationRequest représente une demande de notification
 type NotificationRequest struct {
 	Type           NotificationType
-	RecipientPhone string // Numéro du destinataire (format international : +226...)
-	RecipientEmail string // Email du destinataire (optionnel)
+	RecipientPhone string
+	RecipientEmail string
 	ShopID         string
 	OrderID        string
-	Data           map[string]interface{} // Données spécifiques à la notification
+	Data           map[string]interface{}
 }
 
 // NotificationService définit le contrat pour l'envoi de notifications
-// Cette interface permet de découpler les usecases du provider réel (SMS, email, etc.)
 type NotificationService interface {
-	// NotifyMerchantOrderReceived notifie le marchand qu'une nouvelle commande cash a été reçue
 	NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error
-
-	// NotifyClientOrderConfirmed notifie le client que sa commande a été acceptée
 	NotifyClientOrderConfirmed(ctx context.Context, order *entity.Order, customerPhone string) error
-
-	// NotifyClientOrderRejected notifie le client que sa commande a été refusée
 	NotifyClientOrderRejected(ctx context.Context, order *entity.Order, customerPhone string, reason string) error
-
-	// NotifyClientOrderExpired notifie le client que sa commande a expiré
 	NotifyClientOrderExpired(ctx context.Context, order *entity.Order, customerPhone string) error
-
-	// NotifyMerchantDeliveryReady notifie le marchand qu'il doit préparer la commande
 	NotifyMerchantDeliveryReady(ctx context.Context, shop *entity.Shop, order *entity.Order) error
-
-	// NotifyClientOrderDelivered notifie le client que sa commande a été livrée
 	NotifyClientOrderDelivered(ctx context.Context, order *entity.Order, customerPhone string, amountReceived int64) error
-
-	// NotifyMerchantCommissionPaid notifie le marchand de la commission GoShop prélevée
 	NotifyMerchantCommissionPaid(ctx context.Context, shop *entity.Shop, order *entity.Order, commissionCents int64) error
 
-	// SendNotification envoie une notification générique (pour cas particuliers)
+	// 🆕 Notifications pour les litiges
+	NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error
+	NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error
+
 	SendNotification(ctx context.Context, req *NotificationRequest) error
 }

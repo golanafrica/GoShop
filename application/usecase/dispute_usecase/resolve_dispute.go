@@ -7,6 +7,8 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/domain/service"
+	"Goshop/domain/tenant"
 	"Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
@@ -24,8 +26,10 @@ type ResolveDisputeUsecase struct {
 	walletRepo      repository.MerchantWalletRepository
 	walletTxnRepo   repository.WalletTransactionRepository
 	txManager       repository.TxManager
-	paymentRepo     repository.PaymentRepository // 🆕 AJOUTÉ
-	paymentRegistry PaymentRegistry              // 🆕 AJOUTÉ
+	paymentRepo     repository.PaymentRepository
+	paymentRegistry PaymentRegistry
+	orderRepo       repository.OrderRepository
+	notificationSvc service.NotificationService
 }
 
 func NewResolveDisputeUsecase(
@@ -34,8 +38,10 @@ func NewResolveDisputeUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	walletTxnRepo repository.WalletTransactionRepository,
 	txManager repository.TxManager,
-	paymentRepo repository.PaymentRepository, // 🆕 AJOUTÉ
-	paymentRegistry PaymentRegistry, // 🆕 AJOUTÉ
+	paymentRepo repository.PaymentRepository,
+	paymentRegistry PaymentRegistry,
+	orderRepo repository.OrderRepository,
+	notificationSvc service.NotificationService,
 ) *ResolveDisputeUsecase {
 	return &ResolveDisputeUsecase{
 		disputeRepo:     disputeRepo,
@@ -45,6 +51,8 @@ func NewResolveDisputeUsecase(
 		txManager:       txManager,
 		paymentRepo:     paymentRepo,
 		paymentRegistry: paymentRegistry,
+		orderRepo:       orderRepo,
+		notificationSvc: notificationSvc,
 	}
 }
 
@@ -58,7 +66,6 @@ type ResolveDisputeRequest struct {
 func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisputeRequest) (*entity.Dispute, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le litige
 	dispute, err := uc.disputeRepo.FindByID(ctx, req.DisputeID)
 	if err != nil {
 		return nil, fmt.Errorf("dispute not found: %w", err)
@@ -68,14 +75,12 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		return nil, fmt.Errorf("dispute is already resolved or cancelled")
 	}
 
-	// 2. Récupérer l'Escrow associé
 	orderIDStr := dispute.OrderID.String()
-	escrow, err := uc.escrowRepo.FindByOrderID(ctx, orderIDStr) // ✅ CORRIGÉ : utilisation de orderIDStr (string)
+	escrow, err := uc.escrowRepo.FindByOrderID(ctx, orderIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("escrow not found for dispute order: %w", err)
 	}
 
-	// 3. Démarrer une transaction pour garantir l'atomicité des opérations financières
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -90,12 +95,10 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	walletRepoTx := uc.walletRepo.WithTX(tx)
 	walletTxnRepoTx := uc.walletTxnRepo.WithTX(tx)
 
-	// 4. Traiter la résolution
 	switch req.Resolution {
 	case "merchant_wins":
 		dispute.Status = entity.DisputeStatusResolvedMerchant
 
-		// a. Libérer les fonds de l'Escrow vers le marchand
 		if err := escrow.ReleaseFunds(); err != nil {
 			return nil, fmt.Errorf("failed to release escrow: %w", err)
 		}
@@ -103,7 +106,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("failed to update escrow: %w", err)
 		}
 
-		// b. Créditer le wallet du marchand
 		merchantAmount := escrow.GetMerchantAmount()
 		shopIDStr := dispute.ShopID.String()
 
@@ -126,7 +128,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("failed to update wallet: %w", err)
 		}
 
-		// c. Enregistrer la transaction dans l'historique du wallet
 		txnID := uuid.New().String()
 		refType := "dispute_resolution"
 		desc := fmt.Sprintf("Litige résolu en faveur du marchand (Order: %s)", orderIDStr)
@@ -151,13 +152,11 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	case "customer_wins":
 		dispute.Status = entity.DisputeStatusResolvedCustomer
 
-		// 🆕 1. Trouver le paiement associé à la commande (unscoped car on est en contexte admin)
 		payments, err := uc.paymentRepo.FindByOrderIDUnscoped(ctx, dispute.OrderID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find payments for order: %w", err)
 		}
 
-		// Trouver le paiement réussi avec une référence provider
 		var successPayment *entity.Payment
 		for _, p := range payments {
 			if p.Status == entity.PaymentStatusSuccess && p.ProviderRef != nil {
@@ -170,21 +169,17 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("no successful payment with provider reference found for this order")
 		}
 
-		// 🆕 2. Appeler le provider pour le remboursement (Cash-Out vers le client)
 		provider, err := uc.paymentRegistry.Get(successPayment.Provider)
 		if err != nil {
 			return nil, fmt.Errorf("payment provider not found: %w", err)
 		}
 
 		refundAmount := escrow.TotalAmountCents
-
-		// Récupérer le numéro de téléphone du client pour le cash-out
 		customerPhone := ""
 		if successPayment.CustomerPhone != nil {
 			customerPhone = *successPayment.CustomerPhone
 		}
 
-		// 🆕 Récupérer l'opérateur utilisé pour le paiement initial (pour le cash-out dynamique)
 		operator := ""
 		if successPayment.Metadata != nil {
 			if op, ok := successPayment.Metadata["operator"].(string); ok {
@@ -192,13 +187,11 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			}
 		}
 
-		// Appel du provider avec l'opérateur dynamique
 		if err := provider.Refund(ctx, *successPayment.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			logger.Error().Err(err).Msg("Failed to process refund with provider")
 			return nil, fmt.Errorf("failed to process refund with provider: %w", err)
 		}
 
-		// 🆕 3. Marquer l'escrow comme remboursé
 		escrow.Status = "refunded"
 		if err := escrowRepoTx.Update(ctx, escrow); err != nil {
 			return nil, fmt.Errorf("failed to update escrow to refunded: %w", err)
@@ -217,7 +210,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		return nil, fmt.Errorf("invalid resolution: must be 'merchant_wins' or 'customer_wins'")
 	}
 
-	// 5. Finaliser le litige
 	dispute.ResolutionNotes = &req.Notes
 	dispute.UpdatedAt = time.Now().UTC()
 
@@ -225,9 +217,31 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		return nil, fmt.Errorf("failed to update dispute: %w", err)
 	}
 
-	// 6. Commit de la transaction
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// ============================================================
+	// 🆕 NOTIFICATIONS TEMPS RÉEL (Hors transaction, après succès)
+	// ============================================================
+	// On recrée un contexte avec le tenant pour que orderRepo.FindByID fonctionne
+	shop := &entity.Shop{ID: dispute.ShopID}
+	tenantCtx := tenant.WithTenant(context.Background(), shop)
+
+	// ✅ CORRECTION : Ajout de .String() car FindByID attend une string
+	order, err := uc.orderRepo.FindByID(tenantCtx, dispute.OrderID.String())
+	if err == nil && order != nil {
+		// Notifier le client
+		if notifyErr := uc.notificationSvc.NotifyClientDisputeResolved(tenantCtx, order.CustomerID, orderIDStr, req.Resolution); notifyErr != nil {
+			logger.Warn().Err(notifyErr).Msg("Failed to send client dispute notification")
+		}
+		// Notifier le marchand
+		if notifyErr := uc.notificationSvc.NotifyMerchantDisputeResolved(tenantCtx, dispute.ShopID.String(), orderIDStr, req.Resolution); notifyErr != nil {
+			logger.Warn().Err(notifyErr).Msg("Failed to send merchant dispute notification")
+		}
+		logger.Info().Str("order_id", orderIDStr).Msg("✅ Dispute resolution notifications dispatched")
+	} else {
+		logger.Warn().Err(err).Msg("Failed to fetch order for dispute notifications")
 	}
 
 	logger.Info().

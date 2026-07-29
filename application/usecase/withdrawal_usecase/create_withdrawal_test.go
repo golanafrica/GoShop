@@ -70,20 +70,18 @@ func createMockDebitWalletUsecase(ctrl *gomock.Controller) *walletusecase.DebitW
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockWalletRepo.EXPECT().WithTX(mockTx).Return(mockWalletRepo).AnyTimes()
 
-	// ✅ CORRECTION : ShopID est un string dans MerchantWallet, pas un uuid.UUID
 	mockWalletRepo.EXPECT().FindByShopID(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
 		return &entity.MerchantWallet{
 			ShopID:       shopID,
-			BalanceCents: 1000000, // Solde suffisant pour les tests
+			BalanceCents: 1000000,
 			IsFrozen:     false,
 		}, nil
 	}).AnyTimes()
 
-	// ✅ AJOUT CRITIQUE : Mock pour FindByShopIDForUpdate qui est appelé par DebitWalletUsecase
 	mockWalletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
 		return &entity.MerchantWallet{
 			ShopID:       shopID,
-			BalanceCents: 1000000, // Solde suffisant pour les tests
+			BalanceCents: 1000000,
 			IsFrozen:     false,
 		}, nil
 	}).AnyTimes()
@@ -106,14 +104,14 @@ func TestCreateWithdrawalUsecase_MultiTenantError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -138,14 +136,14 @@ func TestCreateWithdrawalUsecase_KYC_Unverified(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -167,14 +165,14 @@ func TestCreateWithdrawalUsecase_KYC_Pending(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -196,14 +194,14 @@ func TestCreateWithdrawalUsecase_KYC_Rejected(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -224,14 +222,14 @@ func TestCreateWithdrawalUsecase_KYC_RejectedWithReason(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -257,14 +255,14 @@ func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -272,7 +270,7 @@ func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
 	req := &withdrawaldto.CreateWithdrawalRequest{
-		AmountCents:       0, // ❌ Montant invalide
+		AmountCents:       0,
 		PaymentMethod:     "ORANGE_MONEY",
 		DestinationNumber: "+22670123456",
 	}
@@ -293,14 +291,14 @@ func TestCreateWithdrawalUsecase_SaveError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -325,14 +323,14 @@ func TestCreateWithdrawalUsecase_UpdateError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -345,9 +343,9 @@ func TestCreateWithdrawalUsecase_UpdateError(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -383,13 +381,13 @@ func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactoryWithError(errors.New("invalid config")),
 		mockDebitWalletUC,
@@ -402,9 +400,9 @@ func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -427,14 +425,14 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -447,9 +445,9 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -480,14 +478,14 @@ func TestCreateWithdrawalUsecase_ShopSettingsError(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -500,9 +498,9 @@ func TestCreateWithdrawalUsecase_ShopSettingsError(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(nil, errors.New("settings not found"))
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(nil, errors.New("settings not found"))
 
 	mockCashOut.EXPECT().
 		CashOut(gomock.Any(), gomock.Any()).
@@ -529,14 +527,14 @@ func TestCreateWithdrawalUsecase_ShopSettingsDisabled(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -549,9 +547,9 @@ func TestCreateWithdrawalUsecase_ShopSettingsDisabled(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -586,14 +584,14 @@ func TestCreateWithdrawalUsecase_Success_Processing(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -606,9 +604,9 @@ func TestCreateWithdrawalUsecase_Success_Processing(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -642,14 +640,14 @@ func TestCreateWithdrawalUsecase_Success_ImmediateSuccess(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -662,9 +660,9 @@ func TestCreateWithdrawalUsecase_Success_ImmediateSuccess(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -696,14 +694,14 @@ func TestCreateWithdrawalUsecase_Success_WithOptionalFields(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -716,9 +714,9 @@ func TestCreateWithdrawalUsecase_Success_WithOptionalFields(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled: false,
 			},
@@ -756,14 +754,14 @@ func TestCreateWithdrawalUsecase_Success_ShopSpecificConfig(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
 	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
 		mockWithdrawalRepo,
-		mockShopPaymentRepo,
+		mockShopRepo, // ✅ CORRIGÉ
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
@@ -776,9 +774,9 @@ func TestCreateWithdrawalUsecase_Success_ShopSpecificConfig(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{
 				Enabled:        true,
 				APIKey:         "shop-api-key",
@@ -815,11 +813,11 @@ func TestNewCreateWithdrawalUsecase_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
-	uc := withdrawalusecase.NewCreateWithdrawalUsecase(mockWithdrawalRepo, mockShopPaymentRepo, mockRegistry, mockDebitWalletUC)
+	uc := withdrawalusecase.NewCreateWithdrawalUsecase(mockWithdrawalRepo, mockShopRepo, mockRegistry, mockDebitWalletUC) // ✅ CORRIGÉ
 
 	assert.NotNil(t, uc)
 }
@@ -829,11 +827,11 @@ func TestNewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing(t *testing.
 	defer ctrl.Finish()
 
 	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
-	mockShopPaymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockDebitWalletUC := createMockDebitWalletUsecase(ctrl)
 
-	uc := withdrawalusecase.NewCreateWithdrawalUsecase(mockWithdrawalRepo, mockShopPaymentRepo, mockRegistry, mockDebitWalletUC)
+	uc := withdrawalusecase.NewCreateWithdrawalUsecase(mockWithdrawalRepo, mockShopRepo, mockRegistry, mockDebitWalletUC) // ✅ CORRIGÉ
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
 	shop, _ := tenant.FromContext(ctx)
@@ -842,9 +840,9 @@ func TestNewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing(t *testing.
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	mockShopPaymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shop.ID).
-		Return(&entity.ShopPaymentSettings{
+	mockShopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shop.ID).
+				Return(&entity.ShopPaymentSettings{
 			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 

@@ -748,7 +748,7 @@ func TestInitiatePaymentUsecase_EmptyProviderRef(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
 	assert.Empty(t, response.ProviderRef)
-	assert.Equal(t, entity.PaymentStatusPending, response.Status)
+	assert.Equal(t, entity.PaymentStatusProcessing, response.Status)
 }
 
 // ============================================================

@@ -283,9 +283,9 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Mock : Provider échoue le remboursement
+	// ✅ CORRIGÉ : Ajout des 2 nouveaux paramètres (customerPhone, operator)
 	mockProvider.EXPECT().
-		Refund(gomock.Any(), "TXN-123", int64(50000)).
+		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
 		Return(errors.New("insufficient funds"))
 
 	req := createValidRefundRequest(successPayment.ID.String())
@@ -323,9 +323,9 @@ func TestRefundPaymentUsecase_Success_FullRefund(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Mock : Provider réussit le remboursement complet
+	// ✅ CORRIGÉ : Ajout des 2 nouveaux paramètres (customerPhone, operator)
 	mockProvider.EXPECT().
-		Refund(gomock.Any(), "TXN-123", int64(50000)).
+		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
 		Return(nil)
 
 	// Mock : Update réussit
@@ -365,9 +365,9 @@ func TestRefundPaymentUsecase_Success_PartialRefund(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
-	// Mock : Provider réussit le remboursement partiel (30000 sur 50000)
+	// ✅ CORRIGÉ : Ajout des 2 nouveaux paramètres (customerPhone, operator)
 	mockProvider.EXPECT().
-		Refund(gomock.Any(), "TXN-123", int64(30000)).
+		Refund(gomock.Any(), "TXN-123", int64(30000), gomock.Any(), gomock.Any()).
 		Return(nil)
 
 	// Mock : Update réussit
@@ -411,8 +411,9 @@ func TestRefundPaymentUsecase_Success_WithMetadata(t *testing.T) {
 		Get(entity.ProviderYengaPay).
 		Return(mockProvider, nil)
 
+	// ✅ CORRIGÉ : Ajout des 2 nouveaux paramètres (customerPhone, operator)
 	mockProvider.EXPECT().
-		Refund(gomock.Any(), "TXN-123", int64(50000)).
+		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
 		Return(nil)
 
 	// Mock : Update avec vérification des métadonnées

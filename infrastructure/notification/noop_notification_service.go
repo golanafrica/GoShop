@@ -113,3 +113,29 @@ func (s *NoopNotificationService) SendNotification(ctx context.Context, req *ser
 		Msg("📱 [NO-OP] Notification générique envoyée")
 	return nil
 }
+
+// ============================================================
+// 🆕 NOUVELLES MÉTHODES POUR LES LITIGES (NO-OP)
+// ============================================================
+
+// NotifyClientDisputeResolved logue la notification de résolution de litige au client
+func (s *NoopNotificationService) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
+	s.logger.Info().
+		Str("notification_type", "client_dispute_resolved").
+		Str("customer_id", customerID).
+		Str("order_id", orderID).
+		Str("resolution", resolution).
+		Msg("📱 [NO-OP] Notification client : litige résolu")
+	return nil
+}
+
+// NotifyMerchantDisputeResolved logue la notification de résolution de litige au marchand
+func (s *NoopNotificationService) NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error {
+	s.logger.Info().
+		Str("notification_type", "merchant_dispute_resolved").
+		Str("shop_id", shopID).
+		Str("order_id", orderID).
+		Str("resolution", resolution).
+		Msg("📱 [NO-OP] Notification marchand : litige résolu")
+	return nil
+}

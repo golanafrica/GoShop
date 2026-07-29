@@ -42,6 +42,20 @@ func (m *MockNotificationService) EXPECT() *MockNotificationServiceMockRecorder 
 	return m.recorder
 }
 
+// NotifyClientDisputeResolved mocks base method.
+func (m *MockNotificationService) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyClientDisputeResolved", ctx, customerID, orderID, resolution)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyClientDisputeResolved indicates an expected call of NotifyClientDisputeResolved.
+func (mr *MockNotificationServiceMockRecorder) NotifyClientDisputeResolved(ctx, customerID, orderID, resolution any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyClientDisputeResolved", reflect.TypeOf((*MockNotificationService)(nil).NotifyClientDisputeResolved), ctx, customerID, orderID, resolution)
+}
+
 // NotifyClientOrderConfirmed mocks base method.
 func (m *MockNotificationService) NotifyClientOrderConfirmed(ctx context.Context, order *entity.Order, customerPhone string) error {
 	m.ctrl.T.Helper()
@@ -124,6 +138,20 @@ func (m *MockNotificationService) NotifyMerchantDeliveryReady(ctx context.Contex
 func (mr *MockNotificationServiceMockRecorder) NotifyMerchantDeliveryReady(ctx, shop, order any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyMerchantDeliveryReady", reflect.TypeOf((*MockNotificationService)(nil).NotifyMerchantDeliveryReady), ctx, shop, order)
+}
+
+// NotifyMerchantDisputeResolved mocks base method.
+func (m *MockNotificationService) NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyMerchantDisputeResolved", ctx, shopID, orderID, resolution)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyMerchantDisputeResolved indicates an expected call of NotifyMerchantDisputeResolved.
+func (mr *MockNotificationServiceMockRecorder) NotifyMerchantDisputeResolved(ctx, shopID, orderID, resolution any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyMerchantDisputeResolved", reflect.TypeOf((*MockNotificationService)(nil).NotifyMerchantDisputeResolved), ctx, shopID, orderID, resolution)
 }
 
 // NotifyMerchantOrderReceived mocks base method.

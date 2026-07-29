@@ -8,6 +8,7 @@ import (
 	shopdto "Goshop/application/dto/shop_dto"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	"Goshop/domain/entity"
+	mockrepo "Goshop/mocks/repository" // ✅ AJOUTÉ
 	mockusecase "Goshop/mocks/usecase"
 
 	"github.com/google/uuid"
@@ -99,10 +100,10 @@ func TestConfigurePaymentUsecase_Execute_InvalidShopID(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	req := validPaymentRequest("invalid-uuid")
 	userID := uuid.New()
@@ -117,10 +118,10 @@ func TestConfigurePaymentUsecase_Execute_IsOwnerError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -140,10 +141,10 @@ func TestConfigurePaymentUsecase_Execute_NotOwner(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -163,10 +164,10 @@ func TestConfigurePaymentUsecase_Execute_GetSettingsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -176,9 +177,9 @@ func TestConfigurePaymentUsecase_Execute_GetSettingsError(t *testing.T) {
 		IsOwner(gomock.Any(), shopID, userID).
 		Return(true, nil)
 
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(nil, errors.New("db error"))
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(nil, errors.New("db error"))
 
 	result, err := uc.Execute(context.Background(), req, userID)
 	assert.Error(t, err)
@@ -190,10 +191,10 @@ func TestConfigurePaymentUsecase_Execute_UpsertError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -204,13 +205,13 @@ func TestConfigurePaymentUsecase_Execute_UpsertError(t *testing.T) {
 		Return(true, nil)
 
 	settings := validPaymentSettings(shopID)
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(settings, nil)
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(settings, nil)
 
-	paymentRepo.EXPECT().
-		UpsertPaymentSettings(gomock.Any(), gomock.Any()).
-		Return(errors.New("db error"))
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				UpsertPaymentSettings(gomock.Any(), gomock.Any()).
+				Return(errors.New("db error"))
 
 	result, err := uc.Execute(context.Background(), req, userID)
 	assert.Error(t, err)
@@ -222,10 +223,10 @@ func TestConfigurePaymentUsecase_Execute_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -236,12 +237,12 @@ func TestConfigurePaymentUsecase_Execute_Success(t *testing.T) {
 		Return(true, nil)
 
 	settings := validPaymentSettings(shopID)
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(settings, nil)
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(settings, nil)
 
-	paymentRepo.EXPECT().
-		UpsertPaymentSettings(gomock.Any(), gomock.Any()).DoAndReturn(
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				UpsertPaymentSettings(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, s *entity.ShopPaymentSettings) error {
 			assert.True(t, s.CashOnDeliveryEnabled)
 			assert.Equal(t, 250, s.CashCommissionRate)
@@ -261,10 +262,10 @@ func TestConfigurePaymentUsecase_Execute_WithYengaPay(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -280,12 +281,12 @@ func TestConfigurePaymentUsecase_Execute_WithYengaPay(t *testing.T) {
 		Return(true, nil)
 
 	settings := validPaymentSettings(shopID)
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(settings, nil)
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(settings, nil)
 
-	paymentRepo.EXPECT().
-		UpsertPaymentSettings(gomock.Any(), gomock.Any()).DoAndReturn(
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				UpsertPaymentSettings(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, s *entity.ShopPaymentSettings) error {
 			assert.True(t, s.YengaPay.Enabled)
 			assert.Len(t, s.YengaPay.Operators, 2)
@@ -308,10 +309,10 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_InvalidShopID(t *testing.T) 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	userID := uuid.New()
 	result, err := uc.GetPaymentSettings(context.Background(), "invalid-uuid", userID)
@@ -324,10 +325,10 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_NotOwner(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -346,10 +347,10 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_RepoError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -358,9 +359,9 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_RepoError(t *testing.T) {
 		IsOwner(gomock.Any(), shopID, userID).
 		Return(true, nil)
 
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(nil, errors.New("db error"))
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(nil, errors.New("db error"))
 
 	result, err := uc.GetPaymentSettings(context.Background(), shopID.String(), userID)
 	assert.Error(t, err)
@@ -372,10 +373,10 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	paymentRepo := mockusecase.NewMockShopPaymentSettingsRepository(ctrl)
+	shopRepo := mockrepo.NewMockShopRepository(ctrl) // ✅ CORRIGÉ
 	ownerVerifier := mockusecase.NewMockShopOwnerVerifier(ctrl)
 
-	uc := shopusecase.NewConfigurePaymentUsecase(nil, paymentRepo, ownerVerifier)
+	uc := shopusecase.NewConfigurePaymentUsecase(nil, shopRepo, ownerVerifier)
 
 	shopID := uuid.New()
 	userID := uuid.New()
@@ -391,9 +392,9 @@ func TestConfigurePaymentUsecase_GetPaymentSettings_Success(t *testing.T) {
 		Enabled:   true,
 		Operators: []string{"orange_money"},
 	}
-	paymentRepo.EXPECT().
-		GetPaymentSettings(gomock.Any(), shopID).
-		Return(settings, nil)
+	shopRepo.EXPECT(). // ✅ CORRIGÉ
+				GetPaymentSettings(gomock.Any(), shopID).
+				Return(settings, nil)
 
 	result, err := uc.GetPaymentSettings(context.Background(), shopID.String(), userID)
 	assert.NoError(t, err)

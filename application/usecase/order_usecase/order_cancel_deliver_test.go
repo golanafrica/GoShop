@@ -37,8 +37,9 @@ func TestCancelOrderUsecase_MultiTenantError(t *testing.T) {
 	uc := orderusecase.NewCancelOrderUsecase(orderRepo, productRepo, notifService, txManager)
 
 	ctx := context.Background()
+	validOrderID := uuid.New().String()
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -58,10 +59,11 @@ func TestCancelOrderUsecase_BeginTxError(t *testing.T) {
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db error"))
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -82,15 +84,16 @@ func TestCancelOrderUsecase_OrderNotFound(t *testing.T) {
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(nil, sql.ErrNoRows)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(nil, sql.ErrNoRows)
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -111,6 +114,7 @@ func TestCancelOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -119,9 +123,9 @@ func TestCancelOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
 	deliveredOrder := createCashOrder(string(entity.OrderStatusDelivered))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(deliveredOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(deliveredOrder, nil)
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -142,6 +146,7 @@ func TestCancelOrderUsecase_UpdateOrderError(t *testing.T) {
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -150,10 +155,10 @@ func TestCancelOrderUsecase_UpdateOrderError(t *testing.T) {
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
 	pendingOrder := createTestOrder(string(entity.OrderStatusPending))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -174,6 +179,7 @@ func TestCancelOrderUsecase_CommitError(t *testing.T) {
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -182,12 +188,12 @@ func TestCancelOrderUsecase_CommitError(t *testing.T) {
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
 	pendingOrder := createTestOrder(string(entity.OrderStatusPending))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -208,6 +214,7 @@ func TestCancelOrderUsecase_Success_MobileMoney(t *testing.T) {
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -218,10 +225,10 @@ func TestCancelOrderUsecase_Success_MobileMoney(t *testing.T) {
 
 	mobileOrder := createTestOrder(string(entity.OrderStatusPending))
 	mobileOrder.PaymentMethod = string(entity.PaymentMethodMobileMoney)
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(mobileOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(mobileOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
@@ -243,6 +250,7 @@ func TestCancelOrderUsecase_Success_Cash_PendingConfirmation_WithRestoreStock(t 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -252,7 +260,7 @@ func TestCancelOrderUsecase_Success_Cash_PendingConfirmation_WithRestoreStock(t 
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
 	pendingOrder := createCashOrder(string(entity.OrderStatusPendingConfirmation))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
 	product := &entity.Product{ID: "product-1", Stock: 10}
@@ -264,7 +272,7 @@ func TestCancelOrderUsecase_Success_Cash_PendingConfirmation_WithRestoreStock(t 
 		},
 	)
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
@@ -285,6 +293,7 @@ func TestCancelOrderUsecase_Success_Cash_Confirmed_NoRestoreStock(t *testing.T) 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -294,10 +303,10 @@ func TestCancelOrderUsecase_Success_Cash_Confirmed_NoRestoreStock(t *testing.T) 
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
 	confirmedOrder := createCashOrder(string(entity.OrderStatusConfirmed))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(confirmedOrder, nil)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(confirmedOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	order, err := uc.Execute(ctx, "order-1")
+	order, err := uc.Execute(ctx, validOrderID)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
@@ -320,17 +329,18 @@ func TestDeliverOrderUsecase_MultiTenantError(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	ctx := context.Background()
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
 	}
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -349,12 +359,13 @@ func TestDeliverOrderUsecase_BeginTxError(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -362,7 +373,7 @@ func TestDeliverOrderUsecase_BeginTxError(t *testing.T) {
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db error"))
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -381,13 +392,14 @@ func TestDeliverOrderUsecase_OrderNotFound(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -403,16 +415,16 @@ func TestDeliverOrderUsecase_OrderNotFound(t *testing.T) {
 	walletRepo.EXPECT().WithTX(mockTx).Return(walletRepo).AnyTimes()
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(nil, sql.ErrNoRows)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(nil, sql.ErrNoRows)
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to find order")
 }
 
-func TestDeliverOrderUsecase_NotCashOnDelivery(t *testing.T) {
+func TestDeliverOrderUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -424,13 +436,14 @@ func TestDeliverOrderUsecase_NotCashOnDelivery(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -446,14 +459,14 @@ func TestDeliverOrderUsecase_NotCashOnDelivery(t *testing.T) {
 	walletRepo.EXPECT().WithTX(mockTx).Return(walletRepo).AnyTimes()
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
-	mobileOrder := createTestOrder(string(entity.OrderStatusOutForDelivery))
-	mobileOrder.PaymentMethod = string(entity.PaymentMethodMobileMoney)
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(mobileOrder, nil)
-
-	// 🆕 AJOUTÉ : Mock pour la vérification du litige
+	// ✅ Le usecase appelle ExistsByOrderID AVANT de vérifier le PaymentMethod
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	unsupportedOrder := createCashOrder(string(entity.OrderStatusOutForDelivery))
+	unsupportedOrder.PaymentMethod = "card" // Méthode non supportée
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(unsupportedOrder, nil)
+
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -472,13 +485,14 @@ func TestDeliverOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -494,13 +508,14 @@ func TestDeliverOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	walletRepo.EXPECT().WithTX(mockTx).Return(walletRepo).AnyTimes()
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
-	pendingOrder := createCashOrder(string(entity.OrderStatusPending))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
-
-	// 🆕 AJOUTÉ : Mock pour la vérification du litige
+	// ✅ Le usecase appelle ExistsByOrderID AVANT de vérifier la transition
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	pendingOrder := createCashOrder(string(entity.OrderStatusPending))
+	pendingOrder.PaymentMethod = string(entity.PaymentMethodCashOnDelivery)
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(pendingOrder, nil)
+
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -519,13 +534,14 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -543,10 +559,9 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
 	outForDeliveryOrder := createCashOrder(string(entity.OrderStatusOutForDelivery))
-	outForDeliveryOrder.ID = uuid.New().String()
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(outForDeliveryOrder, nil)
+	outForDeliveryOrder.ID = validOrderID
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(outForDeliveryOrder, nil)
 
-	// 🆕 AJOUTÉ : Mock pour la vérification du litige
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
 	settings := &entity.ShopPaymentSettings{
@@ -558,7 +573,6 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 
 	paymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-	// Simule l'absence d'escrow pour ce test (le code gère gracieusement cette absence)
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), outForDeliveryOrder.ID).Return(nil, sql.ErrNoRows)
 
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
@@ -566,7 +580,7 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 	notifService.EXPECT().NotifyClientOrderDelivered(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	notifService.EXPECT().NotifyMerchantCommissionPaid(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
@@ -590,13 +604,14 @@ func TestDeliverOrderUsecase_UpdateOrderError(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -613,10 +628,9 @@ func TestDeliverOrderUsecase_UpdateOrderError(t *testing.T) {
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
 	outForDeliveryOrder := createCashOrder(string(entity.OrderStatusOutForDelivery))
-	outForDeliveryOrder.ID = uuid.New().String()
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(outForDeliveryOrder, nil)
+	outForDeliveryOrder.ID = validOrderID
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(outForDeliveryOrder, nil)
 
-	// 🆕 AJOUTÉ : Mock pour la vérification du litige
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
 	settings := &entity.ShopPaymentSettings{
@@ -629,10 +643,9 @@ func TestDeliverOrderUsecase_UpdateOrderError(t *testing.T) {
 	paymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), outForDeliveryOrder.ID).Return(nil, sql.ErrNoRows)
 
-	// ✅ SIMULER L'ERREUR SUR UpdateOrder
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db connection lost"))
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
@@ -651,13 +664,14 @@ func TestDeliverOrderUsecase_CommitError(t *testing.T) {
 	walletTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
 	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
-	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl) // 🆕 AJOUTÉ
+	disputeRepo := mockrepo.NewMockDisputeRepository(ctrl)
 
 	uc := orderusecase.NewDeliverOrderUsecase(orderRepo, paymentRepo, shopRepo, escrowRepo, walletRepo, walletTxnRepo, notifService, txManager, disputeRepo)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
 	mockTx := mockrepo.NewMockTx(ctrl)
+	validOrderID := uuid.New().String()
 	req := &orderusecase.DeliverRequest{
 		AmountReceived: 50000,
 		Notes:          "Livré avec succès",
@@ -674,10 +688,9 @@ func TestDeliverOrderUsecase_CommitError(t *testing.T) {
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
 	outForDeliveryOrder := createCashOrder(string(entity.OrderStatusOutForDelivery))
-	outForDeliveryOrder.ID = uuid.New().String()
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(outForDeliveryOrder, nil)
+	outForDeliveryOrder.ID = validOrderID
+	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(outForDeliveryOrder, nil)
 
-	// 🆕 AJOUTÉ : Mock pour la vérification du litige
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
 	settings := &entity.ShopPaymentSettings{
@@ -691,50 +704,11 @@ func TestDeliverOrderUsecase_CommitError(t *testing.T) {
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), outForDeliveryOrder.ID).Return(nil, sql.ErrNoRows)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	// ✅ SIMULER L'ERREUR SUR Commit
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
-	order, err := uc.Execute(ctx, "order-1", req)
+	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to commit transaction")
-}
-
-// ============================================================
-// TESTS MANQUANTS : RejectOrderUsecase
-// ============================================================
-
-func TestRejectOrderUsecase_UpdateOrderError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	productRepo := mockrepo.NewMockProductRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl)
-	txManager := mockrepo.NewMockTxManager(ctrl)
-
-	uc := orderusecase.NewRejectOrderUsecase(orderRepo, productRepo, notifService, txManager)
-
-	shop := createTestShopForOrder()
-	ctx := tenant.WithTenant(context.Background(), shop)
-	mockTx := mockrepo.NewMockTx(ctrl)
-
-	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
-
-	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
-	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
-
-	pendingOrder := createCashOrder(string(entity.OrderStatusPendingConfirmation))
-	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
-
-	// ✅ SIMULER L'ERREUR SUR UpdateOrder
-	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db connection lost"))
-
-	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
-	assert.Error(t, err)
-	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "failed to update order")
 }

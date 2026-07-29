@@ -101,16 +101,17 @@ func (m *mockProviderAndCompletableRecorder) ValidateWebhook(ctx, payload, signa
 	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "ValidateWebhook", reflect.TypeOf((*mockProviderAndCompletable)(nil).ValidateWebhook), ctx, payload, signature)
 }
 
-func (m *mockProviderAndCompletable) Refund(ctx context.Context, providerRef string, amountCents int64) error {
+// ✅ CORRIGÉ : Ajout de customerPhone et operator
+func (m *mockProviderAndCompletable) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone, operator string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents)
+	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents, customerPhone, operator)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (m *mockProviderAndCompletableRecorder) Refund(ctx, providerRef, amountCents interface{}) *gomock.Call {
+func (m *mockProviderAndCompletableRecorder) Refund(ctx, providerRef, amountCents, customerPhone, operator interface{}) *gomock.Call {
 	m.mock.ctrl.T.Helper()
-	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "Refund", reflect.TypeOf((*mockProviderAndCompletable)(nil).Refund), ctx, providerRef, amountCents)
+	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "Refund", reflect.TypeOf((*mockProviderAndCompletable)(nil).Refund), ctx, providerRef, amountCents, customerPhone, operator)
 }
 
 func (m *mockProviderAndCompletable) IsAvailable(ctx context.Context) bool {
@@ -138,230 +139,6 @@ func (m *mockProviderAndCompletable) CompletePayment(ctx context.Context, paymen
 func (m *mockProviderAndCompletableRecorder) CompletePayment(ctx, paymentIntentID, operatorCode, customerMSISDN, otp interface{}) *gomock.Call {
 	m.mock.ctrl.T.Helper()
 	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "CompletePayment", reflect.TypeOf((*mockProviderAndCompletable)(nil).CompletePayment), ctx, paymentIntentID, operatorCode, customerMSISDN, otp)
-}
-
-// ============================================================
-// HELPERS
-// ============================================================
-
-func createProcessingPaymentWithMetadata(shopID uuid.UUID, amountCents int64) *entity.Payment {
-	payment, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, amountCents)
-	payment.MarkProcessing()
-
-	phone := "+22670123456"
-	payment.CustomerPhone = &phone
-	payment.Metadata = map[string]interface{}{
-		"operator": "ORANGE",
-	}
-
-	return payment
-}
-
-func createValidCompleteRequest(paymentID string) *paymentdto.CompletePaymentRequest {
-	return &paymentdto.CompletePaymentRequest{
-		PaymentID: paymentID,
-		OTP:       "123456",
-	}
-}
-
-// ============================================================
-// TESTS : CompletePaymentUsecase - Multi-tenant
-// ============================================================
-
-func TestCompletePaymentUsecase_MultiTenantError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION : Ajout des nouveaux paramètres (nil pour ceux non testés ici)
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := context.Background()
-	req := createValidCompleteRequest(uuid.New().String())
-
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "multi-tenant")
-}
-
-// ============================================================
-// TESTS : CompletePaymentUsecase - Validation
-// ============================================================
-
-func TestCompletePaymentUsecase_InvalidPaymentID(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-	req := &paymentdto.CompletePaymentRequest{
-		PaymentID: "invalid-uuid",
-		OTP:       "123456",
-	}
-
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "invalid payment_id format")
-}
-
-// ============================================================
-// TESTS : CompletePaymentUsecase - Repository errors
-// ============================================================
-
-func TestCompletePaymentUsecase_PaymentNotFound(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-	paymentID := uuid.New()
-
-	mockPaymentRepo.EXPECT().
-		FindByID(gomock.Any(), paymentID).
-		Return(nil, errors.New("payment not found"))
-
-	req := createValidCompleteRequest(paymentID.String())
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "payment not found")
-}
-
-// ============================================================
-// TESTS : CompletePaymentUsecase - Règles métier
-// ============================================================
-
-func TestCompletePaymentUsecase_PaymentNotBelongToShop(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-
-	otherShopID := uuid.New()
-	wrongShopPayment := createProcessingPaymentWithMetadata(otherShopID, 50000)
-
-	mockPaymentRepo.EXPECT().
-		FindByID(gomock.Any(), wrongShopPayment.ID).
-		Return(wrongShopPayment, nil)
-
-	req := createValidCompleteRequest(wrongShopPayment.ID.String())
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "does not belong to current shop")
-}
-
-func TestCompletePaymentUsecase_PaymentNotProcessing(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-	shop, _ := tenant.FromContext(ctx)
-
-	pendingPayment, _ := entity.NewPayment(shop.ID, uuid.New(), entity.ProviderYengaPay, 50000)
-
-	mockPaymentRepo.EXPECT().
-		FindByID(gomock.Any(), pendingPayment.ID).
-		Return(pendingPayment, nil)
-
-	req := createValidCompleteRequest(pendingPayment.ID.String())
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "not in processing state")
-}
-
-func TestCompletePaymentUsecase_ProviderNotAvailable(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-	shop, _ := tenant.FromContext(ctx)
-
-	processingPayment := createProcessingPaymentWithMetadata(shop.ID, 50000)
-
-	mockPaymentRepo.EXPECT().
-		FindByID(gomock.Any(), processingPayment.ID).
-		Return(processingPayment, nil)
-
-	mockRegistry.EXPECT().
-		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
-		Return(nil, errors.New("provider not available"))
-
-	req := createValidCompleteRequest(processingPayment.ID.String())
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "provider not available")
-}
-
-func TestCompletePaymentUsecase_ProviderNotCompletable(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
-	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-
-	// ✅ CORRECTION
-	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
-
-	ctx := createTestContextForPayment()
-	shop, _ := tenant.FromContext(ctx)
-
-	processingPayment := createProcessingPaymentWithMetadata(shop.ID, 50000)
-
-	mockPaymentRepo.EXPECT().
-		FindByID(gomock.Any(), processingPayment.ID).
-		Return(processingPayment, nil)
-
-	mockRegistry.EXPECT().
-		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
-		Return(newMockProviderOnly(ctrl), nil)
-
-	req := createValidCompleteRequest(processingPayment.ID.String())
-	response, err := uc.Execute(ctx, req)
-
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "does not support payment completion")
 }
 
 // ============================================================
@@ -438,16 +215,17 @@ func (m *mockProviderOnlyRecorder) ValidateWebhook(ctx, payload, signature inter
 	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "ValidateWebhook", reflect.TypeOf((*mockProviderOnly)(nil).ValidateWebhook), ctx, payload, signature)
 }
 
-func (m *mockProviderOnly) Refund(ctx context.Context, providerRef string, amountCents int64) error {
+// ✅ CORRIGÉ : Ajout de customerPhone et operator
+func (m *mockProviderOnly) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone, operator string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents)
+	ret := m.ctrl.Call(m, "Refund", ctx, providerRef, amountCents, customerPhone, operator)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-func (m *mockProviderOnlyRecorder) Refund(ctx, providerRef, amountCents interface{}) *gomock.Call {
+func (m *mockProviderOnlyRecorder) Refund(ctx, providerRef, amountCents, customerPhone, operator interface{}) *gomock.Call {
 	m.mock.ctrl.T.Helper()
-	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "Refund", reflect.TypeOf((*mockProviderOnly)(nil).Refund), ctx, providerRef, amountCents)
+	return m.mock.ctrl.RecordCallWithMethodType(m.mock, "Refund", reflect.TypeOf((*mockProviderOnly)(nil).Refund), ctx, providerRef, amountCents, customerPhone, operator)
 }
 
 func (m *mockProviderOnly) IsAvailable(ctx context.Context) bool {
@@ -463,6 +241,223 @@ func (m *mockProviderOnlyRecorder) IsAvailable(ctx interface{}) *gomock.Call {
 }
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+func createProcessingPaymentWithMetadata(shopID uuid.UUID, amountCents int64) *entity.Payment {
+	payment, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, amountCents)
+	payment.MarkProcessing()
+
+	phone := "+22670123456"
+	payment.CustomerPhone = &phone
+	payment.Metadata = map[string]interface{}{
+		"operator": "ORANGE",
+	}
+
+	return payment
+}
+
+func createValidCompleteRequest(paymentID string) *paymentdto.CompletePaymentRequest {
+	return &paymentdto.CompletePaymentRequest{
+		PaymentID: paymentID,
+		OTP:       "123456",
+	}
+}
+
+// ============================================================
+// TESTS : CompletePaymentUsecase - Multi-tenant
+// ============================================================
+
+func TestCompletePaymentUsecase_MultiTenantError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := context.Background()
+	req := createValidCompleteRequest(uuid.New().String())
+
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "multi-tenant")
+}
+
+// ============================================================
+// TESTS : CompletePaymentUsecase - Validation
+// ============================================================
+
+func TestCompletePaymentUsecase_InvalidPaymentID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+	req := &paymentdto.CompletePaymentRequest{
+		PaymentID: "invalid-uuid",
+		OTP:       "123456",
+	}
+
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "invalid payment_id format")
+}
+
+// ============================================================
+// TESTS : CompletePaymentUsecase - Repository errors
+// ============================================================
+
+func TestCompletePaymentUsecase_PaymentNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+	paymentID := uuid.New()
+
+	mockPaymentRepo.EXPECT().
+		FindByID(gomock.Any(), paymentID).
+		Return(nil, errors.New("payment not found"))
+
+	req := createValidCompleteRequest(paymentID.String())
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "payment not found")
+}
+
+// ============================================================
+// TESTS : CompletePaymentUsecase - Règles métier
+// ============================================================
+
+func TestCompletePaymentUsecase_PaymentNotBelongToShop(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+
+	otherShopID := uuid.New()
+	wrongShopPayment := createProcessingPaymentWithMetadata(otherShopID, 50000)
+
+	mockPaymentRepo.EXPECT().
+		FindByID(gomock.Any(), wrongShopPayment.ID).
+		Return(wrongShopPayment, nil)
+
+	req := createValidCompleteRequest(wrongShopPayment.ID.String())
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "does not belong to current shop")
+}
+
+func TestCompletePaymentUsecase_PaymentNotProcessing(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+	shop, _ := tenant.FromContext(ctx)
+
+	pendingPayment, _ := entity.NewPayment(shop.ID, uuid.New(), entity.ProviderYengaPay, 50000)
+
+	mockPaymentRepo.EXPECT().
+		FindByID(gomock.Any(), pendingPayment.ID).
+		Return(pendingPayment, nil)
+
+	req := createValidCompleteRequest(pendingPayment.ID.String())
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "not in processing state")
+}
+
+func TestCompletePaymentUsecase_ProviderNotAvailable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+	shop, _ := tenant.FromContext(ctx)
+
+	processingPayment := createProcessingPaymentWithMetadata(shop.ID, 50000)
+
+	mockPaymentRepo.EXPECT().
+		FindByID(gomock.Any(), processingPayment.ID).
+		Return(processingPayment, nil)
+
+	mockRegistry.EXPECT().
+		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not available"))
+
+	req := createValidCompleteRequest(processingPayment.ID.String())
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "provider not available")
+}
+
+func TestCompletePaymentUsecase_ProviderNotCompletable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+
+	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
+
+	ctx := createTestContextForPayment()
+	shop, _ := tenant.FromContext(ctx)
+
+	processingPayment := createProcessingPaymentWithMetadata(shop.ID, 50000)
+
+	mockPaymentRepo.EXPECT().
+		FindByID(gomock.Any(), processingPayment.ID).
+		Return(processingPayment, nil)
+
+	mockRegistry.EXPECT().
+		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
+		Return(newMockProviderOnly(ctrl), nil)
+
+	req := createValidCompleteRequest(processingPayment.ID.String())
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "does not support payment completion")
+}
+
+// ============================================================
 // TESTS : CompletePaymentUsecase - Missing fields
 // ============================================================
 
@@ -474,7 +469,6 @@ func TestCompletePaymentUsecase_MissingMetadata(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -508,7 +502,6 @@ func TestCompletePaymentUsecase_MissingOperatorCode(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -544,7 +537,6 @@ func TestCompletePaymentUsecase_MissingCustomerPhone(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -581,7 +573,6 @@ func TestCompletePaymentUsecase_MissingProviderRef(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -624,7 +615,6 @@ func TestCompletePaymentUsecase_ProviderCompletionFailed(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -670,7 +660,6 @@ func TestCompletePaymentUsecase_Success(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
@@ -717,7 +706,6 @@ func TestCompletePaymentUsecase_UnexpectedStatus(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockCompletable := newMockProviderAndCompletable(ctrl)
 
-	// ✅ CORRECTION
 	uc := paymentusecase.NewCompletePaymentUsecase(mockPaymentRepo, nil, mockRegistry, nil, nil)
 
 	ctx := createTestContextForPayment()
