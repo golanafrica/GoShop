@@ -6,6 +6,7 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	userrepository "Goshop/domain/repository/user_repository" // 🆕 Import correct du UserRepository
 	"Goshop/domain/service"
 	wsinfra "Goshop/infrastructure/websocket"
 
@@ -15,27 +16,30 @@ import (
 
 // NotificationDispatcher implémente service.NotificationService
 type NotificationDispatcher struct {
-	wsHub        *wsinfra.Hub
-	emailSvc     service.EmailService
-	customerRepo repository.CustomerRepositoryInterface
-	shopRepo     repository.ShopRepository
-	logger       zerolog.Logger
+	wsHub         *wsinfra.Hub
+	emailProvider NotificationProvider
+	customerRepo  repository.CustomerRepositoryInterface
+	shopRepo      repository.ShopRepository
+	userRepo      userrepository.UserRepository // 🆕 Type corrigé
+	logger        zerolog.Logger
 }
 
 // NewNotificationDispatcher crée une nouvelle instance du dispatcher
 func NewNotificationDispatcher(
 	wsHub *wsinfra.Hub,
-	emailSvc service.EmailService,
+	emailProvider NotificationProvider,
 	customerRepo repository.CustomerRepositoryInterface,
 	shopRepo repository.ShopRepository,
+	userRepo userrepository.UserRepository, // 🆕 Type corrigé
 	logger zerolog.Logger,
 ) service.NotificationService {
 	return &NotificationDispatcher{
-		wsHub:        wsHub,
-		emailSvc:     emailSvc,
-		customerRepo: customerRepo,
-		shopRepo:     shopRepo,
-		logger:       logger.With().Str("component", "notification_dispatcher").Logger(),
+		wsHub:         wsHub,
+		emailProvider: emailProvider,
+		customerRepo:  customerRepo,
+		shopRepo:      shopRepo,
+		userRepo:      userRepo,
+		logger:        logger.With().Str("component", "notification_dispatcher").Logger(),
 	}
 }
 
@@ -52,7 +56,6 @@ func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, 
 		Data:    data,
 	}
 
-	// Envoi asynchrone (goroutine) pour ne jamais bloquer le usecase métier
 	go func() {
 		if err := d.wsHub.SendToUser(ctx, userID, msg); err != nil {
 			d.logger.Error().Err(err).Str("user_id", userID).Str("event", eventType).Msg("Failed to send WebSocket notification")
@@ -62,81 +65,154 @@ func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, 
 	}()
 }
 
+// sendEmailNotification envoie une notification par email de manière asynchrone
+func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, userEmail, title, message string, data map[string]interface{}) {
+	if d.emailProvider == nil || userEmail == "" {
+		return
+	}
+
+	go func() {
+		if err := d.emailProvider.SendClientNotification(ctx, userEmail, title, message, data); err != nil {
+			d.logger.Error().Err(err).Str("email", userEmail).Msg("Failed to send email notification")
+		} else {
+			d.logger.Info().Str("email", userEmail).Msg("Email notification sent successfully")
+		}
+	}()
+}
+
+// getUserEmail récupère l'email d'un utilisateur à partir de son CustomerID
+func (d *NotificationDispatcher) getUserEmail(ctx context.Context, customerID string) string {
+	if d.customerRepo == nil || customerID == "" {
+		return ""
+	}
+	customer, err := d.customerRepo.FindByCustomerID(ctx, customerID)
+	if err != nil || customer == nil || customer.UserID == "" {
+		return ""
+	}
+
+	if d.userRepo != nil {
+		// 🆕 CORRECTION : FindUserByID ne prend pas de context et retourne *userentity.UserEntity
+		user, err := d.userRepo.FindUserByID(customer.UserID)
+		if err == nil && user != nil {
+			return user.Email
+		}
+	}
+	return ""
+}
+
+// getShopEmail récupère l'email d'un marchand à partir de son ShopID
+func (d *NotificationDispatcher) getShopEmail(ctx context.Context, shopID uuid.UUID) string {
+	if d.shopRepo == nil {
+		return ""
+	}
+	shop, err := d.shopRepo.FindByID(ctx, shopID)
+	if err != nil || shop == nil || shop.OwnerID == "" {
+		return ""
+	}
+
+	if d.userRepo != nil {
+		// 🆕 CORRECTION : FindUserByID ne prend pas de context
+		user, err := d.userRepo.FindUserByID(shop.OwnerID)
+		if err == nil && user != nil {
+			return user.Email
+		}
+	}
+	return ""
+}
+
 // ============================================================
-// Implémentation des méthodes existantes
+// Implémentation des méthodes de service.NotificationService
 // ============================================================
 
 func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
 	title := "Nouvelle commande reçue"
 	message := fmt.Sprintf("Vous avez une nouvelle commande en attente (#%s).", order.ID)
-	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantOrderReceived), title, message, map[string]interface{}{"order_id": order.ID})
+	data := map[string]interface{}{"order_id": order.ID}
+
+	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantOrderReceived), title, message, data)
+	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyClientOrderConfirmed(ctx context.Context, order *entity.Order, customerPhone string) error {
 	title := "Commande confirmée"
 	message := "Votre commande a été acceptée par le marchand."
+	data := map[string]interface{}{"order_id": order.ID}
+
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
-	if userID == "" {
-		d.logger.Warn().Str("customer_id", order.CustomerID).Msg("Cannot send WS notification: no linked user_id")
-		return nil
+	if userID != "" {
+		d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderConfirmed), title, message, data)
 	}
-	d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderConfirmed), title, message, map[string]interface{}{"order_id": order.ID})
+	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyClientOrderRejected(ctx context.Context, order *entity.Order, customerPhone string, reason string) error {
 	title := "Commande refusée"
 	message := fmt.Sprintf("Votre commande a été refusée. Raison : %s", reason)
+	data := map[string]interface{}{"order_id": order.ID, "reason": reason}
+
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
-	if userID == "" {
-		d.logger.Warn().Str("customer_id", order.CustomerID).Msg("Cannot send WS notification: no linked user_id")
-		return nil
+	if userID != "" {
+		d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderRejected), title, message, data)
 	}
-	d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderRejected), title, message, map[string]interface{}{"order_id": order.ID, "reason": reason})
+	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyClientOrderExpired(ctx context.Context, order *entity.Order, customerPhone string) error {
 	title := "Commande expirée"
 	message := "Le délai de paiement de votre commande a expiré."
+	data := map[string]interface{}{"order_id": order.ID}
+
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
-	if userID == "" {
-		d.logger.Warn().Str("customer_id", order.CustomerID).Msg("Cannot send WS notification: no linked user_id")
-		return nil
+	if userID != "" {
+		d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderExpired), title, message, data)
 	}
-	d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderExpired), title, message, map[string]interface{}{"order_id": order.ID})
+	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyMerchantDeliveryReady(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
 	title := "Commande prête à être livrée"
 	message := fmt.Sprintf("La commande #%s est prête pour la livraison.", order.ID)
-	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantDeliveryReady), title, message, map[string]interface{}{"order_id": order.ID})
+	data := map[string]interface{}{"order_id": order.ID}
+
+	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantDeliveryReady), title, message, data)
+	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyClientOrderDelivered(ctx context.Context, order *entity.Order, customerPhone string, amountReceived int64) error {
 	title := "Commande livrée"
 	message := fmt.Sprintf("Votre commande a été livrée avec succès. Montant reçu : %d FCFA", amountReceived/100)
+	data := map[string]interface{}{"order_id": order.ID, "amount": amountReceived}
+
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
-	if userID == "" {
-		d.logger.Warn().Str("customer_id", order.CustomerID).Msg("Cannot send WS notification: no linked user_id")
-		return nil
+	if userID != "" {
+		d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderDelivered), title, message, data)
 	}
-	d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientOrderDelivered), title, message, map[string]interface{}{"order_id": order.ID, "amount": amountReceived})
+	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyMerchantCommissionPaid(ctx context.Context, shop *entity.Shop, order *entity.Order, commissionCents int64) error {
 	title := "Commission prélevée"
 	message := fmt.Sprintf("Une commission de %d FCFA a été prélevée sur la commande #%s.", commissionCents/100, order.ID)
-	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantCommissionPaid), title, message, map[string]interface{}{"order_id": order.ID, "commission": commissionCents})
+	data := map[string]interface{}{"order_id": order.ID, "commission": commissionCents}
+
+	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantCommissionPaid), title, message, data)
+	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *service.NotificationRequest) error {
-	d.sendWebSocketNotification(ctx, req.RecipientPhone, string(req.Type), string(req.Type), "Notification", req.Data)
+	title := string(req.Type)
+	message := "Notification"
+
+	// 🆕 CORRECTION : Ajout de string(req.Type) comme 3ème argument (eventType)
+	d.sendWebSocketNotification(ctx, req.RecipientPhone, string(req.Type), title, message, req.Data)
+	d.sendEmailNotification(ctx, req.RecipientEmail, title, message, req.Data)
 	return nil
 }
 
@@ -145,43 +221,36 @@ func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *serv
 // ============================================================
 
 func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
-	userID := d.getUserIDFromCustomerID(ctx, customerID)
-	if userID == "" {
-		d.logger.Warn().Str("customer_id", customerID).Msg("Cannot send WS notification: no linked user_id")
-		return nil
-	}
-
 	title := "Litige résolu"
 	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité. Statut : %s.", orderID, resolution)
+	data := map[string]interface{}{"order_id": orderID, "resolution": resolution}
 
-	d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientDisputeResolved), title, message, map[string]interface{}{
-		"order_id":   orderID,
-		"resolution": resolution,
-	})
+	userID := d.getUserIDFromCustomerID(ctx, customerID)
+	if userID != "" {
+		d.sendWebSocketNotification(ctx, userID, string(service.NotificationClientDisputeResolved), title, message, data)
+	}
+	d.sendEmailNotification(ctx, d.getUserEmail(ctx, customerID), title, message, data)
 	return nil
 }
 
 func (d *NotificationDispatcher) NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error {
-	// ✅ CORRECTION : Conversion du string shopID en uuid.UUID
 	shopUUID, err := uuid.Parse(shopID)
 	if err != nil {
-		d.logger.Warn().Err(err).Str("shop_id", shopID).Msg("Cannot send WS notification: invalid shop UUID")
-		return nil
-	}
-
-	shop, err := d.shopRepo.FindByID(ctx, shopUUID)
-	if err != nil || shop == nil {
-		d.logger.Warn().Err(err).Str("shop_id", shopID).Msg("Cannot send WS notification: shop not found")
+		d.logger.Warn().Err(err).Str("shop_id", shopID).Msg("Cannot send notification: invalid shop UUID")
 		return nil
 	}
 
 	title := "Litige résolu"
 	message := fmt.Sprintf("Le litige concernant la commande #%s a été traité. Statut : %s.", orderID, resolution)
+	data := map[string]interface{}{"order_id": orderID, "resolution": resolution}
 
-	d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantDisputeResolved), title, message, map[string]interface{}{
-		"order_id":   orderID,
-		"resolution": resolution,
-	})
+	shop, err := d.shopRepo.FindByID(ctx, shopUUID)
+	if err == nil && shop != nil {
+		d.sendWebSocketNotification(ctx, shop.OwnerID, string(service.NotificationMerchantDisputeResolved), title, message, data)
+		d.sendEmailNotification(ctx, d.getShopEmail(ctx, shopUUID), title, message, data)
+	} else {
+		d.logger.Warn().Err(err).Str("shop_id", shopID).Msg("Cannot send notification: shop not found")
+	}
 	return nil
 }
 
@@ -192,17 +261,14 @@ func (d *NotificationDispatcher) getUserIDFromCustomerID(ctx context.Context, cu
 	if d.customerRepo == nil || customerID == "" {
 		return ""
 	}
-
 	customer, err := d.customerRepo.FindByCustomerID(ctx, customerID)
 	if err != nil || customer == nil {
 		d.logger.Warn().Err(err).Str("customer_id", customerID).Msg("Failed to find customer to resolve user_id")
 		return ""
 	}
-
 	if customer.UserID == "" {
 		d.logger.Warn().Str("customer_id", customerID).Msg("Customer exists but has no linked user_id")
 		return ""
 	}
-
 	return customer.UserID
 }

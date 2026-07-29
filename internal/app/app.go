@@ -414,21 +414,31 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ v4.5.0 WebSocket Hub disabled (Redis not available)")
 	}
 
+	// ============ 🆕 v4.6.1 : EMAIL NOTIFICATION PROVIDER ============
+	emailNotifProvider := notification.NewEmailNotificationProvider(
+		emailService,
+		"GoShop",
+		os.Getenv("FRONTEND_URL"),
+		os.Getenv("ADMIN_EMAIL"),
+		a.Logger.Logger,
+	)
+	a.Logger.Info().Msg("✅ v4.6.1 Email notification provider initialized")
+
 	// ============ 🆕 v4.5.0 : NOTIFICATION DISPATCHER ============
-	// On l'initialise ICI, après que wsHub et emailService soient prêts
 	var notifService service.NotificationService
 	if wsHub != nil || emailService != nil {
 		notifService = notification.NewNotificationDispatcher(
 			wsHub,
-			emailService,
-			postgresCustomerRepo, // ✅ AJOUTÉ : Permet au dispatcher de résoudre le UserID depuis le CustomerID
+			emailNotifProvider,
+			postgresCustomerRepo,
 			shopRepo,
+			postgresUserRepo, // ✅ postgresUserRepo implémente bien userrepository.UserRepository
 			a.Logger.Logger,
 		)
-		a.Logger.Info().Msg("✅ v4.5.0 Notification Dispatcher initialized (WebSocket + Email)")
+		a.Logger.Info().Msg("✅ v4.6.1 Notification Dispatcher initialized (WebSocket + Email)")
 	} else {
 		notifService = notification.NewNoopNotificationService(a.Logger.Logger)
-		a.Logger.Warn().Msg("⚠️ v4.5.0 Notification Dispatcher using Noop (no WebSocket or Email configured)")
+		a.Logger.Warn().Msg("⚠️ v4.5.0 Notification Dispatcher using Noop")
 	}
 
 	// -- Usecases (existants)
