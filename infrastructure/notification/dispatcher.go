@@ -6,7 +6,7 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
-	userrepository "Goshop/domain/repository/user_repository" // 🆕 Import correct du UserRepository
+	userrepository "Goshop/domain/repository/user_repository"
 	"Goshop/domain/service"
 	wsinfra "Goshop/infrastructure/websocket"
 
@@ -20,7 +20,7 @@ type NotificationDispatcher struct {
 	emailProvider NotificationProvider
 	customerRepo  repository.CustomerRepositoryInterface
 	shopRepo      repository.ShopRepository
-	userRepo      userrepository.UserRepository // 🆕 Type corrigé
+	userRepo      userrepository.UserRepository
 	logger        zerolog.Logger
 }
 
@@ -30,7 +30,7 @@ func NewNotificationDispatcher(
 	emailProvider NotificationProvider,
 	customerRepo repository.CustomerRepositoryInterface,
 	shopRepo repository.ShopRepository,
-	userRepo userrepository.UserRepository, // 🆕 Type corrigé
+	userRepo userrepository.UserRepository,
 	logger zerolog.Logger,
 ) service.NotificationService {
 	return &NotificationDispatcher{
@@ -91,7 +91,6 @@ func (d *NotificationDispatcher) getUserEmail(ctx context.Context, customerID st
 	}
 
 	if d.userRepo != nil {
-		// 🆕 CORRECTION : FindUserByID ne prend pas de context et retourne *userentity.UserEntity
 		user, err := d.userRepo.FindUserByID(customer.UserID)
 		if err == nil && user != nil {
 			return user.Email
@@ -111,7 +110,6 @@ func (d *NotificationDispatcher) getShopEmail(ctx context.Context, shopID uuid.U
 	}
 
 	if d.userRepo != nil {
-		// 🆕 CORRECTION : FindUserByID ne prend pas de context
 		user, err := d.userRepo.FindUserByID(shop.OwnerID)
 		if err == nil && user != nil {
 			return user.Email
@@ -121,7 +119,50 @@ func (d *NotificationDispatcher) getShopEmail(ctx context.Context, shopID uuid.U
 }
 
 // ============================================================
-// Implémentation des méthodes de service.NotificationService
+// 🆕 MÉTHODE GÉNÉRIQUE POUR LES COMMANDES (Option A)
+// ============================================================
+
+// NotifyOrderStatusChange notifie le client et le marchand d'un changement de statut de commande.
+// Cette méthode est "fire-and-forget" : elle ne retourne jamais d'erreur pour ne pas bloquer le flux métier.
+// NotifyOrderStatusChange notifie le client et le marchand d'un changement de statut de commande.
+// Cette méthode est "fire-and-forget" : elle ne retourne jamais d'erreur pour ne pas bloquer le flux métier.
+func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error {
+	title, message := d.buildOrderStatusMessages(string(order.Status))
+	data := map[string]interface{}{
+		"order_id": order.ID,
+		"status":   order.Status,
+	}
+
+	// 🆕 1. Récupérer les infos du client AVANT la goroutine, en utilisant le contexte original (qui contient le tenant)
+	userID := d.getUserIDFromCustomerID(ctx, customerID)
+	userEmail := d.getUserEmail(ctx, customerID)
+
+	// 2. Notification au Client (Asynchrone)
+	go func() {
+		bgCtx := context.Background()
+		if userID != "" {
+			eventType := "client_order_" + string(order.Status)
+			d.sendWebSocketNotification(bgCtx, userID, eventType, title, message, data)
+			d.sendEmailNotification(bgCtx, userEmail, title, message, data)
+		}
+	}()
+
+	// 3. Notification au Marchand (Asynchrone)
+	go func() {
+		bgCtx := context.Background()
+		shop, err := d.shopRepo.FindByID(bgCtx, shopID)
+		if err == nil && shop != nil {
+			eventType := "merchant_order_" + string(order.Status)
+			d.sendWebSocketNotification(bgCtx, shop.OwnerID, eventType, title, message, data)
+			d.sendEmailNotification(bgCtx, d.getShopEmail(bgCtx, shop.ID), title, message, data)
+		}
+	}()
+
+	return nil
+}
+
+// ============================================================
+// MÉTHODES EXISTANTES (Litiges, etc.)
 // ============================================================
 
 func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
@@ -210,15 +251,10 @@ func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *serv
 	title := string(req.Type)
 	message := "Notification"
 
-	// 🆕 CORRECTION : Ajout de string(req.Type) comme 3ème argument (eventType)
 	d.sendWebSocketNotification(ctx, req.RecipientPhone, string(req.Type), title, message, req.Data)
 	d.sendEmailNotification(ctx, req.RecipientEmail, title, message, req.Data)
 	return nil
 }
-
-// ============================================================
-// 🆕 NOUVELLES MÉTHODES POUR LES LITIGES
-// ============================================================
 
 func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
 	title := "Litige résolu"
@@ -255,8 +291,9 @@ func (d *NotificationDispatcher) NotifyMerchantDisputeResolved(ctx context.Conte
 }
 
 // ============================================================
-// HELPER : Fait le pont entre CustomerID et UserID
+// HELPERS
 // ============================================================
+
 func (d *NotificationDispatcher) getUserIDFromCustomerID(ctx context.Context, customerID string) string {
 	if d.customerRepo == nil || customerID == "" {
 		return ""
@@ -271,4 +308,18 @@ func (d *NotificationDispatcher) getUserIDFromCustomerID(ctx context.Context, cu
 		return ""
 	}
 	return customer.UserID
+}
+
+// buildOrderStatusMessages génère le titre et le message en fonction du statut
+func (d *NotificationDispatcher) buildOrderStatusMessages(status string) (string, string) {
+	switch status {
+	case "confirmed":
+		return "Commande confirmée", "Votre commande a été confirmée et est en cours de préparation."
+	case "out_for_delivery":
+		return "Commande en cours de livraison", "Votre commande a été expédiée et est en chemin."
+	case "delivered":
+		return "Commande livrée", "Votre commande a été livrée avec succès. Merci de votre confiance !"
+	default:
+		return "Mise à jour de commande", fmt.Sprintf("Le statut de votre commande est maintenant : %s.", status)
+	}
 }

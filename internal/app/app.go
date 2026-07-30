@@ -552,6 +552,7 @@ func (a *App) setupRouter() {
 	outForDeliveryUC := orderusecase.NewOutForDeliveryUsecase(
 		postgresOrderRepo,
 		txmanagerRepo,
+		notifService,
 	)
 
 	deliverOrderUC := orderusecase.NewDeliverOrderUsecase(
@@ -866,11 +867,14 @@ func (a *App) setupRouter() {
 		walletRepo,
 		walletTxnRepo,
 		txmanagerRepo,
-		paymentRepo,       // 🆕 AJOUTÉ : pour retrouver la transaction à rembourser
-		paymentRegistry,   // 🆕 AJOUTÉ : pour appeler la méthode Refund du provider
-		postgresOrderRepo, // 🆕 AJOUTE CET ARGUMENT
+		paymentRepo,
+		paymentRegistry,
+		postgresOrderRepo,
 		notifService,
 	)
+
+	// 🆕 AJOUT : Admin Dispute Usecase pour le dashboard
+	adminDisputeUC := disputeusecase.NewAdminDisputeUsecase(disputeRepo)
 
 	a.Logger.Info().Msg("✅ v4.6.0 Dispute usecases initialized")
 
@@ -1136,6 +1140,7 @@ func (a *App) setupRouter() {
 	disputeHandler := disputehandler.NewDisputeHandler(
 		openDisputeUC,
 		resolveDisputeUC,
+		adminDisputeUC, // 🆕 AJOUTÉ
 		disputeRepo,
 	)
 
@@ -1431,6 +1436,10 @@ func (a *App) setupRouter() {
 		// ============ 🆕 v4.6.0 : ADMIN DISPUTE ROUTES ============
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(middl.RequireRoles("super_admin", "admin"))
+
+			// 🆕 Dashboard Admin : Liste et détails des litiges
+			r.Get("/disputes", middl.ErrorHandler(disputeHandler.GetAllDisputes))
+			r.Get("/disputes/{id}", middl.ErrorHandler(disputeHandler.GetDisputeByID))
 
 			// Résoudre un litige par dispute_id
 			r.Post("/disputes/{id}/resolve", middl.ErrorHandler(disputeHandler.ResolveDispute))

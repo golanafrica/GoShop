@@ -326,3 +326,60 @@ func (r *DisputeRepositoryPostgres) scanDisputes(rows *sql.Rows) ([]*entity.Disp
 
 	return disputes, nil
 }
+
+// ============================================================
+// 🆕 MÉTHODES POUR LE DASHBOARD ADMIN
+// ============================================================
+
+// FindAll retourne la liste des litiges avec pagination et filtre optionnel par statut
+func (r *DisputeRepositoryPostgres) FindAll(ctx context.Context, status string, limit, offset int) ([]*entity.Dispute, int, error) {
+	// 1. Construire la requête de comptage dynamiquement
+	countQuery := `SELECT COUNT(*) FROM disputes WHERE 1=1`
+	var countArgs []interface{}
+	argPos := 1
+
+	if status != "" {
+		countQuery += fmt.Sprintf(" AND status = $%d", argPos)
+		countArgs = append(countArgs, status)
+		argPos++
+	}
+
+	var count int
+	err := r.queryRowContext(ctx, countQuery, countArgs...).Scan(&count)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count disputes: %w", err)
+	}
+
+	// 2. Construire la requête de sélection dynamiquement
+	query := `
+		SELECT id, order_id, shop_id, payment_id, initiator_id, initiator_role, 
+		       reason, status, resolution_notes, created_at, updated_at
+		FROM disputes
+		WHERE 1=1
+	`
+	var args []interface{}
+	queryArgPos := 1
+
+	if status != "" {
+		query += fmt.Sprintf(" AND status = $%d", queryArgPos)
+		args = append(args, status)
+		queryArgPos++
+	}
+
+	query += " ORDER BY created_at DESC"
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", queryArgPos, queryArgPos+1)
+	args = append(args, limit, offset)
+
+	rows, err := r.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query disputes: %w", err)
+	}
+	defer rows.Close()
+
+	disputes, err := r.scanDisputes(rows)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to scan disputes: %w", err)
+	}
+
+	return disputes, count, nil
+}

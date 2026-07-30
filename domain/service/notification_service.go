@@ -6,6 +6,8 @@ import (
 	"context"
 
 	"Goshop/domain/entity"
+
+	"github.com/google/uuid"
 )
 
 // NotificationType représente le type de notification
@@ -50,4 +52,7 @@ type NotificationService interface {
 	NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error
 
 	SendNotification(ctx context.Context, req *NotificationRequest) error
+
+	// 🆕 AJOUT : Méthode générique pour les changements de statut de commande (Option A)
+	NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error
 }

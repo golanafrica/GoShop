@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	disputeusecase "Goshop/application/usecase/dispute_usecase"
 	"Goshop/domain/entity"
@@ -19,20 +20,27 @@ import (
 type DisputeHandler struct {
 	openDisputeUC    *disputeusecase.OpenDisputeUsecase
 	resolveDisputeUC *disputeusecase.ResolveDisputeUsecase
+	adminDisputeUC   *disputeusecase.AdminDisputeUsecase // 🆕 AJOUTÉ
 	disputeRepo      repository.DisputeRepository
 }
 
 func NewDisputeHandler(
 	openDisputeUC *disputeusecase.OpenDisputeUsecase,
 	resolveDisputeUC *disputeusecase.ResolveDisputeUsecase,
+	adminDisputeUC *disputeusecase.AdminDisputeUsecase, // 🆕 AJOUTÉ
 	disputeRepo repository.DisputeRepository,
 ) *DisputeHandler {
 	return &DisputeHandler{
 		openDisputeUC:    openDisputeUC,
 		resolveDisputeUC: resolveDisputeUC,
+		adminDisputeUC:   adminDisputeUC, // 🆕 AJOUTÉ
 		disputeRepo:      disputeRepo,
 	}
 }
+
+// ============================================================
+// ROUTES UTILISATEUR / MARCHAND
+// ============================================================
 
 // OpenDispute permet à un client ou un marchand d'ouvrir un litige sur une commande
 func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) error {
@@ -40,13 +48,11 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 	logger := zerolog.Ctx(ctx)
 	orderID := chi.URLParam(r, "id")
 
-	// Récupération du tenant (boutique) depuis le contexte
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return fmt.Errorf("unauthorized: %w", err)
 	}
 
-	// Récupération de l'ID de l'utilisateur connecté
 	userIDStr, ok := utils.UserIDFromContext(ctx)
 	if !ok || userIDStr == "" {
 		return fmt.Errorf("unauthorized: user ID not found in context")
@@ -70,7 +76,7 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 
 	disputeReq := &disputeusecase.OpenDisputeRequest{
 		OrderID:       orderID,
-		ShopID:        shop.ID, // ✅ On passe directement l'ID de la boutique du contexte
+		ShopID:        shop.ID,
 		InitiatorID:   initiatorID,
 		InitiatorRole: "customer",
 		Reason:        req.Reason,
@@ -85,6 +91,65 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Dispute opened successfully",
 		"dispute": dispute,
+	})
+	return nil
+}
+
+// ============================================================
+// ROUTES ADMIN
+// ============================================================
+
+// GetAllDisputes retourne la liste paginée des litiges (Admin)
+// ✅ CORRECTION : La méthode retourne maintenant une 'error' pour être compatible avec middl.ErrorHandler
+func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) error {
+	status := r.URL.Query().Get("status")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 20
+	}
+
+	offset, _ := strconv.Atoi(offsetStr)
+	if offset < 0 {
+		offset = 0
+	}
+
+	req := &disputeusecase.GetAllDisputesRequest{
+		Status: status,
+		Limit:  limit,
+		Offset: offset,
+	}
+
+	disputes, total, err := h.adminDisputeUC.GetAllDisputes(r.Context(), req)
+	if err != nil {
+		return fmt.Errorf("failed to fetch disputes: %w", err)
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    disputes,
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	})
+	return nil
+}
+
+// GetDisputeByID retourne les détails d'un litige spécifique (Admin)
+// ✅ CORRECTION : La méthode retourne maintenant une 'error' pour être compatible avec middl.ErrorHandler
+func (h *DisputeHandler) GetDisputeByID(w http.ResponseWriter, r *http.Request) error {
+	id := chi.URLParam(r, "id")
+
+	dispute, err := h.adminDisputeUC.GetDisputeByID(r.Context(), id)
+	if err != nil {
+		return fmt.Errorf("dispute not found: %w", err)
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"data":    dispute,
 	})
 	return nil
 }
@@ -166,7 +231,6 @@ func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Re
 		return utils.NewAppError("INVALID_RESOLUTION", "resolution must be 'merchant_wins' or 'customer_wins'", http.StatusBadRequest)
 	}
 
-	// 1. Retrouver le litige associé à cette commande
 	dispute, err := h.disputeRepo.FindByOrderID(ctx, orderID)
 	if err != nil || dispute == nil {
 		return utils.NewAppError("DISPUTE_NOT_FOUND", "no active dispute found for this order", http.StatusNotFound)
@@ -185,7 +249,6 @@ func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Re
 		return fmt.Errorf("invalid user ID in context: %w", err)
 	}
 
-	// 2. Appeler le usecase de résolution
 	resolveReq := &disputeusecase.ResolveDisputeRequest{
 		DisputeID:  dispute.ID,
 		Resolution: req.Resolution,

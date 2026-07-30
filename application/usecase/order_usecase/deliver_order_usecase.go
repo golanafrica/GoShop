@@ -24,7 +24,7 @@ type DeliverOrderUsecase struct {
 	walletTxnRepo repository.WalletTransactionRepository
 	notifService  service.NotificationService
 	txManager     repository.TxManager
-	disputeRepo   repository.DisputeRepository // 🆕 AJOUTÉ pour la sécurité métier
+	disputeRepo   repository.DisputeRepository
 }
 
 // NewDeliverOrderUsecase crée une nouvelle instance
@@ -37,7 +37,7 @@ func NewDeliverOrderUsecase(
 	walletTxnRepo repository.WalletTransactionRepository,
 	notifService service.NotificationService,
 	txManager repository.TxManager,
-	disputeRepo repository.DisputeRepository, // 🆕 AJOUTÉ
+	disputeRepo repository.DisputeRepository,
 ) *DeliverOrderUsecase {
 	return &DeliverOrderUsecase{
 		orderRepo:     orderRepo,
@@ -48,14 +48,14 @@ func NewDeliverOrderUsecase(
 		walletTxnRepo: walletTxnRepo,
 		notifService:  notifService,
 		txManager:     txManager,
-		disputeRepo:   disputeRepo, // 🆕 AJOUTÉ
+		disputeRepo:   disputeRepo,
 	}
 }
 
 // DeliverRequest représente la requête de livraison
 type DeliverRequest struct {
-	AmountReceived int64  // Montant reçu en cash (centimes)
-	Notes          string // Notes de livraison
+	AmountReceived int64
+	Notes          string
 }
 
 // Execute marque la commande comme livrée et libère les fonds du séquestre vers le wallet
@@ -67,11 +67,7 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
 
-	logger.Info().
-		Str("order_id", orderID).
-		Str("shop_id", shop.ID.String()).
-		Int64("amount_received", req.AmountReceived).
-		Msg("Delivering order and releasing escrow")
+	logger.Info().Str("order_id", orderID).Str("shop_id", shop.ID.String()).Int64("amount_received", req.AmountReceived).Msg("Delivering order and releasing escrow")
 
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
@@ -89,13 +85,11 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 	walletRepoTx := uc.walletRepo.WithTX(tx)
 	walletTxnRepoTx := uc.walletTxnRepo.WithTX(tx)
 
-	// 1. Récupérer et vérifier la commande
 	order, err := orderRepoTx.FindByID(ctx, orderID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find order: %w", err)
 	}
 
-	// 🛡️ SÉCURITÉ MÉTIER : Bloquer la livraison si un litige actif existe sur cette commande
 	orderUUID, err := uuid.Parse(orderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order ID: %w", err)
@@ -108,7 +102,6 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		}
 	}
 
-	// 🆕 Autoriser la livraison pour Mobile Money (pour libérer l'Escrow) ET Cash on Delivery
 	if order.PaymentMethod != string(entity.PaymentMethodMobileMoney) && order.PaymentMethod != string(entity.PaymentMethodCashOnDelivery) {
 		return nil, fmt.Errorf("order payment method not supported for this delivery flow")
 	}
@@ -121,7 +114,6 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		return nil, fmt.Errorf("failed to mark delivered: %w", err)
 	}
 
-	// 2. 🆕 Gestion du paiement (Uniquement pour COD, car Mobile Money est déjà payé)
 	if order.PaymentMethod == string(entity.PaymentMethodCashOnDelivery) {
 		settings, err := uc.shopRepo.WithTX(tx).GetPaymentSettings(ctx, shop.ID)
 		if err != nil {
@@ -150,11 +142,9 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		}
 	}
 
-	// 3. 🛡️ LOGIQUE DE DÉBLOCAGE DU SÉQUESTRE (ESCROW) - Idempotente
 	escrow, err := escrowRepoTx.FindByOrderID(ctx, order.ID)
 	if err == nil && escrow != nil {
 		if escrow.Status == entity.EscrowAccountFundsHeld {
-			// Marquer comme libéré
 			if err := escrow.ReleaseFunds(); err != nil {
 				return nil, fmt.Errorf("failed to release escrow funds: %w", err)
 			}
@@ -162,7 +152,6 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 				return nil, fmt.Errorf("failed to update escrow status: %w", err)
 			}
 
-			// Créditer le wallet du marchand avec le montant NET (Total - Commission)
 			merchantAmount := escrow.GetMerchantAmount()
 
 			wallet, err := walletRepoTx.FindByShopIDForUpdate(ctx, shop.ID.String())
@@ -184,7 +173,6 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 				return nil, fmt.Errorf("failed to update wallet: %w", err)
 			}
 
-			// Enregistrer la transaction
 			txnID := uuid.New().String()
 			refType := "order"
 			txn := &entity.WalletTransaction{
@@ -203,11 +191,7 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 				return nil, fmt.Errorf("failed to create wallet transaction: %w", err)
 			}
 
-			logger.Info().
-				Str("order_id", order.ID).
-				Str("escrow_id", escrow.ID).
-				Int64("released_amount", merchantAmount).
-				Msg("✅ Escrow successfully released and wallet credited")
+			logger.Info().Str("order_id", order.ID).Str("escrow_id", escrow.ID).Int64("released_amount", merchantAmount).Msg("✅ Escrow successfully released and wallet credited")
 		} else {
 			logger.Warn().Str("escrow_status", string(escrow.Status)).Msg("Escrow already processed, skipping wallet credit (Idempotence)")
 		}
@@ -215,21 +199,19 @@ func (uc *DeliverOrderUsecase) Execute(ctx context.Context, orderID string, req 
 		logger.Warn().Err(err).Msg("Error checking escrow, proceeding with order update but wallet might not be credited")
 	}
 
-	// 4. Mettre à jour la commande
 	if err = orderRepoTx.UpdateOrder(ctx, order); err != nil {
 		return nil, fmt.Errorf("failed to update order: %w", err)
 	}
 
-	// 5. Commit de la transaction
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 6. Notifications (hors transaction)
-	customerPhone := "" // TODO: récupérer depuis customer repo si nécessaire
-	if err = uc.notifService.NotifyClientOrderDelivered(ctx, order, customerPhone, req.AmountReceived); err != nil {
-		logger.Warn().Err(err).Msg("failed to send client notification")
-	}
+	// 🆕 NOTIFICATIONS TEMPS RÉEL (APPEL SYNCHRONE)
+	// ✅ CORRECTION : Pas de "go func()" ici !
+	// La méthode NotifyOrderStatusChange fera les requêtes DB avec le ctx valide,
+	// puis gérera elle-même l'asynchronisme (go func) pour l'envoi WebSocket/Email.
+	_ = uc.notifService.NotifyOrderStatusChange(ctx, order, order.CustomerID, shop.ID)
 
 	logger.Info().Str("order_id", order.ID).Str("status", order.Status).Msg("Order delivered successfully")
 	return order, nil

@@ -15,6 +15,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	uuid "github.com/google/uuid"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -166,6 +167,20 @@ func (m *MockNotificationService) NotifyMerchantOrderReceived(ctx context.Contex
 func (mr *MockNotificationServiceMockRecorder) NotifyMerchantOrderReceived(ctx, shop, order any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyMerchantOrderReceived", reflect.TypeOf((*MockNotificationService)(nil).NotifyMerchantOrderReceived), ctx, shop, order)
+}
+
+// NotifyOrderStatusChange mocks base method.
+func (m *MockNotificationService) NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyOrderStatusChange", ctx, order, customerID, shopID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyOrderStatusChange indicates an expected call of NotifyOrderStatusChange.
+func (mr *MockNotificationServiceMockRecorder) NotifyOrderStatusChange(ctx, order, customerID, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyOrderStatusChange", reflect.TypeOf((*MockNotificationService)(nil).NotifyOrderStatusChange), ctx, order, customerID, shopID)
 }
 
 // SendNotification mocks base method.

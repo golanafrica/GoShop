@@ -87,6 +87,22 @@ func (mr *MockDisputeRepositoryMockRecorder) ExistsByOrderID(ctx, orderID any) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExistsByOrderID", reflect.TypeOf((*MockDisputeRepository)(nil).ExistsByOrderID), ctx, orderID)
 }
 
+// FindAll mocks base method.
+func (m *MockDisputeRepository) FindAll(ctx context.Context, status string, limit, offset int) ([]*entity.Dispute, int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindAll", ctx, status, limit, offset)
+	ret0, _ := ret[0].([]*entity.Dispute)
+	ret1, _ := ret[1].(int)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// FindAll indicates an expected call of FindAll.
+func (mr *MockDisputeRepositoryMockRecorder) FindAll(ctx, status, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAll", reflect.TypeOf((*MockDisputeRepository)(nil).FindAll), ctx, status, limit, offset)
+}
+
 // FindByID mocks base method.
 func (m *MockDisputeRepository) FindByID(ctx context.Context, id uuid.UUID) (*entity.Dispute, error) {
 	m.ctrl.T.Helper()

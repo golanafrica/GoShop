@@ -7,6 +7,7 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/service"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -137,5 +138,21 @@ func (s *NoopNotificationService) NotifyMerchantDisputeResolved(ctx context.Cont
 		Str("order_id", orderID).
 		Str("resolution", resolution).
 		Msg("📱 [NO-OP] Notification marchand : litige résolu")
+	return nil
+}
+
+// ============================================================
+// 🆕 NOUVELLE MÉTHODE POUR LES CHANGEMENTS DE STATUT DE COMMANDE (NO-OP)
+// ============================================================
+
+// NotifyOrderStatusChange logue la notification de changement de statut de commande
+func (s *NoopNotificationService) NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error {
+	s.logger.Info().
+		Str("notification_type", "order_status_change").
+		Str("order_id", order.ID).
+		Str("customer_id", customerID).
+		Str("shop_id", shopID.String()).
+		Str("status", string(order.Status)).
+		Msg("📱 [NO-OP] Notification : changement de statut de commande")
 	return nil
 }

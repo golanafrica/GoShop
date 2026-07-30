@@ -96,7 +96,6 @@ func TestAcceptOrderUsecase_MultiTenantError(t *testing.T) {
 	uc := orderusecase.NewAcceptOrderUsecase(orderRepo, productRepo, notifService, txManager)
 
 	ctx := context.Background()
-
 	order, err := uc.Execute(ctx, "order-1")
 
 	assert.Error(t, err)
@@ -121,7 +120,6 @@ func TestAcceptOrderUsecase_BeginTxError(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to start transaction")
@@ -150,7 +148,6 @@ func TestAcceptOrderUsecase_OrderNotFound(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(nil, sql.ErrNoRows)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to find order")
@@ -177,13 +174,11 @@ func TestAcceptOrderUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
-	// ❌ Méthode de paiement non supportée (ni COD ni Mobile Money)
-	unsupportedOrder := createTestOrder(string(entity.OrderStatusPending))
+	unsupportedOrder := createCashOrder(string(entity.OrderStatusPending))
 	unsupportedOrder.PaymentMethod = "card"
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(unsupportedOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "not supported for this flow")
@@ -215,15 +210,11 @@ func TestAcceptOrderUsecase_OrderExpired(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(expiredOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	product := &entity.Product{
-		ID:    "product-1",
-		Stock: 10,
-	}
+	product := &entity.Product{ID: "product-1", Stock: 10}
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(product, nil)
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "order has expired")
@@ -254,7 +245,6 @@ func TestAcceptOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(deliveredOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "invalid status transition")
@@ -286,7 +276,6 @@ func TestAcceptOrderUsecase_UpdateOrderError(t *testing.T) {
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to update order")
@@ -320,7 +309,6 @@ func TestAcceptOrderUsecase_CommitError(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to commit transaction")
@@ -355,7 +343,6 @@ func TestAcceptOrderUsecase_Success(t *testing.T) {
 	notifService.EXPECT().NotifyClientOrderConfirmed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusConfirmed), order.Status)
@@ -378,7 +365,6 @@ func TestRejectOrderUsecase_MultiTenantError(t *testing.T) {
 	uc := orderusecase.NewRejectOrderUsecase(orderRepo, productRepo, notifService, txManager)
 
 	ctx := context.Background()
-
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
 
 	assert.Error(t, err)
@@ -403,7 +389,6 @@ func TestRejectOrderUsecase_BeginTxError(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to start transaction")
@@ -432,7 +417,6 @@ func TestRejectOrderUsecase_OrderNotFound(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(nil, sql.ErrNoRows)
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to find order")
@@ -459,12 +443,11 @@ func TestRejectOrderUsecase_NotCashOnDelivery(t *testing.T) {
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 
-	mobileOrder := createTestOrder(string(entity.OrderStatusPending))
+	mobileOrder := createCashOrder(string(entity.OrderStatusPending))
 	mobileOrder.PaymentMethod = string(entity.PaymentMethodMobileMoney)
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(mobileOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "not cash on delivery")
@@ -495,7 +478,6 @@ func TestRejectOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(deliveredOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "invalid status transition")
@@ -529,7 +511,6 @@ func TestRejectOrderUsecase_RestoreStock_ProductNotFound(t *testing.T) {
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(nil, errors.New("not found"))
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to find product")
@@ -567,7 +548,6 @@ func TestRejectOrderUsecase_CommitError(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to commit transaction")
@@ -611,7 +591,6 @@ func TestRejectOrderUsecase_Success(t *testing.T) {
 	notifService.EXPECT().NotifyClientOrderRejected(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusRejected), order.Status)
@@ -627,12 +606,12 @@ func TestOutForDeliveryUsecase_MultiTenantError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	ctx := context.Background()
-
 	order, err := uc.Execute(ctx, "order-1")
 
 	assert.Error(t, err)
@@ -645,9 +624,10 @@ func TestOutForDeliveryUsecase_BeginTxError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -655,7 +635,6 @@ func TestOutForDeliveryUsecase_BeginTxError(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to start transaction")
@@ -666,9 +645,10 @@ func TestOutForDeliveryUsecase_OrderNotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -681,7 +661,6 @@ func TestOutForDeliveryUsecase_OrderNotFound(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(nil, sql.ErrNoRows)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to find order")
@@ -692,9 +671,10 @@ func TestOutForDeliveryUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -705,13 +685,11 @@ func TestOutForDeliveryUsecase_NotSupportedPaymentMethod(t *testing.T) {
 
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 
-	// ❌ Méthode de paiement non supportée (ni COD ni Mobile Money)
-	unsupportedOrder := createTestOrder(string(entity.OrderStatusConfirmed))
+	unsupportedOrder := createCashOrder(string(entity.OrderStatusConfirmed)) // 🆕 Correction du nom du helper
 	unsupportedOrder.PaymentMethod = "card"
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(unsupportedOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "not supported for this flow")
@@ -722,9 +700,10 @@ func TestOutForDeliveryUsecase_InvalidStatusTransition(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -739,7 +718,6 @@ func TestOutForDeliveryUsecase_InvalidStatusTransition(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "invalid status transition")
@@ -750,9 +728,10 @@ func TestOutForDeliveryUsecase_UpdateOrderError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -768,7 +747,6 @@ func TestOutForDeliveryUsecase_UpdateOrderError(t *testing.T) {
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to update order")
@@ -779,9 +757,10 @@ func TestOutForDeliveryUsecase_CommitError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -799,7 +778,6 @@ func TestOutForDeliveryUsecase_CommitError(t *testing.T) {
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to commit transaction")
@@ -810,9 +788,10 @@ func TestOutForDeliveryUsecase_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager)
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -829,7 +808,6 @@ func TestOutForDeliveryUsecase_Success(t *testing.T) {
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusOutForDelivery), order.Status)
@@ -837,10 +815,6 @@ func TestOutForDeliveryUsecase_Success(t *testing.T) {
 
 // ============================================================
 // 🆕 v4.4.18 : TESTS COMPLÉMENTAIRES - BRANCHES NON COUVERTES
-// ============================================================
-
-// ============================================================
-// TESTS : AcceptOrderUsecase - restoreStock errors
 // ============================================================
 
 func TestAcceptOrderUsecase_Expired_RestoreStock_FindProductError(t *testing.T) {
@@ -868,11 +842,9 @@ func TestAcceptOrderUsecase_Expired_RestoreStock_FindProductError(t *testing.T) 
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(expiredOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	// ❌ Erreur lors du FindByID dans restoreStock
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(nil, errors.New("product not found"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to restore stock")
@@ -904,24 +876,16 @@ func TestAcceptOrderUsecase_Expired_RestoreStock_UpdateProductError(t *testing.T
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(expiredOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	// ✅ FindByID réussit
 	product := &entity.Product{ID: "product-1", Stock: 10}
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(product, nil)
-
-	// ❌ Erreur lors du Update dans restoreStock
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to restore stock")
 	assert.Contains(t, err.Error(), "failed to update product")
 }
-
-// ============================================================
-// TESTS : AcceptOrderUsecase - Notification error (non bloquant)
-// ============================================================
 
 func TestAcceptOrderUsecase_Success_NotificationError_ContinuesAnyway(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -949,20 +913,13 @@ func TestAcceptOrderUsecase_Success_NotificationError_ContinuesAnyway(t *testing
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	// ❌ Notification échoue mais on continue
 	notifService.EXPECT().NotifyClientOrderConfirmed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("SMS service down"))
 
 	order, err := uc.Execute(ctx, "order-1")
-
-	// ✅ Continue malgré l'erreur de notification
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusConfirmed), order.Status)
 }
-
-// ============================================================
-// TESTS : RejectOrderUsecase - restoreStock Update error
-// ============================================================
 
 func TestRejectOrderUsecase_RestoreStock_UpdateProductError(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -991,20 +948,13 @@ func TestRejectOrderUsecase_RestoreStock_UpdateProductError(t *testing.T) {
 
 	product := &entity.Product{ID: "product-1", Stock: 10}
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(product, nil)
-
-	// ❌ Erreur lors du Update dans restore stock
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil, errors.New("db error"))
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
 	assert.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "failed to update product")
 }
-
-// ============================================================
-// TESTS : RejectOrderUsecase - Notification error (non bloquant)
-// ============================================================
 
 func TestRejectOrderUsecase_Success_NotificationError_ContinuesAnyway(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -1036,12 +986,9 @@ func TestRejectOrderUsecase_Success_NotificationError_ContinuesAnyway(t *testing
 	productRepo.EXPECT().FindByID(gomock.Any(), "product-1").Return(product, nil)
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
-	// ❌ Notification échoue mais on continue
 	notifService.EXPECT().NotifyClientOrderRejected(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("SMS service down"))
 
 	order, err := uc.Execute(ctx, "order-1", "Stock insuffisant")
-
-	// ✅ Continue malgré l'erreur de notification
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusRejected), order.Status)
@@ -1080,39 +1027,20 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	codProofRepo.EXPECT().WithTX(mockTx).Return(codProofRepo).AnyTimes()
 
-	// Customer
-	customer := &entity.Customer{
-		ID:        uuid.New().String(),
-		FirstName: "John",
-		LastName:  "Doe",
-	}
+	customer := &entity.Customer{ID: uuid.New().String(), FirstName: "John", LastName: "Doe"}
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), gomock.Any()).Return(customer, nil)
 
-	// Product avec stock suffisant
-	product := &entity.Product{
-		ID:         uuid.New().String(),
-		Name:       "Test Product",
-		PriceCents: 10000,
-		Stock:      10,
-	}
+	product := &entity.Product{ID: uuid.New().String(), Name: "Test Product", PriceCents: 10000, Stock: 10}
 	productRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(product, nil)
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
-	// Order creation
 	createdOrder := &entity.Order{
 		ID:            uuid.New().String(),
 		CustomerID:    customer.ID,
 		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
 		TotalCents:    10000,
 		Status:        string(entity.OrderStatusPendingConfirmation),
-		Items: []*entity.OrderItem{
-			{
-				ProductID:      product.ID,
-				Quantity:       1,
-				PriceCents:     10000,
-				SubTotal_Cents: 10000,
-			},
-		},
+		Items:         []*entity.OrderItem{{ProductID: product.ID, Quantity: 1, PriceCents: 10000, SubTotal_Cents: 10000}},
 	}
 	orderRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, order *entity.Order) (*entity.Order, error) {
@@ -1120,16 +1048,13 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 			return order, nil
 		},
 	)
-
-	// OrderItem creation
 	orderItemRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{}, nil)
 
-	// ✅ COD Proof creation (nouvelle branche !)
 	codProofRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, proof *entity.CODProof) error {
 			assert.Equal(t, createdOrder.ID, proof.OrderID)
 			assert.Equal(t, shop.ID.String(), proof.ShopID)
-			assert.Equal(t, int64(250), proof.CommissionCents) // 2.5% de 10000
+			assert.Equal(t, int64(250), proof.CommissionCents)
 			return nil
 		},
 	)
@@ -1137,16 +1062,10 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 	order := &entity.Order{
 		CustomerID:    customer.ID,
 		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
-		Items: []*entity.OrderItem{
-			{
-				ProductID: product.ID,
-				Quantity:  1,
-			},
-		},
+		Items:         []*entity.OrderItem{{ProductID: product.ID, Quantity: 1}},
 	}
 
 	result, err := uc.Execute(ctx, order)
-
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, string(entity.OrderStatusPendingConfirmation), result.Status)
@@ -1168,7 +1087,6 @@ func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) 
 		txManager, productRepo, customerRepo, orderItemRepo, orderRepo, codProofRepo,
 	)
 
-	// ❌ Contexte SANS tenant
 	ctx := context.Background()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
@@ -1189,12 +1107,7 @@ func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) 
 	productRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(product, nil)
 	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
 
-	createdOrder := &entity.Order{
-		ID:            uuid.New().String(),
-		CustomerID:    customer.ID,
-		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
-		TotalCents:    10000,
-	}
+	createdOrder := &entity.Order{ID: uuid.New().String(), CustomerID: customer.ID, PaymentMethod: string(entity.PaymentMethodCashOnDelivery), TotalCents: 10000}
 	orderRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, order *entity.Order) (*entity.Order, error) {
 			order.ID = createdOrder.ID
@@ -1203,19 +1116,13 @@ func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) 
 	)
 	orderItemRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{}, nil)
 
-	// ✅ Pas d'appel à codProofRepo.Create car tenant.FromContext échoue
-
 	order := &entity.Order{
 		CustomerID:    customer.ID,
 		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
-		Items: []*entity.OrderItem{
-			{ProductID: product.ID, Quantity: 1},
-		},
+		Items:         []*entity.OrderItem{{ProductID: product.ID, Quantity: 1}},
 	}
 
 	result, err := uc.Execute(ctx, order)
-
-	// ✅ Continue malgré l'erreur tenant (log warning)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 }
