@@ -123,9 +123,6 @@ func (d *NotificationDispatcher) getShopEmail(ctx context.Context, shopID uuid.U
 // ============================================================
 
 // NotifyOrderStatusChange notifie le client et le marchand d'un changement de statut de commande.
-// Cette méthode est "fire-and-forget" : elle ne retourne jamais d'erreur pour ne pas bloquer le flux métier.
-// NotifyOrderStatusChange notifie le client et le marchand d'un changement de statut de commande.
-// Cette méthode est "fire-and-forget" : elle ne retourne jamais d'erreur pour ne pas bloquer le flux métier.
 func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error {
 	title, message := d.buildOrderStatusMessages(string(order.Status))
 	data := map[string]interface{}{
@@ -133,7 +130,7 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 		"status":   order.Status,
 	}
 
-	// 🆕 1. Récupérer les infos du client AVANT la goroutine, en utilisant le contexte original (qui contient le tenant)
+	// 1. Récupérer les infos du client AVANT la goroutine
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	userEmail := d.getUserEmail(ctx, customerID)
 
@@ -162,7 +159,7 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 }
 
 // ============================================================
-// MÉTHODES EXISTANTES (Litiges, etc.)
+// MÉTHODES EXISTANTES
 // ============================================================
 
 func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
@@ -256,10 +253,17 @@ func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *serv
 	return nil
 }
 
-func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
+// 🆕 NotifyClientDisputeResolved avec montant remboursé pour la transparence
+func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string, refundedAmount int64) error {
 	title := "Litige résolu"
-	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité. Statut : %s.", orderID, resolution)
-	data := map[string]interface{}{"order_id": orderID, "resolution": resolution}
+	// Message transparent expliquant la déduction des frais
+	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité en votre faveur. Un remboursement de %d FCFA (montant net après déduction des frais de transaction) a été initié vers votre compte.", orderID, refundedAmount/100)
+
+	data := map[string]interface{}{
+		"order_id":        orderID,
+		"resolution":      resolution,
+		"refunded_amount": refundedAmount / 100, // En FCFA pour le frontend
+	}
 
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	if userID != "" {

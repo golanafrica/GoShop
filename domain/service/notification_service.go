@@ -47,8 +47,8 @@ type NotificationService interface {
 	NotifyClientOrderDelivered(ctx context.Context, order *entity.Order, customerPhone string, amountReceived int64) error
 	NotifyMerchantCommissionPaid(ctx context.Context, shop *entity.Shop, order *entity.Order, commissionCents int64) error
 
-	// 🆕 Notifications pour les litiges
-	NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error
+	// 🆕 Notifications pour les litiges (avec refundedAmount pour la transparence)
+	NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string, refundedAmount int64) error
 	NotifyMerchantDisputeResolved(ctx context.Context, shopID, orderID, resolution string) error
 
 	SendNotification(ctx context.Context, req *NotificationRequest) error

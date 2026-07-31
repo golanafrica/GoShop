@@ -9,7 +9,7 @@ package main
 // @contact.email support@goshop.dev
 // @license.name MIT
 // @license.url https://opensource.org/licenses/MIT
-// @host localhost:8080
+// @host localhost:8081
 // @BasePath /
 // @schemes http
 // @securityDefinitions.apikey ApiKeyAuth
@@ -45,11 +45,9 @@ func main() {
 	appLogger.Info().Msg("🚀 Démarrage de GoShop API")
 
 	// 2. Charger la configuration applicative (DB, port, etc.)
-	// C'est ici que le fichier .env est lu et injecté dans l'environnement
 	cfg := config.LoadConfig()
 
 	// 🚨 SÉCURITÉ CRITIQUE : Validation stricte du secret JWT
-	// On vérifie APRÈS le chargement de la config pour s'assurer que le .env est pris en compte
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" || len(jwtSecret) < 32 {
 		log.Fatal("🚨 ERREUR FATALE DE SÉCURITÉ : JWT_SECRET est manquant ou trop court (< 32 caractères). Veuillez le définir dans votre fichier .env. Arrêt du serveur.")
@@ -80,6 +78,29 @@ func main() {
 			Str("db_user", cfg.DBUser).
 			Msg("Échec de connexion à la base de données")
 	}
+
+	// ── 🆕 Warm-up : évite le cold start au premier login ──
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	// Utilisation de PingContext pour respecter le timeout
+	if err := db.PingContext(warmupCtx); err != nil {
+		warmupCancel()
+		appLogger.Fatal().Err(err).Msg("Échec ping initial PostgreSQL")
+	}
+
+	// Pré-ouvre 2 connexions physiques pour que la 1ère requête métier soit instantanée
+	// (Adapté pour database/sql standard au lieu de pgx.Acquire)
+	for i := 0; i < 2; i++ {
+		conn, err := db.Conn(warmupCtx)
+		if err != nil {
+			warmupCancel()
+			appLogger.Fatal().Err(err).Int("connexion", i+1).Msg("Échec warm-up pool")
+		}
+		conn.Close() // On ferme immédiatement, le pool garde la connexion physique ouverte
+	}
+	warmupCancel()
+	appLogger.Info().Msg("✅ Pool PostgreSQL warm-up terminé (Cold start éliminé)")
+	// ── Fin warm-up ──
 
 	appLogger.Info().Msg("✅ Connexion à la base de données établie")
 

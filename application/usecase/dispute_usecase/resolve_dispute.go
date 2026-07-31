@@ -95,6 +95,9 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	walletRepoTx := uc.walletRepo.WithTX(tx)
 	walletTxnRepoTx := uc.walletTxnRepo.WithTX(tx)
 
+	// 🆕 Variable pour stocker le montant remboursé (utilisé plus bas pour les notifications)
+	var refundedAmount int64 = 0
+
 	switch req.Resolution {
 	case "merchant_wins":
 		dispute.Status = entity.DisputeStatusResolvedMerchant
@@ -175,6 +178,8 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		}
 
 		refundAmount := escrow.TotalAmountCents
+		refundedAmount = refundAmount // 🆕 On capture le montant pour la notification
+
 		customerPhone := ""
 		if successPayment.CustomerPhone != nil {
 			customerPhone = *successPayment.CustomerPhone
@@ -224,15 +229,13 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	// ============================================================
 	// 🆕 NOTIFICATIONS TEMPS RÉEL (Hors transaction, après succès)
 	// ============================================================
-	// On recrée un contexte avec le tenant pour que orderRepo.FindByID fonctionne
 	shop := &entity.Shop{ID: dispute.ShopID}
 	tenantCtx := tenant.WithTenant(context.Background(), shop)
 
-	// ✅ CORRECTION : Ajout de .String() car FindByID attend une string
 	order, err := uc.orderRepo.FindByID(tenantCtx, dispute.OrderID.String())
 	if err == nil && order != nil {
-		// Notifier le client
-		if notifyErr := uc.notificationSvc.NotifyClientDisputeResolved(tenantCtx, order.CustomerID, orderIDStr, req.Resolution); notifyErr != nil {
+		// 🆕 Notifier le client avec le montant remboursé
+		if notifyErr := uc.notificationSvc.NotifyClientDisputeResolved(tenantCtx, order.CustomerID, orderIDStr, req.Resolution, refundedAmount); notifyErr != nil {
 			logger.Warn().Err(notifyErr).Msg("Failed to send client dispute notification")
 		}
 		// Notifier le marchand

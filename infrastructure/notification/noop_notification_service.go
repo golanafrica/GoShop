@@ -19,7 +19,8 @@ type NoopNotificationService struct {
 }
 
 // NewNoopNotificationService crée une nouvelle instance du service no-op
-func NewNoopNotificationService(logger zerolog.Logger) *NoopNotificationService {
+// 🆕 CORRECTION : Retourne l'interface service.NotificationService
+func NewNoopNotificationService(logger zerolog.Logger) service.NotificationService {
 	return &NoopNotificationService{
 		logger: logger.With().Str("component", "notification_service").Logger(),
 	}
@@ -120,12 +121,14 @@ func (s *NoopNotificationService) SendNotification(ctx context.Context, req *ser
 // ============================================================
 
 // NotifyClientDisputeResolved logue la notification de résolution de litige au client
-func (s *NoopNotificationService) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string) error {
+// 🆕 CORRECTION : Ajout du paramètre refundedAmount int64
+func (s *NoopNotificationService) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string, refundedAmount int64) error {
 	s.logger.Info().
 		Str("notification_type", "client_dispute_resolved").
 		Str("customer_id", customerID).
 		Str("order_id", orderID).
 		Str("resolution", resolution).
+		Int64("refunded_amount", refundedAmount).
 		Msg("📱 [NO-OP] Notification client : litige résolu")
 	return nil
 }
