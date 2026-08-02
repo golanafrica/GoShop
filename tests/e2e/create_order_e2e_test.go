@@ -1,4 +1,4 @@
-﻿// tests/e2e/create_order_e2e_test.go
+// tests/e2e/create_order_e2e_test.go
 package e2e
 
 import (

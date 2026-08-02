@@ -13,6 +13,11 @@ ALTER TABLE shops ADD COLUMN IF NOT EXISTS kyc_rejection_reason TEXT;
 ALTER TABLE shops ADD COLUMN IF NOT EXISTS kyc_submissions_count INT NOT NULL DEFAULT 0;
 ALTER TABLE shops ADD COLUMN IF NOT EXISTS kyc_last_submission_at TIMESTAMPTZ;
 
+-- 🚨 CRUCIAL : Nettoyer les données AVANT d'ajouter les contraintes CHECK
+UPDATE shops 
+SET kyc_status = 'unverified' 
+WHERE kyc_status IS NULL OR kyc_status NOT IN ('unverified', 'pending', 'verified', 'rejected');
+
 -- PARTIE 2 : CONTRAINTES ET INDEX
 DO $$
 BEGIN
@@ -106,14 +111,11 @@ BEGIN
     RETURN QUERY SELECT kyc_status, COUNT(*)::BIGINT FROM shops GROUP BY kyc_status ORDER BY count DESC;
 END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- PARTIE 7 : MISE À JOUR
-UPDATE shops SET kyc_status = 'unverified' WHERE kyc_status IS NULL;
-
--- PARTIE 8 : DOCUMENTATION
+-- PARTIE 7 : DOCUMENTATION
 COMMENT ON COLUMN shops.kyc_status IS 'Statut KYC : unverified, pending, verified, rejected';
 COMMENT ON TABLE shop_kyc_documents IS 'Documents KYC soumis par les marchands';
 
--- PARTIE 9 : VÉRIFICATION
+-- PARTIE 8 : VÉRIFICATION
 DO $$
 DECLARE shops_count INT; pending_count INT; verified_count INT; unverified_count INT;
 BEGIN

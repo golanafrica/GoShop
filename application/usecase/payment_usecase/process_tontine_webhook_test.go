@@ -24,7 +24,6 @@ import (
 // HELPERS
 // ============================================================
 
-// createTontinePayment crée un paiement tontine de test
 func createTontinePayment(groupID string, cycleNumber int) *entity.TontinePayment {
 	return &entity.TontinePayment{
 		ID:          uuid.New().String(),
@@ -37,7 +36,6 @@ func createTontinePayment(groupID string, cycleNumber int) *entity.TontinePaymen
 	}
 }
 
-// createTontineGroup crée un groupe tontine de test
 func createTontineGroup(shopID string, totalCycles int) *entity.TontineGroup {
 	return &entity.TontineGroup{
 		ID:           uuid.New().String(),
@@ -51,7 +49,6 @@ func createTontineGroup(shopID string, totalCycles int) *entity.TontineGroup {
 	}
 }
 
-// createTontineParticipant crée un participant tontine de test
 func createTontineParticipant(groupID string, payoutPosition int) *entity.TontineParticipant {
 	return &entity.TontineParticipant{
 		ID:             uuid.New().String(),
@@ -63,7 +60,6 @@ func createTontineParticipant(groupID string, payoutPosition int) *entity.Tontin
 	}
 }
 
-// createTestShop crée un shop de test
 func createTestShop() *entity.Shop {
 	return &entity.Shop{
 		ID:   uuid.New(),
@@ -87,18 +83,11 @@ func TestProcessTontineWebhookUsecase_InvalidReference(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕 notificationSvc
-		nil, // 🆕 customerRepo
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
-
-	err := uc.Execute(ctx, "ORDER:123", "txn-123", entity.PaymentStatusSuccess)
+	err := uc.Execute(context.Background(), "ORDER:123", "txn-123", entity.PaymentStatusSuccess)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse tontine reference")
@@ -115,25 +104,18 @@ func TestProcessTontineWebhookUsecase_InvalidReferenceFormat(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
-
-	err := uc.Execute(ctx, "TONTINE:abc:1", "txn-123", entity.PaymentStatusSuccess)
+	err := uc.Execute(context.Background(), "TONTINE:abc:1", "txn-123", entity.PaymentStatusSuccess)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid tontine reference format")
 }
 
 // ============================================================
-// TESTS : ProcessTontineWebhookUsecase - Payment not found
+// TESTS : ProcessTontineWebhookUsecase - Payment not found / already done
 // ============================================================
 
 func TestProcessTontineWebhookUsecase_PaymentNotFound(t *testing.T) {
@@ -147,31 +129,17 @@ func TestProcessTontineWebhookUsecase_PaymentNotFound(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(nil, errors.New("payment not found"))
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(nil, errors.New("payment not found"))
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tontine payment not found")
 }
-
-// ============================================================
-// TESTS : ProcessTontineWebhookUsecase - Payment already done
-// ============================================================
 
 func TestProcessTontineWebhookUsecase_PaymentAlreadyDone(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -184,27 +152,17 @@ func TestProcessTontineWebhookUsecase_PaymentAlreadyDone(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	donePayment := createTontinePayment("group-1", 1)
 	donePayment.Status = entity.TontinePaymentDone
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(donePayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(donePayment, nil)
 
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -223,30 +181,17 @@ func TestProcessTontineWebhookUsecase_GroupNotFound(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(nil, errors.New("group not found"))
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(nil, errors.New("group not found"))
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tontine group not found")
 }
@@ -262,35 +207,19 @@ func TestProcessTontineWebhookUsecase_ShopNotFound(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(nil, errors.New("shop not found"))
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
-
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("shop not found"))
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "shop not found")
 }
@@ -310,49 +239,25 @@ func TestProcessTontineWebhookUsecase_StatusSuccess_MarkDone(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
+	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(2, nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	// checkAndCompleteCycle - pas encore tous payés
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).
-		Return(2, nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -367,40 +272,21 @@ func TestProcessTontineWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().UpdateStatus(gomock.Any(), pendingPayment.ID, entity.TontinePaymentFailed).Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
-
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		UpdateStatus(gomock.Any(), pendingPayment.ID, entity.TontinePaymentFailed).
-		Return(nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusFailed)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusFailed)
 	assert.NoError(t, err)
 }
 
@@ -415,36 +301,20 @@ func TestProcessTontineWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
-
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusPending)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusPending)
 	assert.NoError(t, err)
 }
 
@@ -463,48 +333,25 @@ func TestProcessTontineWebhookUsecase_CycleNotComplete_Waiting(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
+	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(3, nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).
-		Return(3, nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -519,61 +366,29 @@ func TestProcessTontineWebhookUsecase_CycleComplete_GenerateVoucher(t *testing.T
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 	beneficiary := createTontineParticipant(testGroup.ID, 1)
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
+	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(5, nil)
+	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 1).Return(beneficiary, nil)
+	mockTontineVoucherRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mockTontineGroupRepo.EXPECT().IncrementCycle(gomock.Any(), testGroup.ID).Return(nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).
-		Return(5, nil)
-
-	mockTontineParticipantRepo.EXPECT().
-		FindByPosition(gomock.Any(), testGroup.ID, 1).
-		Return(beneficiary, nil)
-
-	mockTontineVoucherRepo.EXPECT().
-		Create(gomock.Any(), gomock.Any()).
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		IncrementCycle(gomock.Any(), testGroup.ID).
-		Return(nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -588,62 +403,30 @@ func TestProcessTontineWebhookUsecase_LastCycle_CompleteGroup(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:5:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 5)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testGroup.CurrentCycle = 5
 	testShop := createTestShop()
 	beneficiary := createTontineParticipant(testGroup.ID, 5)
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
+	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 5).Return(5, nil)
+	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 5).Return(beneficiary, nil)
+	mockTontineVoucherRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mockTontineGroupRepo.EXPECT().Complete(gomock.Any(), testGroup.ID).Return(nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 5).
-		Return(5, nil)
-
-	mockTontineParticipantRepo.EXPECT().
-		FindByPosition(gomock.Any(), testGroup.ID, 5).
-		Return(beneficiary, nil)
-
-	mockTontineVoucherRepo.EXPECT().
-		Create(gomock.Any(), gomock.Any()).
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		Complete(gomock.Any(), testGroup.ID).
-		Return(nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -658,45 +441,25 @@ func TestProcessTontineWebhookUsecase_GroupNotActive_SkipCompletion(t *testing.T
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testGroup.Status = entity.TontineStatusCompleted
 	testShop := createTestShop()
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.NoError(t, err)
 }
 
@@ -711,59 +474,28 @@ func TestProcessTontineWebhookUsecase_VoucherCollision(t *testing.T) {
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 
 	uc := paymentusecase.NewProcessTontineWebhookUsecase(
-		mockTontinePaymentRepo,
-		mockTontineGroupRepo,
-		mockTontineParticipantRepo,
-		mockTontineVoucherRepo,
-		mockShopRepo,
-		nil, // 🆕
-		nil, // 🆕
+		mockTontinePaymentRepo, mockTontineGroupRepo, mockTontineParticipantRepo,
+		mockTontineVoucherRepo, mockShopRepo, nil, nil,
 	)
 
-	ctx := context.Background()
 	reference := "TONTINE:abc12345:1:xyz67890"
-
 	pendingPayment := createTontinePayment("group-1", 1)
 	testGroup := createTontineGroup(uuid.New().String(), 5)
 	testShop := createTestShop()
 	beneficiary := createTontineParticipant(testGroup.ID, 1)
 
-	mockTontinePaymentRepo.EXPECT().
-		FindByReference(gomock.Any(), reference).
-		Return(pendingPayment, nil)
+	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
+	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
+	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), "group-1").
-		Return(testGroup, nil)
+	// checkAndCompleteCycle
+	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
+	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(5, nil)
+	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 1).Return(beneficiary, nil)
+	mockTontineVoucherRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("duplicate voucher code"))
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), gomock.Any()).
-		Return(testShop, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").
-		Return(nil)
-
-	mockTontineGroupRepo.EXPECT().
-		FindByID(gomock.Any(), testGroup.ID).
-		Return(testGroup, nil)
-
-	mockTontinePaymentRepo.EXPECT().
-		CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).
-		Return(5, nil)
-
-	mockTontineParticipantRepo.EXPECT().
-		FindByPosition(gomock.Any(), testGroup.ID, 1).
-		Return(beneficiary, nil)
-
-	// ✅ Mock : Create échoue (collision de voucher)
-	mockTontineVoucherRepo.EXPECT().
-		Create(gomock.Any(), gomock.Any()).
-		Return(errors.New("duplicate voucher code"))
-
-	err := uc.Execute(ctx, reference, "txn-123", entity.PaymentStatusSuccess)
-
-	// Le usecase retourne l'erreur de Create
+	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "save voucher")
 }
@@ -779,59 +511,27 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et creditUpdater/walletUpdater selon ta version)
 	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil, // shopSettingsRepo
-		mockTontineUC,
-		nil, // creditUpdater
-		nil, // walletUpdater / escrowRepo selon ta version
+		mockPaymentRepo, mockRegistry, mockDB, mockShopRepo,
+		nil, mockTontineUC, nil, nil,
 	)
 
 	ctx := context.Background()
-
-	mockRegistry.EXPECT().
-		Get(entity.ProviderYengaPay).
-		Return(mockProvider, nil)
-
+	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
 	event := createTestWebhookEvent("TXN-123", entity.PaymentStatusSuccess)
-
-	mockProvider.EXPECT().
-		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(event, nil)
-
-	// ✅ Mock : recordWebhook échoue (DB error)
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("database error"))
+	mockProvider.EXPECT().ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).Return(event, nil)
+	mockDB.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("database error"))
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
 
-	testShop := &entity.Shop{
-		ID:   shopID,
-		Name: "Test Shop",
-		Slug: "test-shop",
-	}
+	testShop := &entity.Shop{ID: shopID, Name: "Test Shop", Slug: "test-shop"}
 
-	mockPaymentRepo.EXPECT().
-		FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").
-		Return(paymentEntity, nil)
+	mockPaymentRepo.EXPECT().FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").Return(paymentEntity, nil)
+	mockShopRepo.EXPECT().FindByID(gomock.Any(), shopID).Return(testShop, nil)
+	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
-	mockShopRepo.EXPECT().
-		FindByID(gomock.Any(), shopID).
-		Return(testShop, nil)
-
-	mockPaymentRepo.EXPECT().
-		Update(gomock.Any(), gomock.Any()).
-		Return(nil)
-
-	// L'erreur de recordWebhook ne doit pas bloquer le traitement
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
-
-	assert.NoError(t, err) // Continue malgré l'erreur d'audit
+	assert.NoError(t, err)
 }

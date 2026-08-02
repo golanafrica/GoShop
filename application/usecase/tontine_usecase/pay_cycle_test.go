@@ -7,7 +7,9 @@ import (
 
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	"Goshop/domain/entity"
+	"Goshop/infrastructure/payment"
 	mockrepo "Goshop/mocks/repository"
+	mockusecase "Goshop/mocks/usecase"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -123,22 +125,24 @@ func newPayCycleUsecase(ctrl *gomock.Controller) (
 	*mockrepo.MockTontinePaymentRepository,
 	*mockrepo.MockShopRepository,
 	*mockrepo.MockTxManager,
+	*mockusecase.MockPaymentRegistry,
 ) {
 	groupRepo := mockrepo.NewMockTontineGroupRepository(ctrl)
 	participantRepo := mockrepo.NewMockTontineParticipantRepository(ctrl)
 	paymentRepo := mockrepo.NewMockTontinePaymentRepository(ctrl)
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
+	paymentRegistry := mockusecase.NewMockPaymentRegistry(ctrl) // 🆕 AJOUT
 
-	uc := tontineusecase.NewPayCycleUsecase(groupRepo, participantRepo, paymentRepo, shopRepo, txManager)
-	return uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager
+	uc := tontineusecase.NewPayCycleUsecase(groupRepo, participantRepo, paymentRepo, shopRepo, txManager, paymentRegistry)
+	return uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, paymentRegistry
 }
 
 func TestPayCycleUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, _, _, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx := context.Background()
 	req := validPayCycleRequest()
@@ -154,7 +158,7 @@ func TestPayCycleUsecase_ValidationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, _, _, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, _ := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -171,7 +175,7 @@ func TestPayCycleUsecase_GroupNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, _, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, _, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, _ := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -189,7 +193,7 @@ func TestPayCycleUsecase_ShopMismatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, _, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, _, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, _ := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -208,7 +212,7 @@ func TestPayCycleUsecase_GroupNotActive(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, _, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, _, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -228,7 +232,7 @@ func TestPayCycleUsecase_ParticipantNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -248,7 +252,7 @@ func TestPayCycleUsecase_ParticipantNotActive(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, _, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -271,7 +275,7 @@ func TestPayCycleUsecase_AlreadyPaidForCycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, _, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -295,7 +299,7 @@ func TestPayCycleUsecase_GetShopSettingsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, _, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -319,7 +323,7 @@ func TestPayCycleUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -344,7 +348,7 @@ func TestPayCycleUsecase_SaveError_RollbackCalled(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -374,7 +378,7 @@ func TestPayCycleUsecase_CommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -405,7 +409,7 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, paymentRegistry := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -414,6 +418,7 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 	participant := activeTontineParticipant()
 	mockTx := mockrepo.NewMockTx(ctrl)
 	txPaymentRepo := mockrepo.NewMockTontinePaymentRepository(ctrl)
+	mockProvider := mockusecase.NewMockProvider(ctrl) // 🆕 AJOUT
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
@@ -422,6 +427,14 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
 	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	// 🆕 AJOUT : Mock du registry et du provider
+	paymentRegistry.EXPECT().GetAvailable(gomock.Any(), entity.PaymentProvider("orange_money")).Return(mockProvider, nil)
+	mockProvider.EXPECT().InitiatePayment(gomock.Any(), gomock.Any()).Return(&payment.PaymentResponse{
+		ProviderRef: "prov-ref-123",
+		USSDCode:    "*144*123#",
+	}, nil)
+
 	mockTx.EXPECT().Commit().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -435,11 +448,10 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 }
 
 func TestPayCycleUsecase_Success_ExistingPaymentNotDone(t *testing.T) {
-	// Un paiement existant mais pas DONE (ex: FAILED) ne doit pas bloquer une nouvelle tentative
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, shopRepo, txManager, paymentRegistry := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -449,6 +461,7 @@ func TestPayCycleUsecase_Success_ExistingPaymentNotDone(t *testing.T) {
 	failedPayment := &entity.TontinePayment{ID: "payment-old", Status: entity.TontinePaymentFailed}
 	mockTx := mockrepo.NewMockTx(ctrl)
 	txPaymentRepo := mockrepo.NewMockTontinePaymentRepository(ctrl)
+	mockProvider := mockusecase.NewMockProvider(ctrl) // 🆕 AJOUT
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
@@ -457,6 +470,13 @@ func TestPayCycleUsecase_Success_ExistingPaymentNotDone(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
 	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	// 🆕 AJOUT : Mock du registry et du provider
+	paymentRegistry.EXPECT().GetAvailable(gomock.Any(), entity.PaymentProvider("orange_money")).Return(mockProvider, nil)
+	mockProvider.EXPECT().InitiatePayment(gomock.Any(), gomock.Any()).Return(&payment.PaymentResponse{
+		ProviderRef: "prov-ref-123",
+	}, nil)
+
 	mockTx.EXPECT().Commit().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)

@@ -1,6 +1,6 @@
 package repository
-//go:generate mockgen -destination=../../mocks/repository/mock_user_session_repository.go -package=repository . UserSessionRepository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_user_session_repository.go -package=repository . UserSessionRepository
 
 import (
 	"context"

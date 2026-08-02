@@ -3,7 +3,7 @@
 -- Description: Ajout système de rôles, permissions et audit pour admin
 
 -- ============================================================
--- PARTIE 1 : AJOUT COLONNES RBAC SUR USERS
+-- PARTIE 1 : AJOUT COLONNES RBAC SUR USERS & NETTOYAGE SÉCURISÉ
 -- ============================================================
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) NOT NULL DEFAULT 'merchant';
@@ -16,7 +16,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by VARCHAR(36);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_by VARCHAR(36);
 
--- Contraintes (idempotentes)
+-- 1.1 Supprimer les anciennes contraintes si elles existent (pour éviter les conflits)
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_role_check' AND conrelid = 'users'::regclass) THEN
@@ -25,10 +25,29 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_status_check' AND conrelid = 'users'::regclass) THEN
         ALTER TABLE users DROP CONSTRAINT users_status_check;
     END IF;
-
-    ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin', 'admin', 'credit_analyst', 'support_agent', 'moderator', 'merchant'));
-    ALTER TABLE users ADD CONSTRAINT users_status_check CHECK (status IN ('active', 'pending', 'suspended', 'banned', 'deleted'));
 END $$;
+
+-- 1.2 🚨 CRUCIAL : Supprimer les triggers d'audit existants avant le nettoyage
+-- Cela empêche le trigger de se déclencher avec des valeurs NULL pendant la migration
+DROP TRIGGER IF EXISTS trigger_log_role_change ON users;
+DROP TRIGGER IF EXISTS trigger_log_status_change ON users;
+
+-- 1.3 Nettoyer les données (maintenant que les triggers sont supprimés, pas de risque de violation NOT NULL)
+UPDATE users 
+SET role = 'merchant', updated_by = 'system_migration'
+WHERE role IS NULL OR role = '' OR role NOT IN ('super_admin', 'admin', 'credit_analyst', 'support_agent', 'moderator', 'merchant');
+
+UPDATE users 
+SET status = 'active' 
+WHERE status IS NULL OR status = '' OR status NOT IN ('active', 'pending', 'suspended', 'banned', 'deleted');
+
+UPDATE users 
+SET is_active = true 
+WHERE is_active IS NULL;
+
+-- 1.4 Recréer les contraintes CHECK (les données sont maintenant propres)
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('super_admin', 'admin', 'credit_analyst', 'support_agent', 'moderator', 'merchant'));
+ALTER TABLE users ADD CONSTRAINT users_status_check CHECK (status IN ('active', 'pending', 'suspended', 'banned', 'deleted'));
 
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active);
@@ -38,7 +57,6 @@ CREATE INDEX IF NOT EXISTS idx_users_last_login ON users(last_login_at DESC);
 -- ============================================================
 -- PARTIE 2 : TABLE ROLES
 -- ============================================================
-
 CREATE TABLE IF NOT EXISTS roles (
     id VARCHAR(50) PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -61,7 +79,6 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================================
 -- PARTIE 3 : TABLE PERMISSIONS
 -- ============================================================
-
 CREATE TABLE IF NOT EXISTS permissions (
     id VARCHAR(100) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -102,7 +119,6 @@ ON CONFLICT (id) DO NOTHING;
 -- ============================================================
 -- PARTIE 4 : TABLE ADMIN_AUDIT_LOGS
 -- ============================================================
-
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     admin_user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -124,19 +140,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON admin_audit_logs(created_at
 CREATE INDEX IF NOT EXISTS idx_audit_logs_ip ON admin_audit_logs(ip_address);
 
 -- ============================================================
--- PARTIE 5 : MIGRATION DES DONNÉES EXISTANTES
+-- PARTIE 5 : CRÉATION SUPER ADMIN PAR DÉFAUT
 -- ============================================================
-
-UPDATE users SET role = 'merchant' WHERE role IS NULL OR role = '';
-UPDATE users SET is_active = true, status = 'active' WHERE is_active IS NULL;
-
 DO $$
 DECLARE super_admin_exists BOOLEAN;
 BEGIN
     SELECT EXISTS(SELECT 1 FROM users WHERE role = 'super_admin') INTO super_admin_exists;
     IF NOT super_admin_exists THEN
-        INSERT INTO users (id, email, password, role, is_active, status, created_at, updated_at)
-        VALUES (gen_random_uuid()::varchar, 'admin@goshop.com', '$2a$04$YourBcryptHashHere', 'super_admin', true, 'active', NOW(), NOW());
+        INSERT INTO users (id, email, password, role, is_active, status, created_at, updated_at, updated_by)
+        VALUES (gen_random_uuid()::varchar, 'admin@goshop.com', '$2a$04$YourBcryptHashHere', 'super_admin', true, 'active', NOW(), NOW(), 'system_migration');
         RAISE NOTICE '✅ Super admin créé : admin@goshop.com';
     END IF;
 END $$;
@@ -144,7 +156,6 @@ END $$;
 -- ============================================================
 -- PARTIE 6 : FONCTIONS UTILITAIRES
 -- ============================================================
-
 CREATE OR REPLACE FUNCTION user_has_permission(user_id_param VARCHAR(36), permission_param VARCHAR(100))
 RETURNS BOOLEAN AS $$
 DECLARE user_role VARCHAR(50); role_permissions JSONB;
@@ -170,7 +181,6 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ============================================================
 -- PARTIE 7 : VUES POUR RAPPORTS
 -- ============================================================
-
 CREATE OR REPLACE VIEW v_users_by_role AS
 SELECT role, COUNT(*) as count,
     COUNT(CASE WHEN is_active = true THEN 1 END) as active_count,
@@ -182,17 +192,13 @@ SELECT a.id, a.created_at, u.email as admin_email, u.role as admin_role, a.actio
 FROM admin_audit_logs a JOIN users u ON u.id = a.admin_user_id
 ORDER BY a.created_at DESC LIMIT 100;
 
--- NOTE: La vue v_active_sessions a été définitivement supprimée d'ici.
--- Elle est gérée correctement par les migrations 025 et 025b.
-
 -- ============================================================
--- PARTIE 8 : TRIGGERS D'AUDIT
+-- PARTIE 8 : TRIGGERS D'AUDIT (Recréation idempotente)
 -- ============================================================
-
 CREATE OR REPLACE FUNCTION log_role_change() RETURNS TRIGGER AS $$
 BEGIN
     IF OLD.role IS DISTINCT FROM NEW.role THEN
-        PERFORM log_admin_action(NEW.updated_by, 'user_role_changed', 'user', NEW.id, jsonb_build_object('role', OLD.role), jsonb_build_object('role', NEW.role), NULL, NULL, NULL);
+        PERFORM log_admin_action(COALESCE(NEW.updated_by, 'system'), 'user_role_changed', 'user', NEW.id, jsonb_build_object('role', OLD.role), jsonb_build_object('role', NEW.role), NULL, NULL, NULL);
     END IF;
     RETURN NEW;
 END;
@@ -204,7 +210,7 @@ CREATE TRIGGER trigger_log_role_change AFTER UPDATE ON users FOR EACH ROW WHEN (
 CREATE OR REPLACE FUNCTION log_status_change() RETURNS TRIGGER AS $$
 BEGIN
     IF OLD.is_active IS DISTINCT FROM NEW.is_active THEN
-        PERFORM log_admin_action(NEW.updated_by, CASE WHEN NEW.is_active = true THEN 'user_activated' ELSE 'user_deactivated' END, 'user', NEW.id, jsonb_build_object('is_active', OLD.is_active, 'status', OLD.status), jsonb_build_object('is_active', NEW.is_active, 'status', NEW.status), NULL, NULL, NULL);
+        PERFORM log_admin_action(COALESCE(NEW.updated_by, 'system'), CASE WHEN NEW.is_active = true THEN 'user_activated' ELSE 'user_deactivated' END, 'user', NEW.id, jsonb_build_object('is_active', OLD.is_active, 'status', OLD.status), jsonb_build_object('is_active', NEW.is_active, 'status', NEW.status), NULL, NULL, NULL);
     END IF;
     RETURN NEW;
 END;
@@ -216,7 +222,6 @@ CREATE TRIGGER trigger_log_status_change AFTER UPDATE ON users FOR EACH ROW WHEN
 -- ============================================================
 -- PARTIE 9 : VÉRIFICATION
 -- ============================================================
-
 DO $$
 DECLARE users_count INT; super_admin_count INT;
 BEGIN

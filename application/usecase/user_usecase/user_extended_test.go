@@ -1,4 +1,4 @@
-﻿package userusecase_test
+package userusecase_test
 
 import (
 	"context"
@@ -434,4 +434,3 @@ func TestRegisterUsecase_EmptyEmail(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
 }
-

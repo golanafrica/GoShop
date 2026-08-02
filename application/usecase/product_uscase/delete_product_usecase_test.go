@@ -1,4 +1,4 @@
-﻿package productuscase_test
+package productuscase_test
 
 import (
 	productuscase "Goshop/application/usecase/product_uscase"

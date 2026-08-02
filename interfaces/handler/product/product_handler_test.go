@@ -1,4 +1,4 @@
-﻿package producthandler_test
+package producthandler_test
 
 import (
 	"bytes"

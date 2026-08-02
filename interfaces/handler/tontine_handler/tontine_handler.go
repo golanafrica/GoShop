@@ -78,7 +78,6 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 	defer r.Body.Close()
 
 	// 3. 🛡️ SÉCURITÉ : Forcer le créateur = client authentifié
-	// (ignore tout creator_customer_id fourni dans le body)
 	req.CreatorCustomerID = customer.ID
 
 	group, err := h.createGroupUC.Execute(ctx, &req)
@@ -194,32 +193,43 @@ func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error 
 	return nil
 }
 
-// @Summary Lister les paiements d'un client dans un groupe
-// @Description Retourne l'historique des cotisations payées par un client spécifique dans un groupe de tontine.
+// @Summary Lister mes paiements tontine dans un groupe
+// @Description Retourne l'historique des cotisations du client authentifié (customer_id forcé via JWT — anti-IDOR).
 // @Tags Tontine
 // @Accept json
 // @Produce json
 // @Param group_id path string true "ID du groupe de tontine (UUID)"
-// @Param customer_id query string true "ID du client (UUID)"
 // @Success 200 {array} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Paramètres manquants"
 // @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (accès aux données d'un autre client)"
-// @Failure 404 {object} utils.AppError "Groupe introuvable"
+// @Failure 404 {object} utils.AppError "Groupe ou profil client introuvable"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/tontine/groups/{group_id}/payments [get]
 func (h *TontineHandler) ListCustomerPayments(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
 	groupID := chi.URLParam(r, "group_id")
-	customerID := r.URL.Query().Get("customer_id")
-
-	if groupID == "" || customerID == "" {
+	if groupID == "" {
 		return utils.ErrInvalidPayload
 	}
 
-	payments, err := h.listCustomerPaymentsUC.Execute(ctx, groupID, customerID)
+	// 1. 🛡️ SÉCURITÉ : Récupérer l'ID utilisateur du JWT (ignore tout paramètre de requête customer_id)
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		return utils.ErrUnauthorized
+	}
+
+	// 2. 🛡️ TRADUCTION SÉCURISÉE User → Customer
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found for list payments")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
+	}
+
+	// 3. Exécuter le usecase avec le customerID sécurisé
+	payments, err := h.listCustomerPaymentsUC.Execute(ctx, groupID, customer.ID)
 	if err != nil {
 		return utils.NewAppError("LIST_PAYMENTS_FAILED", err.Error(), http.StatusBadRequest)
 	}
