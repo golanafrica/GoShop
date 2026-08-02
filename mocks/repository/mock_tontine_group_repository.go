@@ -100,6 +100,21 @@ func (mr *MockTontineGroupRepositoryMockRecorder) FindByID(ctx, id any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockTontineGroupRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByIDUnscoped mocks base method.
+func (m *MockTontineGroupRepository) FindByIDUnscoped(ctx context.Context, id string) (*entity.TontineGroup, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDUnscoped", ctx, id)
+	ret0, _ := ret[0].(*entity.TontineGroup)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDUnscoped indicates an expected call of FindByIDUnscoped.
+func (mr *MockTontineGroupRepositoryMockRecorder) FindByIDUnscoped(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDUnscoped", reflect.TypeOf((*MockTontineGroupRepository)(nil).FindByIDUnscoped), ctx, id)
+}
+
 // FindByInviteCode mocks base method.
 func (m *MockTontineGroupRepository) FindByInviteCode(ctx context.Context, code string) (*entity.TontineGroup, error) {
 	m.ctrl.T.Helper()

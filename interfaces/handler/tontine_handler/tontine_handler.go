@@ -41,6 +41,7 @@ func NewTontineHandler(
 
 // @Summary Créer un groupe de tontine
 // @Description Initialise un nouveau groupe de tontine pour un produit spécifique.
+// L'ID client créateur est résolu de manière sécurisée via le JWT (prévention IDOR).
 // @Tags Tontine
 // @Accept json
 // @Produce json
@@ -49,17 +50,36 @@ func NewTontineHandler(
 // @Failure 400 {object} utils.AppError "Payload invalide ou règles de tontine non respectées"
 // @Failure 401 {object} utils.AppError "Non autorisé"
 // @Failure 403 {object} utils.AppError "Interdit (KYC non validé ou droits insuffisants)"
+// @Failure 404 {object} utils.AppError "Profil client introuvable"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
 // @Router /api/tontine/groups [post]
 func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	// 1. Récupérer l'ID utilisateur du JWT
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || authUserID == "" {
+		return utils.ErrUnauthorized
+	}
+
+	// 2. 🛡️ TRADUCTION SÉCURISÉE User → Customer
+	customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
+	if err != nil {
+		logger.Warn().Err(err).Str("user_id", authUserID).Msg("Customer profile not found for create group")
+		return utils.NewAppError("CUSTOMER_NOT_FOUND", "Customer profile not found", http.StatusNotFound)
+	}
 
 	var req tontineusecase.CreateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
+
+	// 3. 🛡️ SÉCURITÉ : Forcer le créateur = client authentifié
+	// (ignore tout creator_customer_id fourni dans le body)
+	req.CreatorCustomerID = customer.ID
 
 	group, err := h.createGroupUC.Execute(ctx, &req)
 	if err != nil {

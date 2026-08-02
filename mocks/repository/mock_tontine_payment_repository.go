@@ -161,6 +161,21 @@ func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferencePrefix(ctx, r
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferencePrefix", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferencePrefix), ctx, referencePrefix)
 }
 
+// FindByReferenceUnscoped mocks base method.
+func (m *MockTontinePaymentRepository) FindByReferenceUnscoped(ctx context.Context, reference string) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByReferenceUnscoped", ctx, reference)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByReferenceUnscoped indicates an expected call of FindByReferenceUnscoped.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferenceUnscoped(ctx, reference any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferenceUnscoped", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferenceUnscoped), ctx, reference)
+}
+
 // FindDoneWithoutCommission mocks base method.
 func (m *MockTontinePaymentRepository) FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error) {
 	m.ctrl.T.Helper()

@@ -113,6 +113,48 @@ func (mr *MockNotificationServiceMockRecorder) NotifyClientOrderRejected(ctx, or
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyClientOrderRejected", reflect.TypeOf((*MockNotificationService)(nil).NotifyClientOrderRejected), ctx, order, customerPhone, reason)
 }
 
+// NotifyCreditInstallmentDue mocks base method.
+func (m *MockNotificationService) NotifyCreditInstallmentDue(ctx context.Context, userID, contractID, amount string, daysLeft int) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyCreditInstallmentDue", ctx, userID, contractID, amount, daysLeft)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyCreditInstallmentDue indicates an expected call of NotifyCreditInstallmentDue.
+func (mr *MockNotificationServiceMockRecorder) NotifyCreditInstallmentDue(ctx, userID, contractID, amount, daysLeft any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyCreditInstallmentDue", reflect.TypeOf((*MockNotificationService)(nil).NotifyCreditInstallmentDue), ctx, userID, contractID, amount, daysLeft)
+}
+
+// NotifyCreditInstallmentPaid mocks base method.
+func (m *MockNotificationService) NotifyCreditInstallmentPaid(ctx context.Context, userID, contractID, amount string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyCreditInstallmentPaid", ctx, userID, contractID, amount)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyCreditInstallmentPaid indicates an expected call of NotifyCreditInstallmentPaid.
+func (mr *MockNotificationServiceMockRecorder) NotifyCreditInstallmentPaid(ctx, userID, contractID, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyCreditInstallmentPaid", reflect.TypeOf((*MockNotificationService)(nil).NotifyCreditInstallmentPaid), ctx, userID, contractID, amount)
+}
+
+// NotifyCreditOverdue mocks base method.
+func (m *MockNotificationService) NotifyCreditOverdue(ctx context.Context, userID, contractID, amount string, daysOverdue int) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyCreditOverdue", ctx, userID, contractID, amount, daysOverdue)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyCreditOverdue indicates an expected call of NotifyCreditOverdue.
+func (mr *MockNotificationServiceMockRecorder) NotifyCreditOverdue(ctx, userID, contractID, amount, daysOverdue any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyCreditOverdue", reflect.TypeOf((*MockNotificationService)(nil).NotifyCreditOverdue), ctx, userID, contractID, amount, daysOverdue)
+}
+
 // NotifyMerchantCommissionPaid mocks base method.
 func (m *MockNotificationService) NotifyMerchantCommissionPaid(ctx context.Context, shop *entity.Shop, order *entity.Order, commissionCents int64) error {
 	m.ctrl.T.Helper()
@@ -181,6 +223,34 @@ func (m *MockNotificationService) NotifyOrderStatusChange(ctx context.Context, o
 func (mr *MockNotificationServiceMockRecorder) NotifyOrderStatusChange(ctx, order, customerID, shopID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyOrderStatusChange", reflect.TypeOf((*MockNotificationService)(nil).NotifyOrderStatusChange), ctx, order, customerID, shopID)
+}
+
+// NotifyTontineCyclePaid mocks base method.
+func (m *MockNotificationService) NotifyTontineCyclePaid(ctx context.Context, userID, payerName, groupName, amount string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyTontineCyclePaid", ctx, userID, payerName, groupName, amount)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyTontineCyclePaid indicates an expected call of NotifyTontineCyclePaid.
+func (mr *MockNotificationServiceMockRecorder) NotifyTontineCyclePaid(ctx, userID, payerName, groupName, amount any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineCyclePaid", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineCyclePaid), ctx, userID, payerName, groupName, amount)
+}
+
+// NotifyTontineTurnSoon mocks base method.
+func (m *MockNotificationService) NotifyTontineTurnSoon(ctx context.Context, userID, groupName, turnDate string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyTontineTurnSoon", ctx, userID, groupName, turnDate)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyTontineTurnSoon indicates an expected call of NotifyTontineTurnSoon.
+func (mr *MockNotificationServiceMockRecorder) NotifyTontineTurnSoon(ctx, userID, groupName, turnDate any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineTurnSoon", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineTurnSoon), ctx, userID, groupName, turnDate)
 }
 
 // SendNotification mocks base method.

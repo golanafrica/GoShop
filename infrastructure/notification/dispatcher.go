@@ -80,6 +80,18 @@ func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, user
 	}()
 }
 
+// 🆕 getUserEmailByID récupère l'email directement depuis le userID (plus efficace pour Tontine/Crédit)
+func (d *NotificationDispatcher) getUserEmailByID(userID string) string {
+	if d.userRepo == nil || userID == "" {
+		return ""
+	}
+	user, err := d.userRepo.FindUserByID(userID)
+	if err == nil && user != nil {
+		return user.Email
+	}
+	return ""
+}
+
 // getUserEmail récupère l'email d'un utilisateur à partir de son CustomerID
 func (d *NotificationDispatcher) getUserEmail(ctx context.Context, customerID string) string {
 	if d.customerRepo == nil || customerID == "" {
@@ -89,14 +101,7 @@ func (d *NotificationDispatcher) getUserEmail(ctx context.Context, customerID st
 	if err != nil || customer == nil || customer.UserID == "" {
 		return ""
 	}
-
-	if d.userRepo != nil {
-		user, err := d.userRepo.FindUserByID(customer.UserID)
-		if err == nil && user != nil {
-			return user.Email
-		}
-	}
-	return ""
+	return d.getUserEmailByID(customer.UserID)
 }
 
 // getShopEmail récupère l'email d'un marchand à partir de son ShopID
@@ -108,21 +113,13 @@ func (d *NotificationDispatcher) getShopEmail(ctx context.Context, shopID uuid.U
 	if err != nil || shop == nil || shop.OwnerID == "" {
 		return ""
 	}
-
-	if d.userRepo != nil {
-		user, err := d.userRepo.FindUserByID(shop.OwnerID)
-		if err == nil && user != nil {
-			return user.Email
-		}
-	}
-	return ""
+	return d.getUserEmailByID(shop.OwnerID)
 }
 
 // ============================================================
-// 🆕 MÉTHODE GÉNÉRIQUE POUR LES COMMANDES (Option A)
+// MÉTHODES GÉNÉRIQUES POUR LES COMMANDES
 // ============================================================
 
-// NotifyOrderStatusChange notifie le client et le marchand d'un changement de statut de commande.
 func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, order *entity.Order, customerID string, shopID uuid.UUID) error {
 	title, message := d.buildOrderStatusMessages(string(order.Status))
 	data := map[string]interface{}{
@@ -130,11 +127,9 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 		"status":   order.Status,
 	}
 
-	// 1. Récupérer les infos du client AVANT la goroutine
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	userEmail := d.getUserEmail(ctx, customerID)
 
-	// 2. Notification au Client (Asynchrone)
 	go func() {
 		bgCtx := context.Background()
 		if userID != "" {
@@ -144,7 +139,6 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 		}
 	}()
 
-	// 3. Notification au Marchand (Asynchrone)
 	go func() {
 		bgCtx := context.Background()
 		shop, err := d.shopRepo.FindByID(bgCtx, shopID)
@@ -159,7 +153,7 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 }
 
 // ============================================================
-// MÉTHODES EXISTANTES
+// MÉTHODES EXISTANTES (Commandes & Litiges)
 // ============================================================
 
 func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
@@ -244,26 +238,10 @@ func (d *NotificationDispatcher) NotifyMerchantCommissionPaid(ctx context.Contex
 	return nil
 }
 
-func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *service.NotificationRequest) error {
-	title := string(req.Type)
-	message := "Notification"
-
-	d.sendWebSocketNotification(ctx, req.RecipientPhone, string(req.Type), title, message, req.Data)
-	d.sendEmailNotification(ctx, req.RecipientEmail, title, message, req.Data)
-	return nil
-}
-
-// 🆕 NotifyClientDisputeResolved avec montant remboursé pour la transparence
 func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string, refundedAmount int64) error {
 	title := "Litige résolu"
-	// Message transparent expliquant la déduction des frais
 	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité en votre faveur. Un remboursement de %d FCFA (montant net après déduction des frais de transaction) a été initié vers votre compte.", orderID, refundedAmount/100)
-
-	data := map[string]interface{}{
-		"order_id":        orderID,
-		"resolution":      resolution,
-		"refunded_amount": refundedAmount / 100, // En FCFA pour le frontend
-	}
+	data := map[string]interface{}{"order_id": orderID, "resolution": resolution, "refunded_amount": refundedAmount / 100}
 
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	if userID != "" {
@@ -294,6 +272,73 @@ func (d *NotificationDispatcher) NotifyMerchantDisputeResolved(ctx context.Conte
 	return nil
 }
 
+func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *service.NotificationRequest) error {
+	title := string(req.Type)
+	message := "Notification"
+
+	d.sendWebSocketNotification(ctx, req.RecipientPhone, string(req.Type), title, message, req.Data)
+	d.sendEmailNotification(ctx, req.RecipientEmail, title, message, req.Data)
+	return nil
+}
+
+// ============================================================
+// 🆕 NOUVELLES MÉTHODES POUR LA TONTINE
+// ============================================================
+
+func (d *NotificationDispatcher) NotifyTontineCyclePaid(ctx context.Context, userID, payerName, groupName, amount string) error {
+	title := "Cotisation Tontine reçue"
+	message := fmt.Sprintf("Le membre %s a réglé sa cotisation de %s FCFA pour le groupe '%s'.", payerName, amount, groupName)
+	data := map[string]interface{}{"group_name": groupName, "amount": amount, "payer_name": payerName}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationTontineCyclePaid), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+func (d *NotificationDispatcher) NotifyTontineTurnSoon(ctx context.Context, userID, groupName, turnDate string) error {
+	title := "Votre tour approche !"
+	message := fmt.Sprintf("Préparez-vous, votre tour de recevoir le bien du groupe '%s' est prévu le %s.", groupName, turnDate)
+	data := map[string]interface{}{"group_name": groupName, "turn_date": turnDate}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationTontineTurnSoon), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+// ============================================================
+// 🆕 NOUVELLES MÉTHODES POUR LE CRÉDIT
+// ============================================================
+
+func (d *NotificationDispatcher) NotifyCreditInstallmentDue(ctx context.Context, userID, contractID, amount string, daysLeft int) error {
+	title := "Rappel d'échéance de crédit"
+	message := fmt.Sprintf("Votre échéance de %s FCFA arrive dans %d jour(s). Pensez à effectuer votre paiement pour éviter les pénalités.", amount, daysLeft)
+	data := map[string]interface{}{"contract_id": contractID, "amount": amount, "days_left": daysLeft}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationCreditInstallmentDue), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+func (d *NotificationDispatcher) NotifyCreditInstallmentPaid(ctx context.Context, userID, contractID, amount string) error {
+	title := "Paiement de crédit reçu"
+	message := fmt.Sprintf("Merci ! Votre paiement de %s FCFA a été enregistré avec succès.", amount)
+	data := map[string]interface{}{"contract_id": contractID, "amount": amount}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationCreditInstallmentPaid), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+func (d *NotificationDispatcher) NotifyCreditOverdue(ctx context.Context, userID, contractID, amount string, daysOverdue int) error {
+	title := "⚠️ Alerte : Retard de paiement"
+	message := fmt.Sprintf("Votre échéance de %s FCFA est en retard de %d jour(s). Veuillez régulariser votre situation dès que possible.", amount, daysOverdue)
+	data := map[string]interface{}{"contract_id": contractID, "amount": amount, "days_overdue": daysOverdue}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationCreditOverdue), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -314,7 +359,6 @@ func (d *NotificationDispatcher) getUserIDFromCustomerID(ctx context.Context, cu
 	return customer.UserID
 }
 
-// buildOrderStatusMessages génère le titre et le message en fonction du statut
 func (d *NotificationDispatcher) buildOrderStatusMessages(status string) (string, string) {
 	switch status {
 	case "confirmed":

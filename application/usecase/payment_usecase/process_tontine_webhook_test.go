@@ -92,6 +92,8 @@ func TestProcessTontineWebhookUsecase_InvalidReference(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕 notificationSvc
+		nil, // 🆕 customerRepo
 	)
 
 	ctx := context.Background()
@@ -118,6 +120,8 @@ func TestProcessTontineWebhookUsecase_InvalidReferenceFormat(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -148,6 +152,8 @@ func TestProcessTontineWebhookUsecase_PaymentNotFound(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -183,6 +189,8 @@ func TestProcessTontineWebhookUsecase_PaymentAlreadyDone(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -220,6 +228,8 @@ func TestProcessTontineWebhookUsecase_GroupNotFound(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -257,6 +267,8 @@ func TestProcessTontineWebhookUsecase_ShopNotFound(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -303,6 +315,8 @@ func TestProcessTontineWebhookUsecase_StatusSuccess_MarkDone(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -358,6 +372,8 @@ func TestProcessTontineWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -404,6 +420,8 @@ func TestProcessTontineWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -450,6 +468,8 @@ func TestProcessTontineWebhookUsecase_CycleNotComplete_Waiting(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -504,6 +524,8 @@ func TestProcessTontineWebhookUsecase_CycleComplete_GenerateVoucher(t *testing.T
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -571,6 +593,8 @@ func TestProcessTontineWebhookUsecase_LastCycle_CompleteGroup(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -639,6 +663,8 @@ func TestProcessTontineWebhookUsecase_GroupNotActive_SkipCompletion(t *testing.T
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -690,6 +716,8 @@ func TestProcessTontineWebhookUsecase_VoucherCollision(t *testing.T) {
 		mockTontineParticipantRepo,
 		mockTontineVoucherRepo,
 		mockShopRepo,
+		nil, // 🆕
+		nil, // 🆕
 	)
 
 	ctx := context.Background()
@@ -751,7 +779,7 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et walletUpdater)
+	// 🆕 CORRECTION : Ajout des 2 nouveaux paramètres nil (shopSettingsRepo et creditUpdater/walletUpdater selon ta version)
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo,
 		mockRegistry,
@@ -760,7 +788,7 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 		nil, // shopSettingsRepo
 		mockTontineUC,
 		nil, // creditUpdater
-		nil, // walletUpdater
+		nil, // walletUpdater / escrowRepo selon ta version
 	)
 
 	ctx := context.Background()

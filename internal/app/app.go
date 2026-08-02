@@ -507,6 +507,8 @@ func (a *App) setupRouter() {
 		tontineParticipantRepo,
 		tontineVoucherRepo,
 		shopRepo,
+		notifService,
+		postgresCustomerRepo,
 	)
 
 	// Process Webhook Usecase (utilise maintenant l'Escrow)
@@ -1361,6 +1363,7 @@ func (a *App) setupRouter() {
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
 
 			// Actions Tontine pour le client
+			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup)) // 🆕 AJOUTÉE ICI
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
 			r.Post("/tontine/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
 			r.Get("/tontine/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))

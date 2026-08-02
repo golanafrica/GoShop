@@ -10,6 +10,7 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/domain/service"
 	"Goshop/domain/tenant"
 
 	"github.com/google/uuid"
@@ -23,6 +24,9 @@ type ProcessTontineWebhookUsecase struct {
 	tontineParticipantRepo repository.TontineParticipantRepository
 	tontineVoucherRepo     repository.TontineVoucherRepository
 	shopRepo               repository.ShopRepository
+
+	notificationSvc service.NotificationService
+	customerRepo    repository.CustomerRepositoryInterface
 }
 
 // NewProcessTontineWebhookUsecase crée une nouvelle instance
@@ -32,6 +36,8 @@ func NewProcessTontineWebhookUsecase(
 	tontineParticipantRepo repository.TontineParticipantRepository,
 	tontineVoucherRepo repository.TontineVoucherRepository,
 	shopRepo repository.ShopRepository,
+	notificationSvc service.NotificationService,
+	customerRepo repository.CustomerRepositoryInterface,
 ) *ProcessTontineWebhookUsecase {
 	return &ProcessTontineWebhookUsecase{
 		tontinePaymentRepo:     tontinePaymentRepo,
@@ -39,6 +45,8 @@ func NewProcessTontineWebhookUsecase(
 		tontineParticipantRepo: tontineParticipantRepo,
 		tontineVoucherRepo:     tontineVoucherRepo,
 		shopRepo:               shopRepo,
+		notificationSvc:        notificationSvc,
+		customerRepo:           customerRepo,
 	}
 }
 
@@ -93,14 +101,13 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		Str("status", string(status)).
 		Msg("Processing tontine webhook")
 
-		// 2. Trouver le paiement tontine par préfixe de référence
-		// ✅ APRÈS (match exact, plus simple)
-	payment, err := uc.tontinePaymentRepo.FindByReference(ctx, reference)
+	// 2. Lookup SANS tenant (référence globale unique)
+	payment, err := uc.tontinePaymentRepo.FindByReferenceUnscoped(ctx, reference)
 	if err != nil {
 		return fmt.Errorf("tontine payment not found for reference %s: %w", reference, err)
 	}
 
-	// 3. Vérifier que le paiement n'est pas déjà dans un état terminal
+	// 3. Déjà payé → idempotent
 	if payment.IsDone() {
 		logger.Info().
 			Str("payment_id", payment.ID).
@@ -108,8 +115,8 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		return nil
 	}
 
-	// 4. Récupérer le groupe pour injecter le tenant
-	group, err := uc.tontineGroupRepo.FindByID(ctx, payment.GroupID)
+	// 4. Récupérer le groupe SANS tenant
+	group, err := uc.tontineGroupRepo.FindByIDUnscoped(ctx, payment.GroupID)
 	if err != nil {
 		return fmt.Errorf("tontine group not found: %w", err)
 	}
@@ -124,10 +131,10 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		return fmt.Errorf("shop not found: %w", err)
 	}
 
-	// Injecter le tenant dans le contexte
+	// 5. Injecter le tenant pour le reste des opérations
 	ctx = tenant.WithTenant(ctx, shop)
 
-	// 5. Transition de statut selon l'événement
+	// 6. Transition de statut
 	switch status {
 	case entity.PaymentStatusSuccess:
 		if err := uc.tontinePaymentRepo.MarkDone(ctx, payment.ID, transactionID); err != nil {
@@ -137,6 +144,8 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 			Str("payment_id", payment.ID).
 			Str("transaction_id", transactionID).
 			Msg("Tontine payment marked as DONE")
+
+		uc.notifyGroupMembers(ctx, group, cycleNumber, payment.CustomerID, logger)
 
 	case entity.PaymentStatusFailed:
 		if err := uc.tontinePaymentRepo.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
@@ -154,7 +163,7 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		return nil
 	}
 
-	// 6. Si succès, vérifier si tous les participants ont payé pour ce cycle
+	// 7. Si succès → vérifier complétion du cycle
 	if status == entity.PaymentStatusSuccess {
 		return uc.checkAndCompleteCycle(ctx, group.ID, cycleNumber)
 	}
@@ -162,7 +171,47 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 	return nil
 }
 
-// checkAndCompleteCycle vérifie si tous les participants ont payé et complète le cycle
+func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
+	ctx context.Context,
+	group *entity.TontineGroup,
+	cycleNumber int,
+	payerCustomerID string,
+	logger *zerolog.Logger,
+) {
+	if uc.notificationSvc == nil || uc.customerRepo == nil {
+		return
+	}
+
+	payerName := "Un membre"
+	payerCustomer, err := uc.customerRepo.FindByCustomerID(ctx, payerCustomerID)
+	if err == nil && payerCustomer != nil && payerCustomer.FirstName != "" {
+		payerName = payerCustomer.FirstName
+	}
+
+	amountStr := fmt.Sprintf("%d", group.AmountPerCycleCents/100)
+	groupName := fmt.Sprintf("Groupe Tontine (Cycle %d/%d)", cycleNumber, group.TotalCycles)
+
+	participants, err := uc.tontineParticipantRepo.FindByGroupID(ctx, group.ID)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Failed to fetch group participants for notification")
+		return
+	}
+
+	for _, p := range participants {
+		customer, err := uc.customerRepo.FindByCustomerID(ctx, p.CustomerID)
+		if err != nil || customer == nil || customer.UserID == "" {
+			continue
+		}
+
+		err = uc.notificationSvc.NotifyTontineCyclePaid(ctx, customer.UserID, payerName, groupName, amountStr)
+		if err != nil {
+			logger.Warn().Err(err).Str("user_id", customer.UserID).Msg("Failed to send tontine notification")
+		}
+	}
+
+	logger.Info().Int("notified_count", len(participants)).Str("payer", payerName).Msg("Tontine cycle paid notifications dispatched")
+}
+
 func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 	ctx context.Context,
 	groupID string,
@@ -170,7 +219,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 ) error {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le groupe
 	group, err := uc.tontineGroupRepo.FindByID(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("group not found: %w", err)
@@ -184,7 +232,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return nil
 	}
 
-	// 2. Compter les paiements DONE pour ce cycle
 	doneCount, err := uc.tontinePaymentRepo.CountDoneByGroupAndCycle(ctx, groupID, cycleNumber)
 	if err != nil {
 		return fmt.Errorf("count done payments: %w", err)
@@ -197,7 +244,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Int("total_cycles", group.TotalCycles).
 		Msg("Checking cycle completion")
 
-	// 3. Pas encore tous payés → on attend
 	if doneCount < group.TotalCycles {
 		logger.Info().
 			Int("remaining", group.TotalCycles-doneCount).
@@ -205,25 +251,21 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return nil
 	}
 
-	// 4. Tous ont payé ! Générer le voucher pour le bénéficiaire du cycle
 	logger.Info().
 		Str("group_id", groupID).
 		Int("cycle", cycleNumber).
 		Msg("All participants paid, generating voucher")
 
-	// Trouver le bénéficiaire du cycle (position = cycleNumber)
 	beneficiary, err := uc.tontineParticipantRepo.FindByPosition(ctx, groupID, cycleNumber)
 	if err != nil {
 		return fmt.Errorf("beneficiary not found for cycle %d: %w", cycleNumber, err)
 	}
 
-	// Générer un code voucher unique
 	voucherCode, err := generateVoucherCode(12)
 	if err != nil {
 		return fmt.Errorf("generate voucher code: %w", err)
 	}
 
-	// Créer le voucher
 	voucher, err := entity.NewTontineVoucher(
 		groupID,
 		beneficiary.ID,
@@ -247,7 +289,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Int("cycle", cycleNumber).
 		Msg("✅ Voucher generated for beneficiary")
 
-	// 5. Si c'est le dernier cycle, compléter le groupe
 	if group.IsLastCycle() {
 		if err := uc.tontineGroupRepo.Complete(ctx, groupID); err != nil {
 			return fmt.Errorf("complete group: %w", err)
@@ -258,7 +299,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return nil
 	}
 
-	// 6. Sinon, passer au cycle suivant
 	if err := uc.tontineGroupRepo.IncrementCycle(ctx, groupID); err != nil {
 		return fmt.Errorf("increment cycle: %w", err)
 	}
@@ -271,7 +311,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 	return nil
 }
 
-// generateVoucherCode génère un code alphanumérique unique de 12 caractères
 func generateVoucherCode(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {

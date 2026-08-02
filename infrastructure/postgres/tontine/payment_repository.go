@@ -59,7 +59,6 @@ func (r *TontinePaymentRepositoryInfrastructure) getShopID(ctx context.Context) 
 	return shop.ID.String(), nil
 }
 
-// scanPayment scanne une ligne dans une entité TontinePayment
 func (r *TontinePaymentRepositoryInfrastructure) scanPayment(row *sql.Row) (*entity.TontinePayment, error) {
 	p := &entity.TontinePayment{}
 	var yengapayRef sql.NullString
@@ -99,7 +98,6 @@ func (r *TontinePaymentRepositoryInfrastructure) scanPayment(row *sql.Row) (*ent
 	return p, nil
 }
 
-// scanPayments scanne plusieurs lignes
 func (r *TontinePaymentRepositoryInfrastructure) scanPayments(ctx context.Context, query string, args ...interface{}) ([]*entity.TontinePayment, error) {
 	rows, err := r.queryContext(ctx, query, args...)
 	if err != nil {
@@ -154,7 +152,6 @@ func (r *TontinePaymentRepositoryInfrastructure) scanPayments(ctx context.Contex
 // Implémentation
 // ============================================================
 
-// Create crée un nouveau paiement de cotisation
 func (r *TontinePaymentRepositoryInfrastructure) Create(ctx context.Context, payment *entity.TontinePayment) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -198,11 +195,9 @@ func (r *TontinePaymentRepositoryInfrastructure) Create(ctx context.Context, pay
 	if err != nil {
 		return fmt.Errorf("failed to create payment: %w", err)
 	}
-
 	return nil
 }
 
-// FindByID trouve un paiement par son ID
 func (r *TontinePaymentRepositoryInfrastructure) FindByID(ctx context.Context, id string) (*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -221,11 +216,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByID(ctx context.Context, i
 		JOIN tontine_groups g ON g.id = p.group_id
 		WHERE p.id = $1 AND g.shop_id = $2
 	`
-
 	return r.scanPayment(r.queryRowContext(ctx, query, id, shopID))
 }
 
-// FindByReference trouve un paiement par sa référence YengaPay
 func (r *TontinePaymentRepositoryInfrastructure) FindByReference(ctx context.Context, reference string) (*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -244,11 +237,27 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByReference(ctx context.Con
 		JOIN tontine_groups g ON g.id = p.group_id
 		WHERE p.yengapay_reference = $1 AND g.shop_id = $2
 	`
-
 	return r.scanPayment(r.queryRowContext(ctx, query, reference, shopID))
 }
 
-// FindByReferencePrefix trouve un paiement par préfixe de référence
+// FindByReferenceUnscoped trouve un paiement par yengapay_reference SANS tenant
+// Utilisé par les webhooks (pas de contexte multi-tenant)
+func (r *TontinePaymentRepositoryInfrastructure) FindByReferenceUnscoped(ctx context.Context, reference string) (*entity.TontinePayment, error) {
+	query := `
+		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
+		       p.cycle_number, p.amount_cents, p.commission_cents,
+		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.payment_provider, p.status,
+		       p.due_date, p.paid_at,
+		       p.created_at, p.updated_at,
+		       COALESCE(p.commission_status, 'pending') as commission_status
+		FROM tontine_payments p
+		WHERE p.yengapay_reference = $1
+		LIMIT 1
+	`
+	return r.scanPayment(r.queryRowContext(ctx, query, reference))
+}
+
 func (r *TontinePaymentRepositoryInfrastructure) FindByReferencePrefix(ctx context.Context, referencePrefix string) (*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -267,11 +276,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByReferencePrefix(ctx conte
 		JOIN tontine_groups g ON g.id = p.group_id
 		WHERE p.yengapay_reference = $1 AND g.shop_id = $2
 	`
-
 	return r.scanPayment(r.queryRowContext(ctx, query, referencePrefix, shopID))
 }
 
-// FindByGroupAndCycle retourne tous les paiements d'un groupe pour un cycle donné
 func (r *TontinePaymentRepositoryInfrastructure) FindByGroupAndCycle(ctx context.Context, groupID string, cycle int) ([]*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -291,11 +298,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByGroupAndCycle(ctx context
 		WHERE p.group_id = $1 AND p.cycle_number = $2 AND g.shop_id = $3
 		ORDER BY p.created_at ASC
 	`
-
 	return r.scanPayments(ctx, query, groupID, cycle, shopID)
 }
 
-// FindByCustomerAndGroup retourne tous les paiements d'un client dans un groupe
 func (r *TontinePaymentRepositoryInfrastructure) FindByCustomerAndGroup(ctx context.Context, customerID, groupID string) ([]*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -315,11 +320,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByCustomerAndGroup(ctx cont
 		WHERE p.customer_id = $1 AND p.group_id = $2 AND g.shop_id = $3
 		ORDER BY p.cycle_number ASC
 	`
-
 	return r.scanPayments(ctx, query, customerID, groupID, shopID)
 }
 
-// FindByParticipantAndCycle trouve le paiement d'un participant pour un cycle donné
 func (r *TontinePaymentRepositoryInfrastructure) FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -338,11 +341,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByParticipantAndCycle(ctx c
 		JOIN tontine_groups g ON g.id = p.group_id
 		WHERE p.participant_id = $1 AND p.cycle_number = $2 AND g.shop_id = $3
 	`
-
 	return r.scanPayment(r.queryRowContext(ctx, query, participantID, cycle, shopID))
 }
 
-// CountDoneByGroupAndCycle compte les paiements DONE pour un groupe et un cycle
 func (r *TontinePaymentRepositoryInfrastructure) CountDoneByGroupAndCycle(ctx context.Context, groupID string, cycle int) (int, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -354,7 +355,6 @@ func (r *TontinePaymentRepositoryInfrastructure) CountDoneByGroupAndCycle(ctx co
 		JOIN tontine_groups g ON g.id = p.group_id
 		WHERE p.group_id = $1 AND p.cycle_number = $2 AND p.status = 'DONE' AND g.shop_id = $3
 	`
-
 	var count int
 	err = r.queryRowContext(ctx, query, groupID, cycle, shopID).Scan(&count)
 	if err != nil {
@@ -363,7 +363,6 @@ func (r *TontinePaymentRepositoryInfrastructure) CountDoneByGroupAndCycle(ctx co
 	return count, nil
 }
 
-// UpdateStatus met à jour le statut d'un paiement
 func (r *TontinePaymentRepositoryInfrastructure) UpdateStatus(ctx context.Context, paymentID string, status string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -388,7 +387,6 @@ func (r *TontinePaymentRepositoryInfrastructure) UpdateStatus(ctx context.Contex
 	return nil
 }
 
-// MarkDone marque un paiement comme effectué
 func (r *TontinePaymentRepositoryInfrastructure) MarkDone(ctx context.Context, paymentID string, transactionID string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -415,17 +413,15 @@ func (r *TontinePaymentRepositoryInfrastructure) MarkDone(ctx context.Context, p
 }
 
 // ============================================================
-// 🆕 v3.3.0 : Méthodes pour le scheduler de commissions
+// v3.3.0 : Méthodes pour le scheduler de commissions
 // ============================================================
 
-// FindDoneWithoutCommission récupère les paiements DONE sans commission collectée
-// 🆕 v3.3.0 : Remplit aussi le champ ShopID pour le multi-tenant
 func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 	ctx context.Context,
 	limit int,
 ) ([]*entity.TontinePayment, error) {
 	query := `
-		SELECT 
+		SELECT
 			p.id, p.group_id, p.participant_id, p.customer_id,
 			p.cycle_number, p.amount_cents, p.commission_cents,
 			p.yengapay_reference, p.yengapay_transaction_id,
@@ -462,7 +458,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 			&p.DueDate, &paidAt,
 			&p.CreatedAt, &p.UpdatedAt,
 			&commissionStatus,
-			&p.ShopID, // 🆕 v3.3.0 : Remplit directement le champ ShopID
+			&p.ShopID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
@@ -490,7 +486,6 @@ func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 	return payments, rows.Err()
 }
 
-// UpdateTontineCommissionStatus met à jour le statut de commission d'un paiement tontine
 func (r *TontinePaymentRepositoryInfrastructure) UpdateTontineCommissionStatus(
 	ctx context.Context,
 	paymentID string,

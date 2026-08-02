@@ -59,7 +59,6 @@ func (r *TontineGroupRepositoryInfrastructure) getShopID(ctx context.Context) (s
 	return shop.ID.String(), nil
 }
 
-// scanGroup scanne une ligne dans une entité TontineGroup
 func (r *TontineGroupRepositoryInfrastructure) scanGroup(row *sql.Row) (*entity.TontineGroup, error) {
 	group := &entity.TontineGroup{}
 	var creatorCustomerID sql.NullString
@@ -103,7 +102,6 @@ func (r *TontineGroupRepositoryInfrastructure) scanGroup(row *sql.Row) (*entity.
 	return group, nil
 }
 
-// scanGroups scanne plusieurs lignes
 func (r *TontineGroupRepositoryInfrastructure) scanGroups(ctx context.Context, query string, args ...interface{}) ([]*entity.TontineGroup, error) {
 	rows, err := r.queryContext(ctx, query, args...)
 	if err != nil {
@@ -162,7 +160,6 @@ func (r *TontineGroupRepositoryInfrastructure) scanGroups(ctx context.Context, q
 // Implémentation
 // ============================================================
 
-// Create crée un nouveau groupe de tontine
 func (r *TontineGroupRepositoryInfrastructure) Create(ctx context.Context, group *entity.TontineGroup) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -204,11 +201,9 @@ func (r *TontineGroupRepositoryInfrastructure) Create(ctx context.Context, group
 	if err != nil {
 		return fmt.Errorf("failed to create tontine group: %w", err)
 	}
-
 	return nil
 }
 
-// FindByID trouve un groupe par son ID
 func (r *TontineGroupRepositoryInfrastructure) FindByID(ctx context.Context, id string) (*entity.TontineGroup, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -224,11 +219,23 @@ func (r *TontineGroupRepositoryInfrastructure) FindByID(ctx context.Context, id 
 		FROM tontine_groups
 		WHERE id = $1 AND shop_id = $2
 	`
-
 	return r.scanGroup(r.queryRowContext(ctx, query, id, shopID))
 }
 
-// FindByInviteCode trouve un groupe par son code d'invitation
+// FindByIDUnscoped trouve un groupe par ID SANS tenant (webhooks)
+func (r *TontineGroupRepositoryInfrastructure) FindByIDUnscoped(ctx context.Context, id string) (*entity.TontineGroup, error) {
+	query := `
+		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		       circle_type, amount_per_cycle_cents,
+		       total_cycles, current_cycle, invite_code,
+		       status, started_at, completed_at,
+		       created_at, updated_at
+		FROM tontine_groups
+		WHERE id = $1
+	`
+	return r.scanGroup(r.queryRowContext(ctx, query, id))
+}
+
 func (r *TontineGroupRepositoryInfrastructure) FindByInviteCode(ctx context.Context, code string) (*entity.TontineGroup, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -244,11 +251,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByInviteCode(ctx context.Cont
 		FROM tontine_groups
 		WHERE invite_code = $1 AND shop_id = $2
 	`
-
 	return r.scanGroup(r.queryRowContext(ctx, query, code, shopID))
 }
 
-// FindByShopID retourne tous les groupes d'une boutique
 func (r *TontineGroupRepositoryInfrastructure) FindByShopID(ctx context.Context, shopID string) ([]*entity.TontineGroup, error) {
 	currentShopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -268,11 +273,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByShopID(ctx context.Context,
 		WHERE shop_id = $1
 		ORDER BY created_at DESC
 	`
-
 	return r.scanGroups(ctx, query, shopID)
 }
 
-// FindByProductID retourne tous les groupes d'un produit
 func (r *TontineGroupRepositoryInfrastructure) FindByProductID(ctx context.Context, productID string) ([]*entity.TontineGroup, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -289,11 +292,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByProductID(ctx context.Conte
 		WHERE product_id = $1 AND shop_id = $2
 		ORDER BY created_at DESC
 	`
-
 	return r.scanGroups(ctx, query, productID, shopID)
 }
 
-// FindByCreatorCustomerID retourne tous les groupes créés par un client
 func (r *TontineGroupRepositoryInfrastructure) FindByCreatorCustomerID(ctx context.Context, customerID string) ([]*entity.TontineGroup, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -310,11 +311,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByCreatorCustomerID(ctx conte
 		WHERE creator_customer_id = $1 AND shop_id = $2
 		ORDER BY created_at DESC
 	`
-
 	return r.scanGroups(ctx, query, customerID, shopID)
 }
 
-// UpdateStatus met à jour le statut d'un groupe
 func (r *TontineGroupRepositoryInfrastructure) UpdateStatus(ctx context.Context, groupID string, status string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -334,7 +333,6 @@ func (r *TontineGroupRepositoryInfrastructure) UpdateStatus(ctx context.Context,
 	return nil
 }
 
-// IncrementCycle passe le groupe au cycle suivant
 func (r *TontineGroupRepositoryInfrastructure) IncrementCycle(ctx context.Context, groupID string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -354,7 +352,6 @@ func (r *TontineGroupRepositoryInfrastructure) IncrementCycle(ctx context.Contex
 	return nil
 }
 
-// Start démarre le groupe
 func (r *TontineGroupRepositoryInfrastructure) Start(ctx context.Context, groupID string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -374,7 +371,6 @@ func (r *TontineGroupRepositoryInfrastructure) Start(ctx context.Context, groupI
 	return nil
 }
 
-// Complete marque le groupe comme terminé
 func (r *TontineGroupRepositoryInfrastructure) Complete(ctx context.Context, groupID string) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
