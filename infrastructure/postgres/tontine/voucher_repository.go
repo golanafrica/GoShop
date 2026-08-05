@@ -320,19 +320,15 @@ func (r *TontineVoucherRepositoryInfrastructure) Redeem(ctx context.Context, vou
 	return nil
 }
 
-// ExpireOldVouchers expire tous les vouchers dont la date est dépassée
+// 🆕 FIX C-V1 / C7 : ExpireOldVouchers est maintenant "unscoped" (sans vérification de tenant).
+// Cela permet au cron job global d'expirer les vouchers de TOUTES les boutiques sans avoir à injecter un contexte tenant artificiel.
 func (r *TontineVoucherRepositoryInfrastructure) ExpireOldVouchers(ctx context.Context) (int, error) {
-	shopID, err := r.getShopID(ctx)
-	if err != nil {
-		return 0, err
-	}
-
 	query := `
 		UPDATE tontine_vouchers
 		SET status = 'expired'
-		WHERE shop_id = $1 AND status = 'generated' AND expires_at < $2
+		WHERE status = 'generated' AND expires_at < $1
 	`
-	result, err := r.execContext(ctx, query, shopID, time.Now().UTC())
+	result, err := r.execContext(ctx, query, time.Now().UTC())
 	if err != nil {
 		return 0, fmt.Errorf("failed to expire old vouchers: %w", err)
 	}

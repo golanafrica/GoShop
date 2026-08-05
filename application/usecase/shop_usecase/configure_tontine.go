@@ -62,16 +62,22 @@ func (r *ConfigureTontineRequest) Validate() error {
 
 // Execute active/désactive la tontine sur un produit
 func (uc *ConfigureTontineUsecase) Execute(ctx context.Context, req *ConfigureTontineRequest) (*entity.ProductTontineSettings, error) {
-	// 🆕 Plus besoin de tenant.FromContext - le shop_id vient de la requête
-
 	// 1. Valider la requête
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 🆕 2. Créer ou mettre à jour la configuration DIRECTEMENT
-	// On ne vérifie pas le produit ici car productRepo.FindByID utilise le tenant
-	// La contrainte FK sur product_id dans la DB garantira l'intégrité
+	// 🆕 FIX AUDIT P2 : Vérifier que le produit existe.
+	// Note de sécurité : L'entité Product n'exposant pas directement le champ ShopID,
+	// la protection contre la configuration d'un produit d'un autre shop repose sur :
+	// 1. Cette vérification d'existence via le repository.
+	// 2. La contrainte de clé étrangère (FK) en base de données sur product_id.
+	// 3. La validation du shop_id effectuée en amont par le handler (TenantResolver).
+	if _, err := uc.productRepo.FindByID(ctx, req.ProductID); err != nil {
+		return nil, fmt.Errorf("product not found or inaccessible: %w", err)
+	}
+
+	// 2. Créer ou mettre à jour la configuration
 	settings := &entity.ProductTontineSettings{
 		ProductID:             req.ProductID,
 		ShopID:                req.ShopID,
@@ -98,7 +104,6 @@ func (uc *ConfigureTontineUsecase) Execute(ctx context.Context, req *ConfigureTo
 
 // GetTontineSettings récupère la configuration tontine d'un produit
 func (uc *ConfigureTontineUsecase) GetTontineSettings(ctx context.Context, productID string) (*entity.ProductTontineSettings, error) {
-	// 🆕 Plus besoin de tenant.FromContext pour Get
 	settings, err := uc.settingsRepo.FindByProductID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("tontine settings not found: %w", err)

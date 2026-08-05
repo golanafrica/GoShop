@@ -169,6 +169,12 @@ func (r *CommissionRateRepositoryPostgres) GetDefaultRate(
 		defaultRateBps = entity.DefaultRateTontineSolo
 	case entity.TransactionTypeTontineGroup:
 		defaultRateBps = entity.DefaultRateTontineGroup
+	case entity.TransactionTypeTontineCommercial: // 🆕 AJOUT
+		defaultRateBps = entity.DefaultRateTontineCommercial
+	case entity.TransactionTypeTontineCorporate: // 🆕 AJOUT
+		defaultRateBps = entity.DefaultRateTontineCorporate
+	case entity.TransactionTypeTontineFamily: // 🆕 AJOUT
+		defaultRateBps = entity.DefaultRateTontineFamily
 	case entity.TransactionTypeCredit:
 		defaultRateBps = entity.DefaultRateCredit
 	default:

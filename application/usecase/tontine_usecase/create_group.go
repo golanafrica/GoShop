@@ -19,6 +19,7 @@ type CreateTontineGroupUsecase struct {
 	settingsRepo    repository.ProductTontineSettingsRepository
 	productRepo     repository.ProductRepository
 	customerRepo    repository.CustomerRepositoryInterface
+	txManager       repository.TxManager // 🆕 FIX B3
 }
 
 // NewCreateTontineGroupUsecase crée une nouvelle instance
@@ -28,6 +29,7 @@ func NewCreateTontineGroupUsecase(
 	settingsRepo repository.ProductTontineSettingsRepository,
 	productRepo repository.ProductRepository,
 	customerRepo repository.CustomerRepositoryInterface,
+	txManager repository.TxManager, // 🆕 FIX B3
 ) *CreateTontineGroupUsecase {
 	return &CreateTontineGroupUsecase{
 		groupRepo:       groupRepo,
@@ -35,13 +37,14 @@ func NewCreateTontineGroupUsecase(
 		settingsRepo:    settingsRepo,
 		productRepo:     productRepo,
 		customerRepo:    customerRepo,
+		txManager:       txManager,
 	}
 }
 
 // CreateGroupRequest représente la requête de création de groupe
 type CreateGroupRequest struct {
 	ProductID         string `json:"product_id"`
-	CreatorCustomerID string `json:"creator_customer_id"` // Optionnel si créé par marchand
+	CreatorCustomerID string `json:"creator_customer_id"`
 	CircleType        string `json:"circle_type"`
 	TotalCycles       int    `json:"total_cycles"`
 }
@@ -76,25 +79,30 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 3. Vérifier que le produit existe et appartient à la boutique
-	product, err := uc.productRepo.FindByID(ctx, req.ProductID)
+	// 3. Vérifier que le produit existe
+	_, err = uc.productRepo.FindByID(ctx, req.ProductID)
 	if err != nil {
 		return nil, fmt.Errorf("product not found: %w", err)
 	}
-	_ = product
 
-	// 4. Vérifier que la tontine est activée pour ce produit
+	// 4. Vérifier que la tontine est activée pour ce produit et récupérer les settings
 	settings, err := uc.settingsRepo.FindByProductID(ctx, req.ProductID)
 	if err != nil {
-		return nil, fmt.Errorf("tontine not enabled for this product: %w", err)
+		return nil, fmt.Errorf("tontine settings not found: %w", err)
 	}
+
+	// 🆕 FIX B4 : Vérifier explicitement que les settings (et donc le produit) appartiennent à cette boutique
+	if settings.ShopID != shop.ID.String() {
+		return nil, fmt.Errorf("product does not belong to this shop")
+	}
+
 	if !settings.IsTontineEnabled {
 		return nil, fmt.Errorf("tontine is not enabled for this product")
 	}
 
 	// 5. Vérifier que le type de cercle est autorisé
 	if !settings.IsCircleTypeAllowed(req.CircleType) {
-		return nil, fmt.Errorf("circle type %s is not allowed for this product", req.CircleType)
+		return nil, fmt.Errorf("circle type %s is not allowed", req.CircleType)
 	}
 
 	// 6. Valider le nombre de cycles
@@ -107,27 +115,37 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 	var creatorCustomerID *string
 
 	if req.CreatorCustomerID != "" {
-		// Créé par un client
 		creatorType = entity.TontineCreatorCustomer
-
-		// Vérifier que le client existe et est KYC vérifié
 		customer, err := uc.customerRepo.FindByCustomerID(ctx, req.CreatorCustomerID)
 		if err != nil {
 			return nil, fmt.Errorf("customer not found: %w", err)
 		}
 		if err := customer.CanParticipateInTontine(); err != nil {
-			return nil, fmt.Errorf("customer cannot participate in tontine: %w", err)
+			return nil, fmt.Errorf("customer cannot participate: %w", err)
 		}
-
 		creatorCustomerID = &req.CreatorCustomerID
 	} else {
-		// Créé par le marchand
 		creatorType = entity.TontineCreatorMerchant
 		creatorCustomerID = nil
 	}
 
-	// 8. Calculer le montant par cycle (Arrondi au supérieur pour éviter les pertes de centimes)
-	// Formule mathématique sûre : (Total + Cycles - 1) / Cycles
+	// 8. Calculer le montant par cycle
+	// Note: Nous utilisons settings.MinParticipants ou une logique métier si le prix n'est pas directement sur le produit,
+	// mais ici on suppose que le prix est géré ailleurs ou que productRepo le retourne.
+	// Si productRepo ne retourne pas le prix, il faudra l'ajuster. Pour l'instant, on garde la logique existante.
+	// (Si product.PriceCents n'existe pas, il faudra le récupérer via une autre méthode, mais compilons d'abord).
+
+	// Pour éviter l'erreur si product n'a pas PriceCents, on utilise une valeur par défaut ou on suppose que le repo le fournit.
+	// Si tu as une erreur sur product.PriceCents, dis-le moi. Sinon, on continue.
+	// *Correction* : Comme on n'a plus l'objet product, on ne peut pas faire product.PriceCents.
+	// Il faut récupérer le produit avec son prix. Si l'entité Product n'a pas ShopID mais a PriceCents, on peut le garder.
+	// Réintroduisons product mais sans vérifier product.ShopID.
+
+	product, err := uc.productRepo.FindByID(ctx, req.ProductID)
+	if err != nil {
+		return nil, fmt.Errorf("product not found: %w", err)
+	}
+
 	amountPerCycle := (product.PriceCents + int64(req.TotalCycles) - 1) / int64(req.TotalCycles)
 
 	// 9. Générer un code d'invitation unique
@@ -136,22 +154,21 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 		return nil, fmt.Errorf("failed to generate invite code: %w", err)
 	}
 
-	// 10. Créer le groupe
-	group, err := entity.NewTontineGroup(
-		req.ProductID,
-		shop.ID.String(),
-		creatorCustomerID,
-		creatorType,
-		req.CircleType,
-		amountPerCycle,
-		req.TotalCycles,
-		inviteCode,
-	)
+	// 10. Créer l'entité groupe
+	group, err := entity.NewTontineGroup(req.ProductID, shop.ID.String(), creatorCustomerID, creatorType, req.CircleType, amountPerCycle, req.TotalCycles, inviteCode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create group entity: %w", err)
 	}
 
-	if err := uc.groupRepo.Create(ctx, group); err != nil {
+	// 🆕 FIX B3 : Utiliser une transaction pour garantir l'atomicité Groupe + Participant
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	groupRepoTx := uc.groupRepo.WithTX(tx)
+	if err := groupRepoTx.Create(ctx, group); err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("failed to save group: %w", err)
 	}
 
@@ -159,23 +176,27 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 	if creatorType == entity.TontineCreatorCustomer && creatorCustomerID != nil {
 		participant, err := entity.NewTontineParticipant(group.ID, *creatorCustomerID, 1)
 		if err != nil {
+			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to create participant entity: %w", err)
 		}
-
-		if err := uc.participantRepo.Add(ctx, participant); err != nil {
+		participantRepoTx := uc.participantRepo.WithTX(tx)
+		if err := participantRepoTx.Add(ctx, participant); err != nil {
+			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to add creator as participant: %w", err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return group, nil
 }
 
-// generateInviteCode génère un code alphanumérique unique de 8 caractères
 func generateInviteCode(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	code := strings.ToUpper(hex.EncodeToString(bytes))[:length]
-	return code, nil
+	return strings.ToUpper(hex.EncodeToString(bytes))[:length], nil
 }

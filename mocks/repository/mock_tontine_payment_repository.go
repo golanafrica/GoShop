@@ -116,6 +116,21 @@ func (mr *MockTontinePaymentRepositoryMockRecorder) FindByID(ctx, id any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByIDUnscoped mocks base method.
+func (m *MockTontinePaymentRepository) FindByIDUnscoped(ctx context.Context, id string) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDUnscoped", ctx, id)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDUnscoped indicates an expected call of FindByIDUnscoped.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByIDUnscoped(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDUnscoped", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByIDUnscoped), ctx, id)
+}
+
 // FindByParticipantAndCycle mocks base method.
 func (m *MockTontinePaymentRepository) FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error) {
 	m.ctrl.T.Helper()
@@ -203,6 +218,20 @@ func (m *MockTontinePaymentRepository) MarkDone(ctx context.Context, paymentID, 
 func (mr *MockTontinePaymentRepositoryMockRecorder) MarkDone(ctx, paymentID, transactionID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkDone", reflect.TypeOf((*MockTontinePaymentRepository)(nil).MarkDone), ctx, paymentID, transactionID)
+}
+
+// SetProviderIntentID mocks base method.
+func (m *MockTontinePaymentRepository) SetProviderIntentID(ctx context.Context, id, intentID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetProviderIntentID", ctx, id, intentID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetProviderIntentID indicates an expected call of SetProviderIntentID.
+func (mr *MockTontinePaymentRepositoryMockRecorder) SetProviderIntentID(ctx, id, intentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetProviderIntentID", reflect.TypeOf((*MockTontinePaymentRepository)(nil).SetProviderIntentID), ctx, id, intentID)
 }
 
 // UpdateStatus mocks base method.

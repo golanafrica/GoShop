@@ -585,6 +585,7 @@ func (a *App) setupRouter() {
 		tontineSettingsRepo,
 		postgreProductRepo,
 		postgresCustomerRepo,
+		txmanagerRepo,
 	)
 
 	joinTontineGroupUC := tontineusecase.NewJoinTontineGroupUsecase(
@@ -607,7 +608,15 @@ func (a *App) setupRouter() {
 		tontineGroupRepo,
 	)
 
-	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments)")
+	// 🆕 PHASE 6 : Sync UseCase (pour cron ou appel manuel si webhook échoue)
+	syncTontinePaymentUC := tontineusecase.NewSyncTontinePaymentUsecase(
+		tontinePaymentRepo,
+		tontineGroupRepo,
+		paymentRegistry,
+		processTontineWebhookUC, // On réutilise le usecase webhook pour la logique de complétion
+	)
+
+	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments, sync)")
 
 	// ============ 🆕 v2.9.0 : KYC USECASES (Client) ============
 	uploadKYCUC := customerusecase.NewUploadKYCDocumentUsecase(
@@ -1029,7 +1038,8 @@ func (a *App) setupRouter() {
 		joinTontineGroupUC,
 		payCycleUC,
 		listCustomerPaymentsUC,
-		postgresCustomerRepo, // 🆕 AJOUTÉ
+		syncTontinePaymentUC, // 🆕 AJOUT PHASE 6
+		postgresCustomerRepo,
 	)
 
 	// 🆕 v2.9.0 : KYC Handler (Client)
@@ -1350,9 +1360,6 @@ func (a *App) setupRouter() {
 		// ---------------------------------------------------------
 		// ✅ FIX AUDIT #2 : GROUPE B - Routes Client "Self-Service"
 		// ---------------------------------------------------------
-		// Ces routes sont appelées par le client final (rôle "user").
-		// Elles ont besoin du TenantResolver, mais PAS de RequireShopAccess,
-		// sinon le client reçoit un 403 Forbidden.
 		r.Group(func(r chi.Router) {
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
 			// PAS de middl.RequireShopAccess ici !
@@ -1364,10 +1371,14 @@ func (a *App) setupRouter() {
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
 
 			// Actions Tontine pour le client
-			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup)) // 🆕 AJOUTÉE ICI
+			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
 			r.Post("/tontine/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
 			r.Get("/tontine/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
+
+			// ✅ CORRECTION : La route de sync est STRICTEMENT À L'INTÉRIEUR de ce groupe
+			// pour bénéficier du middleware TenantResolver.
+			r.Post("/tontine/payments/sync", middl.ErrorHandler(tontineHandler.SyncPayment))
 
 			r.Post("/orders/{id}/dispute", middl.ErrorHandler(disputeHandler.OpenDispute))
 		})

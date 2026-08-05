@@ -25,9 +25,10 @@ func createTestContextForTontine() (context.Context, uuid.UUID) {
 	return tenant.WithTenant(context.Background(), shop), shopID
 }
 
-func validTontineSettings() *entity.ProductTontineSettings {
+func validTontineSettings(shopID string) *entity.ProductTontineSettings {
 	return &entity.ProductTontineSettings{
 		ProductID:             "product-1",
+		ShopID:                shopID, // 🆕 FIX B4 : ShopID doit correspondre
 		IsTontineEnabled:      true,
 		AllowCommercialCircle: true,
 		AllowCorporateCircle:  true,
@@ -108,8 +109,9 @@ func TestCreateTontineGroupUsecase_MultiTenantError(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
 	ctx := context.Background() // sans tenant
 	req := validCreateGroupRequest()
@@ -130,10 +132,11 @@ func TestCreateTontineGroupUsecase_ValidationError(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.ProductID = ""
 
@@ -142,6 +145,7 @@ func TestCreateTontineGroupUsecase_ValidationError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, group)
 	assert.Contains(t, err.Error(), "validation error")
+	_ = shopID
 }
 
 func TestCreateTontineGroupUsecase_ProductNotFound(t *testing.T) {
@@ -153,10 +157,11 @@ func TestCreateTontineGroupUsecase_ProductNotFound(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(nil, errors.New("not found"))
@@ -166,6 +171,7 @@ func TestCreateTontineGroupUsecase_ProductNotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, group)
 	assert.Contains(t, err.Error(), "product not found")
+	_ = shopID
 }
 
 func TestCreateTontineGroupUsecase_SettingsNotFound(t *testing.T) {
@@ -177,10 +183,11 @@ func TestCreateTontineGroupUsecase_SettingsNotFound(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
@@ -190,7 +197,8 @@ func TestCreateTontineGroupUsecase_SettingsNotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, group)
-	assert.Contains(t, err.Error(), "tontine not enabled")
+	assert.Contains(t, err.Error(), "tontine settings not found")
+	_ = shopID
 }
 
 func TestCreateTontineGroupUsecase_TontineDisabled(t *testing.T) {
@@ -202,13 +210,14 @@ func TestCreateTontineGroupUsecase_TontineDisabled(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
-	settings := validTontineSettings()
+	settings := validTontineSettings(shopID.String())
 	settings.IsTontineEnabled = false
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
@@ -230,13 +239,14 @@ func TestCreateTontineGroupUsecase_CircleTypeNotAllowed(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
-	settings := validTontineSettings()
+	settings := validTontineSettings(shopID.String())
 	settings.AllowCommercialCircle = false
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
@@ -258,14 +268,15 @@ func TestCreateTontineGroupUsecase_InvalidParticipantCount(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.TotalCycles = 3
 
-	settings := validTontineSettings()
+	settings := validTontineSettings(shopID.String())
 	settings.MinParticipants = 5 // 3 < 5 -> invalide
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
@@ -287,15 +298,16 @@ func TestCreateTontineGroupUsecase_CustomerNotFound(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.CreatorCustomerID = "customer-1"
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(nil, errors.New("not found"))
 
 	group, err := uc.Execute(ctx, req)
@@ -314,17 +326,18 @@ func TestCreateTontineGroupUsecase_CustomerKYCNotVerified(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.CreatorCustomerID = "customer-1"
 
 	customer := &entity.Customer{ID: "customer-1", KYCLevel: entity.KYCLevelPending}
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(customer, nil)
 
 	group, err := uc.Execute(ctx, req)
@@ -343,15 +356,22 @@ func TestCreateTontineGroupUsecase_SaveGroupError(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
+	mockTx := mockrepo.NewMockTx(ctrl)           // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest() // creator = merchant (pas de CreatorCustomerID)
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
+
+	// 🆕 Mock de la transaction
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	group, err := uc.Execute(ctx, req)
 
@@ -369,16 +389,22 @@ func TestCreateTontineGroupUsecase_Success_MerchantCreator(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
+	mockTx := mockrepo.NewMockTx(ctrl)           // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest() // pas de CreatorCustomerID -> marchand
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
+
+	// 🆕 Mock de la transaction réussie
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
-	// Pas d'ajout de participant attendu (créateur = marchand)
+	mockTx.EXPECT().Commit().Return(nil)
 
 	group, err := uc.Execute(ctx, req)
 
@@ -397,28 +423,33 @@ func TestCreateTontineGroupUsecase_Success_CustomerCreator(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
+	mockTx := mockrepo.NewMockTx(ctrl)           // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.CreatorCustomerID = "customer-1"
 
 	customer := &entity.Customer{ID: "customer-1", KYCLevel: entity.KYCLevelVerified}
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(customer, nil)
 
-	// Simule l'assignation d'un ID par le repo lors du Create (comme une vraie DB le ferait)
+	// 🆕 Mock de la transaction réussie avec participant
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, g *entity.TontineGroup) error {
 			g.ID = "group-uuid-123"
 			return nil
 		},
 	)
-
+	participantRepo.EXPECT().WithTX(mockTx).Return(participantRepo)
 	participantRepo.EXPECT().Add(gomock.Any(), gomock.Any()).Return(nil)
+	mockTx.EXPECT().Commit().Return(nil)
 
 	group, err := uc.Execute(ctx, req)
 
@@ -438,27 +469,33 @@ func TestCreateTontineGroupUsecase_AddParticipantError(t *testing.T) {
 	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
 	productRepo := mockrepo.NewMockProductRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
+	txManager := mockrepo.NewMockTxManager(ctrl) // 🆕
+	mockTx := mockrepo.NewMockTx(ctrl)           // 🆕
 
-	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo)
+	uc := tontineusecase.NewCreateTontineGroupUsecase(groupRepo, participantRepo, settingsRepo, productRepo, customerRepo, txManager)
 
-	ctx, _ := createTestContextForTontine()
+	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 	req.CreatorCustomerID = "customer-1"
 
 	customer := &entity.Customer{ID: "customer-1", KYCLevel: entity.KYCLevelVerified}
 
 	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
-	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(), nil)
+	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(customer, nil)
 
+	// 🆕 Mock de la transaction avec erreur sur Add
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, g *entity.TontineGroup) error {
 			g.ID = "group-uuid-123"
 			return nil
 		},
 	)
-
+	participantRepo.EXPECT().WithTX(mockTx).Return(participantRepo)
 	participantRepo.EXPECT().Add(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
+	mockTx.EXPECT().Rollback().Return(nil)
 
 	group, err := uc.Execute(ctx, req)
 
