@@ -598,7 +598,7 @@ func (a *App) setupRouter() {
 		tontineGroupRepo,
 		tontineParticipantRepo,
 		tontinePaymentRepo,
-		shopRepo,
+		rateRepo,
 		txmanagerRepo,
 		paymentRegistry,
 	)

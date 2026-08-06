@@ -20,7 +20,7 @@ type PayCycleUsecase struct {
 	groupRepo       repository.TontineGroupRepository
 	participantRepo repository.TontineParticipantRepository
 	paymentRepo     repository.TontinePaymentRepository
-	shopRepo        repository.ShopRepository
+	rateRepo        repository.CommissionRateRepository // 🆕 Pour le taux exact par type de cercle
 	txManager       repository.TxManager
 	paymentRegistry paymentusecase.PaymentRegistry
 }
@@ -29,7 +29,7 @@ func NewPayCycleUsecase(
 	groupRepo repository.TontineGroupRepository,
 	participantRepo repository.TontineParticipantRepository,
 	paymentRepo repository.TontinePaymentRepository,
-	shopRepo repository.ShopRepository,
+	rateRepo repository.CommissionRateRepository, // 🆕 Injection du rateRepo
 	txManager repository.TxManager,
 	paymentRegistry paymentusecase.PaymentRegistry,
 ) *PayCycleUsecase {
@@ -37,7 +37,7 @@ func NewPayCycleUsecase(
 		groupRepo:       groupRepo,
 		participantRepo: participantRepo,
 		paymentRepo:     paymentRepo,
-		shopRepo:        shopRepo,
+		rateRepo:        rateRepo,
 		txManager:       txManager,
 		paymentRegistry: paymentRegistry,
 	}
@@ -95,7 +95,7 @@ type PayCycleResponse struct {
 	CycleNumber      int    `json:"cycle_number"`
 	Status           string `json:"status"`
 	ProviderRef      string `json:"provider_ref,omitempty"`
-	YengaIntentID    string `json:"yenga_intent_id,omitempty"` // 🆕 FIX B6
+	YengaIntentID    string `json:"yenga_intent_id,omitempty"`
 	USSDCode         string `json:"ussd_code,omitempty"`
 	RedirectURL      string `json:"redirect_url,omitempty"`
 	Message          string `json:"message,omitempty"`
@@ -141,7 +141,6 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 
 	var paymentEntity *entity.TontinePayment
 
-	// 🆕 FIX B1 : Réutiliser si PROCESSING ou FAILED (évite l'erreur UNIQUE sur retry)
 	if existingPayment != nil && (existingPayment.Status == entity.TontinePaymentProcessing || existingPayment.Status == entity.TontinePaymentFailed) {
 		paymentEntity = existingPayment
 
@@ -155,12 +154,14 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 		}
 		logger.Info().Str("payment_id", paymentEntity.ID).Msg("Reusing existing processing/failed payment (Idempotence)")
 	} else {
-		settings, err := uc.shopRepo.GetPaymentSettings(ctx, shop.ID)
+		// 🆕 FIX C5 & Audit Taux : Récupérer le taux exact basé sur le type de cercle
+		transactionType := getTontineTransactionType(group.CircleType)
+		rate, err := uc.rateRepo.GetDefaultRate(ctx, shop.ID.String(), transactionType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get shop settings: %w", err)
+			return nil, fmt.Errorf("failed to get commission rate: %w", err) // 🆕 Retourner l'erreur au lieu de continuer
 		}
-		commissionRate := settings.GetTontineCommissionRate()
-		commissionCents := entity.CalculateCommission(group.AmountPerCycleCents, commissionRate)
+
+		commissionCents := entity.CalculateCommission(group.AmountPerCycleCents, rate.RateBps)
 
 		dueDate := time.Now().UTC().Add(24 * time.Hour)
 		paymentEntity, err = entity.NewTontinePayment(group.ID, participant.ID, req.CustomerID, group.CurrentCycle, group.AmountPerCycleCents, commissionCents, dueDate)
@@ -218,8 +219,13 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 		return nil, fmt.Errorf("payment initiation failed: %w", err)
 	}
 
-	if providerResp.ProviderRef != "" {
-		if err := uc.paymentRepo.SetProviderIntentID(ctx, paymentEntity.ID, providerResp.ProviderRef); err != nil {
+	intentToSave := providerResp.ProviderRef
+	if intentToSave == "" && req.Flow == "direct" && req.OTP == "" {
+		intentToSave = yengapayReference
+	}
+
+	if intentToSave != "" {
+		if err := uc.paymentRepo.SetProviderIntentID(ctx, paymentEntity.ID, intentToSave); err != nil {
 			logger.Warn().Err(err).Msg("Failed to save provider intent ID")
 		}
 	}
@@ -242,12 +248,25 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 		CycleNumber:      paymentEntity.CycleNumber,
 		Status:           paymentEntity.Status,
 		ProviderRef:      yengapayReference,
-		YengaIntentID:    providerResp.ProviderRef, // 🆕 FIX B6
+		YengaIntentID:    intentToSave,
 		USSDCode:         providerResp.USSDCode,
 		RedirectURL:      providerResp.RedirectURL,
 		Message:          msg,
 		RequiresOTP:      requiresOTP,
 	}, nil
+}
+
+func getTontineTransactionType(circleType string) string {
+	switch circleType {
+	case entity.TontineCircleCommercial:
+		return "tontine_commercial"
+	case entity.TontineCircleCorporate:
+		return "tontine_corporate"
+	case entity.TontineCircleFamily:
+		return "tontine_family"
+	default:
+		return "tontine_group"
+	}
 }
 
 func normalizeMobileOperator(clientOperator string) string {
@@ -316,5 +335,9 @@ func (uc *ListCustomerPaymentsUsecase) Execute(ctx context.Context, groupID, cus
 	if group.ShopID != shop.ID.String() {
 		return nil, fmt.Errorf("group does not belong to this shop")
 	}
-	return uc.paymentRepo.FindByCustomerAndGroup(ctx, customerID, groupID)
+	payments, err := uc.paymentRepo.FindByCustomerAndGroup(ctx, customerID, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch payments: %w", err) // 🆕 Wrap l'erreur pour que le test passe
+	}
+	return payments, nil
 }
