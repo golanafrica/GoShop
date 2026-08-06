@@ -509,7 +509,8 @@ func (a *App) setupRouter() {
 		shopRepo,
 		notifService,
 		postgresCustomerRepo,
-	).WithWalletCreditor(creditWalletUC) // 🆕 AJOUT : Injection du crédit wallet pour la tontine
+	).WithWalletCreditor(creditWalletUC).
+		WithCommissionRateRepo(rateRepo) // rateRepo déjà créé : commissionrate.NewCommissionRateRepositoryPostgres(a.DB)
 
 	// Process Webhook Usecase (utilise maintenant l'Escrow)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
