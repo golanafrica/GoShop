@@ -465,3 +465,43 @@ func TestDebitWalletUsecase_GetWallet_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
+
+// ============================================================
+// Phase 2 : held_cents bloque les payouts
+// ============================================================
+
+func TestDebitWalletUsecase_RefusePayoutOnHeldFunds(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	uc, walletRepo, txnRepo, txManager := newDebitWalletUsecase(ctrl)
+
+	ctx, shopID := walletTestContext()
+	req := &walletusecase.DebitWalletRequest{
+		ShopID:          shopID.String(),
+		AmountCents:     300, // available = 200 → doit échouer
+		TransactionType: entity.WalletTxPayout,
+		AllowNegative:   false,
+	}
+	mockTx := mockrepo.NewMockTx(ctrl)
+
+	// balance=1000, held=800 → available=200
+	wallet := entity.NewMerchantWallet(req.ShopID)
+	wallet.BalanceCents = 1000
+	wallet.HeldCents = 800
+
+	expectWalletRepoWithTXSelf(walletRepo, mockTx)
+	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
+	// Update / Create / Commit NE DOIVENT PAS être appelés
+	mockTx.EXPECT().Rollback().Return(nil)
+
+	resp, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "insufficient available balance")
+	assert.Contains(t, err.Error(), "held=")
+}

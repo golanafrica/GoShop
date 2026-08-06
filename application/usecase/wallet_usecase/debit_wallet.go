@@ -138,6 +138,26 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 		return nil, fmt.Errorf("wallet is frozen, cannot debit")
 	}
 
+	// 6bis. 🛡️ SÉCURITÉ Phase 2 : un retrait (payout) ne peut jamais entamer les fonds "held"
+	// (ex: net cycle tontine en attente de redeem). Vérifié ICI, dans la transaction verrouillée,
+	// pour éviter toute race condition avec un check fait en amont hors transaction.
+	if req.TransactionType == entity.WalletTxPayout {
+		available := wallet.AvailableCents()
+		if req.AmountCents > available {
+			logger.Warn().
+				Str("shop_id", req.ShopID).
+				Int64("requested", req.AmountCents).
+				Int64("balance_cents", wallet.BalanceCents).
+				Int64("held_cents", wallet.HeldCents).
+				Int64("available_cents", available).
+				Msg("❌ Débit payout refusé : dépasserait les fonds disponibles (held exclu)")
+			return nil, fmt.Errorf(
+				"insufficient available balance: requested=%d available=%d (balance=%d held=%d)",
+				req.AmountCents, available, wallet.BalanceCents, wallet.HeldCents,
+			)
+		}
+	}
+
 	// 6. Sauvegarder le solde précédent
 	previousBalance := wallet.BalanceCents
 

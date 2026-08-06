@@ -119,6 +119,9 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("amount_cents must be positive")
 	}
 
+	// ℹ️ Ce check est un "fail-fast" pour l'UX (éviter d'appeler YengaPay pour rien).
+	// La garde de sécurité réelle est dans DebitWalletUsecase.Execute (vérif atomique
+	// sous FOR UPDATE). Ne pas supprimer ce bloc pour autant : il évite un appel API inutile.
 	if uc.walletRepo != nil {
 		wallet, err := uc.walletRepo.FindByShopID(ctx, shop.ID.String())
 		if err != nil {
@@ -139,10 +142,12 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 				req.AmountCents, available, wallet.BalanceCents, wallet.HeldCents,
 			)
 		}
+	} else {
+		logger.Warn().Msg("walletRepo not configured on CreateWithdrawalUsecase — skipping fail-fast available check (real guard still enforced in DebitWalletUsecase)")
 	}
 
 	// ============================================================
-	// Débit wallet (ledger) — après garde available
+	// Débit wallet (ledger) — garde atomique held dans DebitWalletUsecase
 	// ============================================================
 	if uc.debitWalletUC == nil {
 		return nil, fmt.Errorf("debit wallet usecase not configured")
