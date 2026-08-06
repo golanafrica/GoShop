@@ -361,34 +361,21 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 	return nil
 }
 
-// markCycleCommissionsCollected tente de marquer les paiements DONE du cycle
-// comme commission déjà collectée (via net credit). Best-effort.
+// markCycleCommissionsCollected marque les paiements DONE du cycle
+// comme commission déjà collectée (crédit net). Best-effort.
 func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 	ctx context.Context,
 	groupID string,
 	cycleNumber int,
-	_ int64, // commission cycle totale (pour logs futurs / settlement)
+	_ int64, // commission cycle totale (logs / settlement futurs)
 	logger *zerolog.Logger,
 ) {
-	// L’interface repo expose typiquement UpdateCommissionStatus(paymentID, status, cents).
-	// On itère les paiements du cycle si FindByGroupAndCycle est disponible.
-	type cycleLister interface {
-		FindByGroupAndCycle(ctx context.Context, groupID string, cycleNumber int) ([]*entity.TontinePayment, error)
-	}
-	type commissionUpdater interface {
-		UpdateCommissionStatus(ctx context.Context, paymentID string, status string, commissionCents int64) error
-	}
-
-	lister, okL := uc.tontinePaymentRepo.(cycleLister)
-	updater, okU := uc.tontinePaymentRepo.(commissionUpdater)
-	if !okL || !okU {
-		logger.Debug().Msg("Phase 1: repo does not support cycle commission mark — rely on scheduler skip (Phase 1.2)")
-		return
-	}
-
-	payments, err := lister.FindByGroupAndCycle(ctx, groupID, cycleNumber)
+	// 🔧 FIX Phase 3 : appels directs sur l'interface
+	// (UpdateTontineCommissionStatus + FindByGroupAndCycle), plus de type assertion
+	// qui échouait silencieusement avec le mauvais nom/signature.
+	payments, err := uc.tontinePaymentRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
 	if err != nil {
-		logger.Warn().Err(err).Msg("Phase 1: could not list cycle payments for commission mark")
+		logger.Warn().Err(err).Msg("Phase 3: could not list cycle payments for commission mark")
 		return
 	}
 
@@ -396,10 +383,11 @@ func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 		if p == nil || !p.IsDone() {
 			continue
 		}
-		// commission_cents ligne peut rester informatif ; statut = collected pour le scheduler
-		cents := p.CommissionCents
-		if err := updater.UpdateCommissionStatus(ctx, p.ID, entity.CommissionStatusCollected, cents); err != nil {
-			logger.Warn().Err(err).Str("payment_id", p.ID).Msg("Phase 1: failed to mark payment commission collected")
+		// batchID = nil : marquage hors CommissionBatch (crédit net, pas scheduler)
+		if err := uc.tontinePaymentRepo.UpdateTontineCommissionStatus(
+			ctx, p.ID, entity.CommissionStatusCollected, nil,
+		); err != nil {
+			logger.Warn().Err(err).Str("payment_id", p.ID).Msg("Phase 3: failed to mark payment commission collected")
 		}
 	}
 }

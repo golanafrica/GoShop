@@ -376,6 +376,10 @@ func TestProcessTontineWebhookUsecase_CycleComplete_GenerateVoucher(t *testing.T
 	testShop := createTestShop()
 	beneficiary := createTontineParticipant(testGroup.ID, 1)
 
+	// Phase 3 : un paiement DONE du cycle pour prouver UpdateTontineCommissionStatus
+	donePay := createTontinePayment(testGroup.ID, 1)
+	donePay.Status = entity.TontinePaymentDone
+
 	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
 	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
 	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
@@ -386,6 +390,15 @@ func TestProcessTontineWebhookUsecase_CycleComplete_GenerateVoucher(t *testing.T
 	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(5, nil)
 	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 1).Return(beneficiary, nil)
 	mockTontineVoucherRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	// Phase 3 : markCycleCommissionsCollected
+	mockTontinePaymentRepo.EXPECT().
+		FindByGroupAndCycle(gomock.Any(), testGroup.ID, 1).
+		Return([]*entity.TontinePayment{donePay}, nil)
+	mockTontinePaymentRepo.EXPECT().
+		UpdateTontineCommissionStatus(gomock.Any(), donePay.ID, entity.CommissionStatusCollected, nil).
+		Return(nil)
+
 	mockTontineGroupRepo.EXPECT().IncrementCycle(gomock.Any(), testGroup.ID).Return(nil)
 
 	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
@@ -414,6 +427,9 @@ func TestProcessTontineWebhookUsecase_LastCycle_CompleteGroup(t *testing.T) {
 	testShop := createTestShop()
 	beneficiary := createTontineParticipant(testGroup.ID, 5)
 
+	donePay := createTontinePayment(testGroup.ID, 5)
+	donePay.Status = entity.TontinePaymentDone
+
 	mockTontinePaymentRepo.EXPECT().FindByReferenceUnscoped(gomock.Any(), reference).Return(pendingPayment, nil)
 	mockTontineGroupRepo.EXPECT().FindByIDUnscoped(gomock.Any(), "group-1").Return(testGroup, nil)
 	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
@@ -424,6 +440,15 @@ func TestProcessTontineWebhookUsecase_LastCycle_CompleteGroup(t *testing.T) {
 	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 5).Return(5, nil)
 	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 5).Return(beneficiary, nil)
 	mockTontineVoucherRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+	// Phase 3 : markCycleCommissionsCollected
+	mockTontinePaymentRepo.EXPECT().
+		FindByGroupAndCycle(gomock.Any(), testGroup.ID, 5).
+		Return([]*entity.TontinePayment{donePay}, nil)
+	mockTontinePaymentRepo.EXPECT().
+		UpdateTontineCommissionStatus(gomock.Any(), donePay.ID, entity.CommissionStatusCollected, nil).
+		Return(nil)
+
 	mockTontineGroupRepo.EXPECT().Complete(gomock.Any(), testGroup.ID).Return(nil)
 
 	err := uc.Execute(context.Background(), reference, "txn-123", entity.PaymentStatusSuccess)
@@ -489,7 +514,7 @@ func TestProcessTontineWebhookUsecase_VoucherCollision(t *testing.T) {
 	mockShopRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(testShop, nil)
 	mockTontinePaymentRepo.EXPECT().MarkDone(gomock.Any(), pendingPayment.ID, "txn-123").Return(nil)
 
-	// checkAndCompleteCycle
+	// checkAndCompleteCycle — Create échoue avant markCycleCommissionsCollected
 	mockTontineGroupRepo.EXPECT().FindByID(gomock.Any(), testGroup.ID).Return(testGroup, nil)
 	mockTontinePaymentRepo.EXPECT().CountDoneByGroupAndCycle(gomock.Any(), testGroup.ID, 1).Return(5, nil)
 	mockTontineParticipantRepo.EXPECT().FindByPosition(gomock.Any(), testGroup.ID, 1).Return(beneficiary, nil)
