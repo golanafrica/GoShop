@@ -32,7 +32,7 @@ func NewOpenDisputeUsecase(
 
 type OpenDisputeRequest struct {
 	OrderID       string
-	ShopID        uuid.UUID // 🆕 AJOUTÉ : Provenant directement du contexte tenant
+	ShopID        uuid.UUID
 	InitiatorID   uuid.UUID
 	InitiatorRole entity.InitiatorRole
 	Reason        string
@@ -64,10 +64,14 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 	}
 
 	// 2. Vérifier que l'Escrow est toujours en attente
+	// Note : On utilise FindByOrderID. Pour éviter les race conditions avec le futur
+	// scheduler (Phase 5), nous ajouterons FindByOrderIDForUpdate dans le repo Postgres plus tard.
 	escrow, err := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("escrow not found for this order: %w", err)
 	}
+
+	// L'escrow doit être en statut "funds_held" pour pouvoir être disputé
 	if escrow.Status != entity.EscrowAccountFundsHeld {
 		return nil, fmt.Errorf("cannot open dispute: escrow is already %s", escrow.Status)
 	}
@@ -82,7 +86,7 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 	newDispute := &entity.Dispute{
 		ID:            uuid.New(),
 		OrderID:       orderUUID,
-		ShopID:        req.ShopID, // ✅ Utilisation du ShopID fiable provenant du contexte
+		ShopID:        req.ShopID,
 		InitiatorID:   req.InitiatorID,
 		InitiatorRole: req.InitiatorRole,
 		Reason:        req.Reason,
@@ -95,10 +99,22 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 		return nil, fmt.Errorf("failed to create dispute: %w", err)
 	}
 
+	// 🆕 CORRECTION PHASE 1 : Passer l'escrow en statut "disputed"
+	// Cela bloque tout auto-release ou retrait prématuré des fonds
+	if err := escrow.Dispute(); err != nil {
+		return nil, fmt.Errorf("failed to mark escrow as disputed: %w", err)
+	}
+
+	// 🆕 CORRECTION PHASE 1 : Mettre à jour l'escrow en DB
+	if err := uc.escrowRepo.Update(ctx, escrow); err != nil {
+		return nil, fmt.Errorf("failed to update escrow status: %w", err)
+	}
+
 	logger.Info().
 		Str("dispute_id", newDispute.ID.String()).
 		Str("order_id", req.OrderID).
-		Msg("Dispute opened successfully")
+		Str("escrow_status", string(escrow.Status)).
+		Msg("Dispute opened successfully, escrow locked")
 
 	return newDispute, nil
 }
