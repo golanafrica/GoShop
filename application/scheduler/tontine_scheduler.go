@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -328,41 +329,15 @@ func (s *TontineScheduler) processPaymentLegacy(
 	_ = s.batchRepo.CreateBatchItem(ctx, item)
 }
 
+// containsWalletNotFound vérifie si le message d'erreur indique un wallet manquant.
+// 🆕 Phase 6 : utilise strings.Contains pour une comparaison case-insensitive propre.
 func containsWalletNotFound(msg string) bool {
-	return len(msg) > 0 && (containsFold(msg, "merchant wallet not found") || containsFold(msg, "wallet not found"))
-}
-
-func containsFold(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		indexFold(s, substr) >= 0)
-}
-
-func indexFold(s, substr string) int {
-	// simple case-insensitive search without importing strings (kept light)
-	ls, lsub := len(s), len(substr)
-	if lsub == 0 {
-		return 0
+	if len(msg) == 0 {
+		return false
 	}
-	for i := 0; i+lsub <= ls; i++ {
-		ok := true
-		for j := 0; j < lsub; j++ {
-			a, b := s[i+j], substr[j]
-			if a >= 'A' && a <= 'Z' {
-				a += 'a' - 'A'
-			}
-			if b >= 'A' && b <= 'Z' {
-				b += 'a' - 'A'
-			}
-			if a != b {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return i
-		}
-	}
-	return -1
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "merchant wallet not found") ||
+		strings.Contains(lower, "wallet not found")
 }
 
 func (s *TontineScheduler) mapCircleTypeToTransactionType(circleType string) string {

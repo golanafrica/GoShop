@@ -61,6 +61,10 @@ func (r *TontineVoucherRepositoryInfrastructure) getShopID(ctx context.Context) 
 }
 
 // scanVoucher scanne une ligne dans une entité TontineVoucher
+// Colonnes : id, group_id, participant_id, customer_id, product_id, shop_id,
+//
+//	voucher_code, cycle_number, status, expires_at, redeemed_at,
+//	redeemed_by, held_amount_cents, created_at
 func (r *TontineVoucherRepositoryInfrastructure) scanVoucher(row *sql.Row) (*entity.TontineVoucher, error) {
 	v := &entity.TontineVoucher{}
 	var redeemedAt sql.NullTime
@@ -70,7 +74,9 @@ func (r *TontineVoucherRepositoryInfrastructure) scanVoucher(row *sql.Row) (*ent
 		&v.ID, &v.GroupID, &v.ParticipantID, &v.CustomerID,
 		&v.ProductID, &v.ShopID, &v.VoucherCode,
 		&v.CycleNumber, &v.Status, &v.ExpiresAt,
-		&redeemedAt, &redeemedBy, &v.CreatedAt,
+		&redeemedAt, &redeemedBy,
+		&v.HeldAmountCents, // Phase 5
+		&v.CreatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -107,7 +113,9 @@ func (r *TontineVoucherRepositoryInfrastructure) scanVouchers(ctx context.Contex
 			&v.ID, &v.GroupID, &v.ParticipantID, &v.CustomerID,
 			&v.ProductID, &v.ShopID, &v.VoucherCode,
 			&v.CycleNumber, &v.Status, &v.ExpiresAt,
-			&redeemedAt, &redeemedBy, &v.CreatedAt,
+			&redeemedAt, &redeemedBy,
+			&v.HeldAmountCents, // Phase 5
+			&v.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
@@ -133,7 +141,7 @@ func (r *TontineVoucherRepositoryInfrastructure) scanVouchers(ctx context.Contex
 // Implémentation
 // ============================================================
 
-// Create crée un nouveau voucher
+// Create crée un nouveau voucher (inclut held_amount_cents — Phase 5)
 func (r *TontineVoucherRepositoryInfrastructure) Create(ctx context.Context, voucher *entity.TontineVoucher) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -149,8 +157,9 @@ func (r *TontineVoucherRepositoryInfrastructure) Create(ctx context.Context, vou
 			group_id, participant_id, customer_id,
 			product_id, shop_id, voucher_code,
 			cycle_number, status, expires_at,
+			held_amount_cents,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
 		RETURNING id, created_at
 	`
 
@@ -164,6 +173,7 @@ func (r *TontineVoucherRepositoryInfrastructure) Create(ctx context.Context, vou
 		voucher.CycleNumber,
 		voucher.Status,
 		voucher.ExpiresAt,
+		voucher.HeldAmountCents, // Phase 5
 	).Scan(&voucher.ID, &voucher.CreatedAt)
 
 	if err != nil {
@@ -184,7 +194,9 @@ func (r *TontineVoucherRepositoryInfrastructure) FindByID(ctx context.Context, i
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE id = $1 AND shop_id = $2
 	`
@@ -203,12 +215,37 @@ func (r *TontineVoucherRepositoryInfrastructure) FindByCode(ctx context.Context,
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE voucher_code = $1 AND shop_id = $2
 	`
 
 	return r.scanVoucher(r.queryRowContext(ctx, query, code, shopID))
+}
+
+// FindByGroupID retourne tous les vouchers d'un groupe (filtré par tenant shop_id)
+// 🆕 Phase 5 : utilisé par ListVouchers endpoint
+func (r *TontineVoucherRepositoryInfrastructure) FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error) {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT id, group_id, participant_id, customer_id,
+		       product_id, shop_id, voucher_code,
+		       cycle_number, status, expires_at,
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
+		FROM tontine_vouchers
+		WHERE group_id = $1 AND shop_id = $2
+		ORDER BY cycle_number ASC
+	`
+
+	return r.scanVouchers(ctx, query, groupID, shopID)
 }
 
 // FindByParticipantAndCycle trouve le voucher d'un participant pour un cycle
@@ -222,7 +259,9 @@ func (r *TontineVoucherRepositoryInfrastructure) FindByParticipantAndCycle(ctx c
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE participant_id = $1 AND cycle_number = $2 AND shop_id = $3
 	`
@@ -241,7 +280,9 @@ func (r *TontineVoucherRepositoryInfrastructure) FindByCustomerID(ctx context.Co
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE customer_id = $1 AND shop_id = $2
 		ORDER BY created_at DESC
@@ -264,7 +305,9 @@ func (r *TontineVoucherRepositoryInfrastructure) FindByShopID(ctx context.Contex
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE shop_id = $1
 		ORDER BY created_at DESC
@@ -287,7 +330,9 @@ func (r *TontineVoucherRepositoryInfrastructure) FindActiveByShopID(ctx context.
 		SELECT id, group_id, participant_id, customer_id,
 		       product_id, shop_id, voucher_code,
 		       cycle_number, status, expires_at,
-		       redeemed_at, redeemed_by, created_at
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
 		FROM tontine_vouchers
 		WHERE shop_id = $1 AND status = 'generated' AND expires_at > NOW()
 		ORDER BY expires_at ASC
@@ -320,8 +365,8 @@ func (r *TontineVoucherRepositoryInfrastructure) Redeem(ctx context.Context, vou
 	return nil
 }
 
-// 🆕 FIX C-V1 / C7 : ExpireOldVouchers est maintenant "unscoped" (sans vérification de tenant).
-// Cela permet au cron job global d'expirer les vouchers de TOUTES les boutiques sans avoir à injecter un contexte tenant artificiel.
+// ExpireOldVouchers est "unscoped" (sans vérification de tenant).
+// Permet au cron job global d'expirer les vouchers de TOUTES les boutiques.
 func (r *TontineVoucherRepositoryInfrastructure) ExpireOldVouchers(ctx context.Context) (int, error) {
 	query := `
 		UPDATE tontine_vouchers

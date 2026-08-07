@@ -3,10 +3,13 @@ package withdrawalhandler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	withdrawaldto "Goshop/application/dto/withdrawal_dto"
+	walletusecase "Goshop/application/usecase/wallet_usecase"
+	"Goshop/domain/tenant"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
@@ -28,13 +31,20 @@ type ListWithdrawalsUseCaseInterface interface {
 type WithdrawalHandler struct {
 	createUC CreateWithdrawalUseCaseInterface
 	listUC   ListWithdrawalsUseCaseInterface
+	debitUC  *walletusecase.DebitWalletUsecase // 🆕 Phase 2 : Pour vérification held_cents
 }
 
+// NewWithdrawalHandler crée une nouvelle instance
 func NewWithdrawalHandler(
 	createUC CreateWithdrawalUseCaseInterface,
 	listUC ListWithdrawalsUseCaseInterface,
+	debitUC *walletusecase.DebitWalletUsecase, // 🆕 Phase 2
 ) *WithdrawalHandler {
-	return &WithdrawalHandler{createUC: createUC, listUC: listUC}
+	return &WithdrawalHandler{
+		createUC: createUC,
+		listUC:   listUC,
+		debitUC:  debitUC,
+	}
 }
 
 // @Summary Créer une demande de retrait
@@ -44,7 +54,7 @@ func NewWithdrawalHandler(
 // @Produce json
 // @Param request body withdrawaldto.CreateWithdrawalRequest true "Détails du retrait (montant, méthode, etc.)"
 // @Success 201 {object} withdrawaldto.WithdrawalResponse
-// @Failure 400 {object} utils.AppError "Payload invalide, solde insuffisant ou validation échouée"
+// @Failure 400 {object} utils.AppError "Payload invalide, solde insuffisant ou held_cents bloque le retrait"
 // @Failure 401 {object} utils.AppError "Non autorisé"
 // @Failure 403 {object} utils.AppError "Compte gelé ou interdit"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
@@ -63,6 +73,32 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 	if err := req.Validate(); err != nil {
 		logger.Warn().Err(err).Msg("Validation failed")
 		return utils.NewAppError("VALIDATION_FAILED", err.Error(), http.StatusBadRequest)
+	}
+
+	// 🛡️ Phase 2 : Vérification held_cents AVANT de procéder au retrait
+	shop, tenantErr := tenant.FromContext(ctx)
+	if tenantErr == nil && shop != nil && h.debitUC != nil {
+		shopID := shop.ID.String()
+		wallet, err := h.debitUC.GetWallet(ctx, shopID)
+		if err == nil {
+			availableCents := wallet.AvailableCents()
+			if req.AmountCents > availableCents {
+				logger.Warn().
+					Str("shop_id", shopID).
+					Int64("requested", req.AmountCents).
+					Int64("available", availableCents).
+					Int64("held_cents", wallet.HeldCents).
+					Int64("balance_cents", wallet.BalanceCents).
+					Msg("❌ Withdrawal rejected: insufficient available balance (held_cents protection)")
+
+				return utils.NewAppError(
+					"INSUFFICIENT_AVAILABLE_BALANCE",
+					fmt.Sprintf("insufficient available balance. held_cents=%d blocks withdrawal. available=%d, balance=%d",
+						wallet.HeldCents, availableCents, wallet.BalanceCents),
+					http.StatusBadRequest,
+				)
+			}
+		}
 	}
 
 	resp, err := h.createUC.Execute(ctx, &req)

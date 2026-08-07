@@ -316,6 +316,25 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("beneficiary not found for cycle %d: %w", cycleNumber, err)
 	}
 
+	// ── Phase 5 : calculer net AVANT le voucher pour stocker held_amount_cents ──
+	grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
+	rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+	commissionCents := entity.CalculateCommission(grossCents, rateBps)
+	netCents := grossCents - commissionCents
+	if netCents < 0 {
+		netCents = 0
+	}
+
+	logger.Info().
+		Str("group_id", groupID).
+		Int("cycle", cycleNumber).
+		Str("circle_type", group.CircleType).
+		Int("rate_bps", rateBps).
+		Int64("gross_cents", grossCents).
+		Int64("commission_cents", commissionCents).
+		Int64("net_cents", netCents).
+		Msg("Tontine cycle settlement amounts (Phase 5: shop-aware rate + held on voucher)")
+
 	voucherCode, err := generateVoucherCode(12)
 	if err != nil {
 		return fmt.Errorf("generate voucher code: %w", err)
@@ -334,6 +353,9 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("create voucher entity: %w", err)
 	}
 
+	// Phase 5 : montant exact à libérer au redeem
+	voucher.HeldAmountCents = netCents
+
 	if err := uc.tontineVoucherRepo.Create(ctx, voucher); err != nil {
 		return fmt.Errorf("save voucher: %w", err)
 	}
@@ -342,27 +364,10 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Str("voucher_code", voucherCode).
 		Str("beneficiary_customer_id", beneficiary.CustomerID).
 		Int("cycle", cycleNumber).
+		Int64("held_amount_cents", voucher.HeldAmountCents).
 		Msg("✅ Voucher generated for beneficiary")
 
-	// ── Crédit NET : taux boutique (Phase 4) ou défaut plateforme ─────────
-	grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
-	rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
-	commissionCents := entity.CalculateCommission(grossCents, rateBps)
-	netCents := grossCents - commissionCents
-	if netCents < 0 {
-		netCents = 0
-	}
-
-	logger.Info().
-		Str("group_id", groupID).
-		Int("cycle", cycleNumber).
-		Str("circle_type", group.CircleType).
-		Int("rate_bps", rateBps).
-		Int64("gross_cents", grossCents).
-		Int64("commission_cents", commissionCents).
-		Int64("net_cents", netCents).
-		Msg("Tontine cycle settlement amounts (Phase 4: shop-aware rate)")
-
+	// Crédit NET + hold sur le wallet marchand
 	if uc.walletCreditor != nil && netCents > 0 {
 		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID); err != nil {
 			logger.Error().Err(err).
@@ -375,7 +380,7 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 				Int64("gross_cents", grossCents).
 				Int64("commission_cents", commissionCents).
 				Int64("net_cents", netCents).
-				Msg("💰 Merchant wallet credited NET from tontine cycle (platform commission withheld)")
+				Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
 		}
 	}
 

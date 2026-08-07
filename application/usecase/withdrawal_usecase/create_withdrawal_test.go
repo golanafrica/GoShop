@@ -59,7 +59,7 @@ func mockCashOutProviderFactoryWithError(err error) withdrawalusecase.YengaPayPr
 	}
 }
 
-// Helper mis à jour pour retourner aussi le mockWalletRepo
+// Helper mis à jour : FindByShopID + HeldCents pour le pré-check available
 func createMockDebitWalletUsecase(ctrl *gomock.Controller) (*walletusecase.DebitWalletUsecase, *mockrepo.MockMerchantWalletRepository) {
 	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
 	mockTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
@@ -69,21 +69,31 @@ func createMockDebitWalletUsecase(ctrl *gomock.Controller) (*walletusecase.Debit
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockWalletRepo.EXPECT().WithTX(mockTx).Return(mockWalletRepo).AnyTimes()
 
-	mockWalletRepo.EXPECT().FindByShopID(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
-		return &entity.MerchantWallet{
-			ShopID:       shopID,
-			BalanceCents: 1000000,
-			IsFrozen:     false,
-		}, nil
-	}).AnyTimes()
+	// Phase 1 : pré-check available (FindByShopID hors TX)
+	mockWalletRepo.EXPECT().FindByShopID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+			return &entity.MerchantWallet{
+				ShopID:                  shopID,
+				BalanceCents:            1_000_000,
+				HeldCents:               0,
+				IsFrozen:                false,
+				MaxNegativeBalanceCents: -500_000,
+			}, nil
+		},
+	).AnyTimes()
 
-	mockWalletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
-		return &entity.MerchantWallet{
-			ShopID:       shopID,
-			BalanceCents: 1000000,
-			IsFrozen:     false,
-		}, nil
-	}).AnyTimes()
+	// Débit réel sous FOR UPDATE
+	mockWalletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
+			return &entity.MerchantWallet{
+				ShopID:                  shopID,
+				BalanceCents:            1_000_000,
+				HeldCents:               0,
+				IsFrozen:                false,
+				MaxNegativeBalanceCents: -500_000,
+			}, nil
+		},
+	).AnyTimes()
 
 	mockWalletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mockTxnRepo.EXPECT().WithTX(mockTx).Return(mockTxnRepo).AnyTimes()

@@ -491,6 +491,9 @@ func (a *App) setupRouter() {
 	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
 	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
 
+	// 🆕 AJOUTÉ : Release Held Wallet Usecase (pour la redemption des vouchers tontine)
+	releaseHeldWalletUC := walletusecase.NewReleaseHeldWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+
 	// 🆕 Complete Payment Usecase (utilise maintenant l'Escrow)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(
 		paymentRepo,
@@ -619,6 +622,14 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments, sync)")
+
+	// (Ajustez les paramètres si votre signature locale diffère, par ex. si elle nécessite notifService)
+	redeemTontineVoucherUC := tontineusecase.NewRedeemTontineVoucherUsecase(
+		tontineVoucherRepo,
+		releaseHeldWalletUC,
+	)
+
+	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments, sync, redeem_voucher)")
 
 	// ============ 🆕 v2.9.0 : KYC USECASES (Client) ============
 	uploadKYCUC := customerusecase.NewUploadKYCDocumentUsecase(
@@ -1032,6 +1043,7 @@ func (a *App) setupRouter() {
 	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
 		createWithdrawalUC,
 		listWithdrawalsUC,
+		debitWalletUC,
 	)
 
 	// 🆕 v2.9.0 : Tontine Handler
@@ -1040,7 +1052,9 @@ func (a *App) setupRouter() {
 		joinTontineGroupUC,
 		payCycleUC,
 		listCustomerPaymentsUC,
-		syncTontinePaymentUC, // 🆕 AJOUT PHASE 6
+		syncTontinePaymentUC,   // 🆕 AJOUT PHASE 6
+		redeemTontineVoucherUC, // Phase 5
+		tontineVoucherRepo,
 		postgresCustomerRepo,
 	)
 
@@ -1327,13 +1341,17 @@ func (a *App) setupRouter() {
 				r.Get("/{id}", middl.ErrorHandler(withdrawalHandler.GetWithdrawal))
 			})
 
-			// 🆕 v2.9.0 : Merchant KYC routes
+			// 🆕 v2.9.0 : Merchant KYC routes (Review KYC Client par Marchand)
 			r.Route("/merchant/kyc", func(r chi.Router) {
 				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
 				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
+
+				// 🆕 ALIAS v4.1.0 : Soumission KYC Marchand (compatibilité scripts E2E)
+				// Accepte /api/merchant/kyc/submit en plus de /api/merchant-kyc/submit
+				merchantKYCHandler.RegisterMerchantRoutes(r)
 			})
 
-			// ============ 🆕 v4.1.0 : MERCHANT KYC ROUTES ============
+			// ============ 🆕 v4.1.0 : MERCHANT KYC ROUTES (avec tiret) ============
 			r.Route("/merchant-kyc", func(r chi.Router) {
 				merchantKYCHandler.RegisterMerchantRoutes(r)
 			})
@@ -1342,6 +1360,10 @@ func (a *App) setupRouter() {
 			r.Route("/wallet", func(r chi.Router) {
 				walletHandler.RegisterRoutes(r)
 			})
+
+			// ============ 🆕 Phase 5 : TONTINE VOUCHERS ROUTES (Marchand) ============
+			r.Get("/tontine/vouchers", middl.ErrorHandler(tontineHandler.ListVouchers))
+			r.Post("/tontine/vouchers/redeem", middl.ErrorHandler(tontineHandler.RedeemVoucher))
 
 			// ============ 🆕 v3.0.0 : COD ROUTES ============
 			r.Route("/cod", func(r chi.Router) {
@@ -1381,6 +1403,8 @@ func (a *App) setupRouter() {
 			// ✅ CORRECTION : La route de sync est STRICTEMENT À L'INTÉRIEUR de ce groupe
 			// pour bénéficier du middleware TenantResolver.
 			r.Post("/tontine/payments/sync", middl.ErrorHandler(tontineHandler.SyncPayment))
+			// 🆕 Phase 5 : Lister ses propres vouchers
+			r.Get("/tontine/vouchers", middl.ErrorHandler(tontineHandler.ListVouchers))
 
 			r.Post("/orders/{id}/dispute", middl.ErrorHandler(disputeHandler.OpenDispute))
 		})

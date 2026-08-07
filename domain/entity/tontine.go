@@ -404,19 +404,20 @@ func (p *TontinePayment) NetAmountCents() int64 {
 // ============================================================
 
 type TontineVoucher struct {
-	ID            string     `json:"id" db:"id"`
-	GroupID       string     `json:"group_id" db:"group_id"`
-	ParticipantID string     `json:"participant_id" db:"participant_id"`
-	CustomerID    string     `json:"customer_id" db:"customer_id"`
-	ProductID     string     `json:"product_id" db:"product_id"`
-	ShopID        string     `json:"shop_id" db:"shop_id"`
-	VoucherCode   string     `json:"voucher_code" db:"voucher_code"`
-	CycleNumber   int        `json:"cycle_number" db:"cycle_number"`
-	Status        string     `json:"status" db:"status"`
-	ExpiresAt     time.Time  `json:"expires_at" db:"expires_at"`
-	RedeemedAt    *time.Time `json:"redeemed_at,omitempty" db:"redeemed_at"`
-	RedeemedBy    *string    `json:"redeemed_by,omitempty" db:"redeemed_by"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+	ID              string     `json:"id" db:"id"`
+	GroupID         string     `json:"group_id" db:"group_id"`
+	ParticipantID   string     `json:"participant_id" db:"participant_id"`
+	CustomerID      string     `json:"customer_id" db:"customer_id"`
+	ProductID       string     `json:"product_id" db:"product_id"`
+	ShopID          string     `json:"shop_id" db:"shop_id"`
+	VoucherCode     string     `json:"voucher_code" db:"voucher_code"`
+	CycleNumber     int        `json:"cycle_number" db:"cycle_number"`
+	Status          string     `json:"status" db:"status"`
+	HeldAmountCents int64      `json:"held_amount_cents" db:"held_amount_cents"`
+	ExpiresAt       time.Time  `json:"expires_at" db:"expires_at"`
+	RedeemedAt      *time.Time `json:"redeemed_at,omitempty" db:"redeemed_at"`
+	RedeemedBy      *string    `json:"redeemed_by,omitempty" db:"redeemed_by"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 }
 
 func NewTontineVoucher(

@@ -92,6 +92,7 @@ type TontineVoucherRepository interface {
 	Create(ctx context.Context, voucher *entity.TontineVoucher) error
 	FindByID(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	FindByCode(ctx context.Context, code string) (*entity.TontineVoucher, error)
+	FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error) // 🆕 Phase 5 : lister par groupe
 	FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontineVoucher, error)
 	FindByCustomerID(ctx context.Context, customerID string) ([]*entity.TontineVoucher, error)
 	FindByShopID(ctx context.Context, shopID string) ([]*entity.TontineVoucher, error)

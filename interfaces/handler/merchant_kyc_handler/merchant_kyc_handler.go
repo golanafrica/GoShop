@@ -2,8 +2,10 @@ package merchantkychandler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings" // 🆕 AJOUTÉ pour la détection d'erreurs métier
 
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
 	"Goshop/interfaces/middl"
@@ -83,7 +85,8 @@ type DocumentReviewInput struct {
 // @Security ApiKeyAuth
 // @Router /api/merchant/kyc/submit [post]
 func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
 	var req SubmitKYCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -107,14 +110,30 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 		}
 	}
 
+	// ✅ Le usecase récupère le shop_id depuis le contexte tenant (middl.TenantResolver)
 	ucReq := &merchantkycusecase.SubmitMerchantKYCRequest{
 		Documents: ucDocs,
 	}
 
-	response, err := h.submitUC.Execute(r.Context(), ucReq)
+	response, err := h.submitUC.Execute(ctx, ucReq)
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur soumission KYC")
-		return err
+
+		// 🆕 Détection robuste des erreurs métier
+		var appErr *utils.AppError
+		if errors.As(err, &appErr) {
+			return appErr
+		}
+
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "no documents") {
+			return utils.NewAppError("KYC_NOT_FOUND", errMsg, http.StatusNotFound)
+		}
+		if strings.Contains(errMsg, "already") || strings.Contains(errMsg, "pending") {
+			return utils.NewAppError("KYC_INVALID_STATUS", errMsg, http.StatusBadRequest)
+		}
+
+		return utils.NewAppError("SUBMIT_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -137,12 +156,20 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 // @Security ApiKeyAuth
 // @Router /api/merchant/kyc/status [get]
 func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
-	response, err := h.statusUC.Execute(r.Context())
+	// ✅ Le usecase récupère le shop_id depuis le contexte tenant
+	response, err := h.statusUC.Execute(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur récupération statut KYC")
-		return err
+
+		var appErr *utils.AppError
+		if errors.As(err, &appErr) {
+			return appErr
+		}
+
+		return utils.NewAppError("GET_KYC_STATUS_FAILED", err.Error(), http.StatusInternalServerError)
 	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -171,7 +198,8 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 // @Security ApiKeyAuth
 // @Router /api/admin/merchant-kyc/pending [get]
 func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
 	limit := 20
 	offset := 0
@@ -192,10 +220,16 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 		Offset: offset,
 	}
 
-	response, err := h.listUC.Execute(r.Context(), ucReq)
+	response, err := h.listUC.Execute(ctx, ucReq)
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur liste shops pending")
-		return err
+
+		var appErr *utils.AppError
+		if errors.As(err, &appErr) {
+			return appErr
+		}
+
+		return utils.NewAppError("LIST_PENDING_KYC_FAILED", err.Error(), http.StatusInternalServerError)
 	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -222,7 +256,8 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 // @Security ApiKeyAuth
 // @Router /api/admin/merchant-kyc/{shop_id}/review [put]
 func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
 
 	shopID := chi.URLParam(r, "shop_id")
 	if shopID == "" {
@@ -241,7 +276,7 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 		return utils.NewAppError("VALIDATION_ERROR", "action must be 'approve' or 'reject'", http.StatusBadRequest)
 	}
 
-	adminID, ok := utils.UserIDFromContext(r.Context())
+	adminID, ok := utils.UserIDFromContext(ctx)
 	if !ok || adminID == "" {
 		return utils.ErrUnauthorized
 	}
@@ -263,14 +298,30 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 		DocumentReviews: docReviews,
 	}
 
-	response, err := h.reviewUC.Execute(r.Context(), ucReq)
+	response, err := h.reviewUC.Execute(ctx, ucReq)
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur revue KYC")
-		// Si l'erreur est déjà une AppError, on la retourne telle quelle
-		if _, ok := err.(*utils.AppError); ok {
-			return err
+
+		// ✅ FIX CRITIQUE : Détection robuste des erreurs métier (AppError)
+		var appErr *utils.AppError
+		if errors.As(err, &appErr) {
+			return appErr
 		}
-		return utils.NewAppError("REVIEW_KYC_FAILED", err.Error(), http.StatusInternalServerError)
+
+		// 🆕 FIX CRITIQUE : Intercepter les erreurs métier non typées pour éviter les 500
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not pending") ||
+			strings.Contains(errMsg, "already verified") ||
+			strings.Contains(errMsg, "already rejected") ||
+			strings.Contains(errMsg, "unverified") ||
+			strings.Contains(errMsg, "invalid status") {
+			return utils.NewAppError("KYC_INVALID_STATUS", errMsg, http.StatusBadRequest) // 400 au lieu de 500
+		}
+		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "no documents") {
+			return utils.NewAppError("KYC_NOT_FOUND", errMsg, http.StatusNotFound) // 404
+		}
+
+		return utils.NewAppError("REVIEW_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -294,4 +345,5 @@ func (h *MerchantKYCHandler) RegisterMerchantRoutes(r chi.Router) {
 func (h *MerchantKYCHandler) RegisterAdminRoutes(r chi.Router) {
 	r.Get("/pending", middl.ErrorHandler(h.ListPendingKYC))
 	r.Put("/{shop_id}/review", middl.ErrorHandler(h.ReviewKYC))
+	r.Post("/{shop_id}/review", middl.ErrorHandler(h.ReviewKYC)) // 🆕 Compatibilité scripts E2E
 }
