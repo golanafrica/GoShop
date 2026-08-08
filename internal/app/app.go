@@ -966,6 +966,21 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v3.4.0 Credit scheduler initialized (with auto-trigger capability)")
 
+	// ============ 🆕 v4.7.0 : ESCROW AUTO-RELEASE SCHEDULER ============
+	escrowAutoReleaseSched := appscheduler.NewEscrowAutoReleaseScheduler(
+		deliveryProofRepo,
+		escrowRepo,
+		postgresOrderRepo,
+		tontineVoucherRepo,
+		tontineGroupRepo,
+		walletRepo,
+		walletTxnRepo,
+		creditWalletUC,
+		a.Logger.Logger,
+	)
+
+	a.Logger.Info().Msg("✅ v4.7.0 Escrow auto-release scheduler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -1357,16 +1372,13 @@ func (a *App) setupRouter() {
 
 			// ============ 🆕 v4.7.0 : DELIVERY PROOF ROUTES ============
 			r.Route("/delivery/proof", func(r chi.Router) {
-				// ============ 🆕 v4.7.0 : DELIVERY PROOF ROUTES ============
-				r.Route("/delivery/proof", func(r chi.Router) {
-					// Marchand : Preuve d'expédition
-					r.Post("/shipping", deliveryProofHandler.SubmitShippingProof)
-					r.Post("/tontine-shipping", deliveryProofHandler.SubmitTontineShippingProof)
+				// Marchand : Preuve d'expédition
+				r.Post("/shipping", deliveryProofHandler.SubmitShippingProof)
+				r.Post("/tontine-shipping", deliveryProofHandler.SubmitTontineShippingProof)
 
-					// Client : Confirmation de réception (optionnel)
-					r.Post("/delivery", deliveryProofHandler.SubmitDeliveryProof)
-					r.Post("/tontine-delivery", deliveryProofHandler.SubmitTontineDeliveryProof)
-				})
+				// Client : Confirmation de réception (optionnel)
+				r.Post("/delivery", deliveryProofHandler.SubmitDeliveryProof)
+				r.Post("/tontine-delivery", deliveryProofHandler.SubmitTontineDeliveryProof)
 			})
 		})
 
@@ -1487,16 +1499,23 @@ func (a *App) setupRouter() {
 		creditSchedule = "0 3 * * *"
 	}
 
+	escrowAutoReleaseSchedule := os.Getenv("ESCROW_AUTO_RELEASE_SCHEDULE")
+	if escrowAutoReleaseSchedule == "" {
+		escrowAutoReleaseSchedule = "0 */6 * * *"
+	}
+
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
 		onlinePaymentSched,
 		tontineSched,
 		creditSched,
+		escrowAutoReleaseSched,
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
 		tontineSchedule,
 		creditSchedule,
+		escrowAutoReleaseSchedule,
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1507,7 +1526,8 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.7.0 Commission schedulers started")
+			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
+			Msg("✅ v4.7.0 All schedulers started (including escrow auto-release)")
 	}
 
 	a.Router = r
@@ -1515,7 +1535,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.7.0: + Delivery Proof System + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
+		Msg("✅ Router configuré avec succès (v4.7.0: + Delivery Proof System + Escrow Auto-Release + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
