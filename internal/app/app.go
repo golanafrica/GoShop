@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
-	"log" // 🆕 AJOUTÉ : Nécessaire pour le log.Fatal en cas de mauvaise config CORS
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -19,7 +19,7 @@ import (
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
-	productuscase "Goshop/application/usecase/product_uscase" // 🆕 AJOUT v3.6.0
+	productuscase "Goshop/application/usecase/product_uscase"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -28,7 +28,7 @@ import (
 	// 🆕 v3.0.0 : Usecases
 	codusecase "Goshop/application/usecase/cod_usecase"
 	creditusecase "Goshop/application/usecase/credit_usecase"
-	merchantusecase "Goshop/application/usecase/merchant_usecase" // 🆕 AJOUT v3.5.0
+	merchantusecase "Goshop/application/usecase/merchant_usecase"
 
 	// 🆕 v4.1.0 : Merchant KYC Usecases
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
@@ -47,6 +47,9 @@ import (
 
 	// 🆕 v4.6.0 : Dispute Usecases
 	disputeusecase "Goshop/application/usecase/dispute_usecase"
+
+	// 🆕 v4.7.0 : Delivery Proof Usecases
+	deliveryproofusecase "Goshop/application/usecase/delivery_proof_usecase"
 
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
@@ -127,7 +130,7 @@ import (
 	// 🆕 v3.0.0 : Handlers
 	codhandler "Goshop/interfaces/handler/cod_handler"
 	credithandler "Goshop/interfaces/handler/credit_handler"
-	merchanthandler "Goshop/interfaces/handler/merchant_handler" // 🆕 AJOUT v3.5.0
+	merchanthandler "Goshop/interfaces/handler/merchant_handler"
 	wallethandler "Goshop/interfaces/handler/wallet_handler"
 
 	// 🆕 v3.1.0 : Scheduler Handler
@@ -148,6 +151,9 @@ import (
 	// 🆕 v4.6.0 : Dispute Handler
 	disputehandler "Goshop/interfaces/handler/dispute_handler"
 
+	// 🆕 v4.7.0 : Delivery Proof Handler
+	deliveryproofhandler "Goshop/interfaces/handler/delivery_proof_handler"
+
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
@@ -158,8 +164,6 @@ import (
 // ============================================================
 // 🆕 WRAPPER POUR CREDIT UPDATER
 // ============================================================
-// Ce wrapper permet à app.go de fournir l'interface requise par ProcessWebhookUsecase
-// sans créer de dépendance circulaire entre les packages usecase.
 
 type creditUpdaterWrapper struct {
 	installmentRepo repository.CreditInstallmentRepository
@@ -196,15 +200,13 @@ func (w *creditUpdaterWrapper) CreditMerchantWallet(ctx context.Context, shopID 
 
 // ============ STRUCT App ============
 
-// App représente l'application configurable
 type App struct {
 	Router    *chi.Mux
 	DB        *sql.DB
 	Logger    *setupLogging.Logger
-	Scheduler *infscheduler.CronScheduler // 🆕 v3.1.0
+	Scheduler *infscheduler.CronScheduler
 }
 
-// NewApp crée une nouvelle instance de l'application avec logging
 func NewApp(db *sql.DB, logger *setupLogging.Logger) *App {
 	metrics.RegisterMetrics()
 	app := &App{
@@ -215,7 +217,6 @@ func NewApp(db *sql.DB, logger *setupLogging.Logger) *App {
 	return app
 }
 
-// setupRouter configure toutes les routes avec logging
 func (a *App) setupRouter() {
 
 	startTime := time.Now()
@@ -237,13 +238,11 @@ func (a *App) setupRouter() {
 	// ============================================================
 	frontendURL := os.Getenv("FRONTEND_URL")
 
-	// En production, on refuse catégoriquement une configuration CORS ouverte ou manquante
 	if os.Getenv("APP_ENV") == "production" {
 		if frontendURL == "" || frontendURL == "*" {
 			log.Fatal("🚨 ERREUR FATALE DE SÉCURITÉ : FRONTEND_URL est manquant ou vaut '*' en production. Veuillez définir l'URL exacte de votre frontend.")
 		}
 	} else {
-		// En développement, on autorise tout par commodité, mais on logue un avertissement
 		if frontendURL == "" {
 			frontendURL = "*"
 			a.Logger.Warn().Msg("⚠️ FRONTEND_URL non défini, fallback sur '*' (DEV ONLY)")
@@ -290,8 +289,8 @@ func (a *App) setupRouter() {
 	creditScoreRepo := creditinfra.NewCreditScoreRepositoryInfrastructure(a.DB)
 
 	// 🆕 v3.0.0 : Repositories Escrow
-	escrowRepo := escrowinfra.NewEscrowAccountRepositoryInfrastructure(a.DB) // 🆕 Assigné à une variable
-	_ = escrowinfra.NewDeliveryProofRepositoryInfrastructure(a.DB)
+	escrowRepo := escrowinfra.NewEscrowAccountRepositoryInfrastructure(a.DB)
+	deliveryProofRepo := escrowinfra.NewDeliveryProofRepositoryInfrastructure(a.DB)
 
 	// 🆕 v3.0.0 : Repositories Wallet
 	walletRepo := walletinfra.NewMerchantWalletRepositoryInfrastructure(a.DB)
@@ -332,13 +331,12 @@ func (a *App) setupRouter() {
 	// 🆕 v4.6.0 : Repository Dispute
 	disputeRepo := disputeinfra.NewDisputeRepositoryPostgres(a.DB)
 
-	a.Logger.Info().Msg("✅ v4.6.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute)")
+	a.Logger.Info().Msg("✅ v4.7.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute + delivery_proof)")
 
 	// ============================================================
 	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
 	// ============================================================
 
-	// 1. Yenga Pay (Réel) - Seulement si les variables d'environnement sont présentes
 	yengaPayConfig := paymentinfra.YengaPayConfig{
 		APIKey:         os.Getenv("YENGA_PAY_API_KEY"),
 		OrganizationID: os.Getenv("YENGA_PAY_ORGANIZATION_ID"),
@@ -362,13 +360,10 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
 	}
 
-	// 2. Mocks Orange Money / Moov Money - STRICTEMENT INTERDIT EN PRODUCTION
 	appEnv := os.Getenv("APP_ENV")
 	if appEnv == "production" {
 		a.Logger.Info().Msg("✅ Production environment: Mock payment providers are DISABLED")
 	} else {
-		// En dev/test, on enregistre les mocks.
-		// La sécurité repose ici sur le fait que ce bloc ne s'exécute JAMAIS en production.
 		orangeMoneyProvider := mock.NewOrangeMoneyProvider(mock.DefaultOrangeMoneyConfig())
 		if err := paymentRegistry.Register(orangeMoneyProvider); err != nil {
 			a.Logger.Error().Err(err).Msg("Failed to register Mock Orange Money provider")
@@ -402,7 +397,6 @@ func (a *App) setupRouter() {
 	}
 
 	// ============ 🆕 v4.5.0 : WEBSOCKET HUB ============
-	// On l'initialise ici pour qu'il soit disponible pour le NotificationDispatcher
 	var wsHub *wsinfra.Hub
 	if utils.Rdb != nil {
 		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
@@ -432,7 +426,7 @@ func (a *App) setupRouter() {
 			emailNotifProvider,
 			postgresCustomerRepo,
 			shopRepo,
-			postgresUserRepo, // ✅ postgresUserRepo implémente bien userrepository.UserRepository
+			postgresUserRepo,
 			a.Logger.Logger,
 		)
 		a.Logger.Info().Msg("✅ v4.6.1 Notification Dispatcher initialized (WebSocket + Email)")
@@ -442,10 +436,9 @@ func (a *App) setupRouter() {
 	}
 
 	// -- Usecases (existants)
-	// 🆕 v4.4.2 : Ajout de userSessionRepo comme 2ème paramètre
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
-		userSessionRepo, // 🆕 v4.4.2
+		userSessionRepo,
 		utils.ValidateToken,
 		utils.GenerateAccessToken,
 		utils.GenerateRefreshToken,
@@ -455,15 +448,11 @@ func (a *App) setupRouter() {
 	)
 
 	// Shop Usecases
-	// 🆕 Injection du shopCollabRepo pour que le créateur de la boutique soit automatiquement shop_admin
 	createShopUsecase := shopusecase.NewCreateShopUsecase(shopRepo, shopCollabRepo)
 	listShopsUsecase := shopusecase.NewListShopsUsecase(shopRepo)
 	updateShopUsecase := shopusecase.NewUpdateShopUsecase(shopRepo)
 
-	// Configure Payment Usecase (pour config par boutique)
 	configurePaymentUC := shopusecase.NewConfigurePaymentUsecase(shopRepo, shopRepo, shopRepo)
-
-	// 🆕 v2.9.0 : Configure Tontine Usecase
 	configureTontineUC := shopusecase.NewConfigureTontineUsecase(tontineSettingsRepo, postgreProductRepo)
 
 	// Payment Usecases
@@ -490,20 +479,16 @@ func (a *App) setupRouter() {
 	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
 	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
 	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)
-
-	// 🆕 AJOUTÉ : Release Held Wallet Usecase (pour la redemption des vouchers tontine)
 	releaseHeldWalletUC := walletusecase.NewReleaseHeldWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
 
-	// 🆕 Complete Payment Usecase (utilise maintenant l'Escrow)
 	completePaymentUC := paymentusecase.NewCompletePaymentUsecase(
 		paymentRepo,
 		postgresOrderRepo,
 		paymentRegistry,
-		shopRepo,   // ShopPaymentSettingsRepository
-		escrowRepo, // EscrowAccountRepository
+		shopRepo,
+		escrowRepo,
 	)
 
-	// 🆕 v2.9.0 : Process Tontine Webhook Usecase
 	processTontineWebhookUC := paymentusecase.NewProcessTontineWebhookUsecase(
 		tontinePaymentRepo,
 		tontineGroupRepo,
@@ -513,22 +498,21 @@ func (a *App) setupRouter() {
 		notifService,
 		postgresCustomerRepo,
 	).WithWalletCreditor(creditWalletUC).
-		WithCommissionRateRepo(rateRepo) // rateRepo déjà créé : commissionrate.NewCommissionRateRepositoryPostgres(a.DB)
+		WithCommissionRateRepo(rateRepo)
 
-	// Process Webhook Usecase (utilise maintenant l'Escrow)
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
-		shopRepo, // ShopPaymentSettingsRepository
+		shopRepo,
 		processTontineWebhookUC,
 		&creditUpdaterWrapper{
 			installmentRepo: creditInstallmentRepo,
 			contractRepo:    creditContractRepo,
 			creditWalletUC:  creditWalletUC,
 		},
-		escrowRepo, // 🆕 EscrowAccountRepository
+		escrowRepo,
 	)
 
 	// Withdrawal Usecases
@@ -537,7 +521,7 @@ func (a *App) setupRouter() {
 		shopRepo,
 		walletRepo,
 		paymentRegistry,
-		debitWalletUC, // ✅ AJOUT : Injection du usecase de débit pour sécuriser les retraits
+		debitWalletUC,
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 
@@ -566,9 +550,9 @@ func (a *App) setupRouter() {
 		postgresOrderRepo,
 		paymentRepo,
 		shopRepo,
-		escrowRepo,    // 🆕 EscrowAccountRepository
-		walletRepo,    // 🆕 MerchantWalletRepository
-		walletTxnRepo, // 🆕 WalletTransactionRepository
+		escrowRepo,
+		walletRepo,
+		walletTxnRepo,
 		notifService,
 		txmanagerRepo,
 		disputeRepo,
@@ -582,6 +566,21 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel)")
+
+	// ============ 🆕 v4.7.0 : DELIVERY PROOF USECASES ============
+	submitShippingUC := deliveryproofusecase.NewSubmitShippingProofUsecase(
+		deliveryProofRepo,
+		postgresOrderRepo,
+		txmanagerRepo,
+	)
+
+	submitTontineShippingUC := deliveryproofusecase.NewSubmitTontineShippingProofUsecase(
+		deliveryProofRepo,
+		tontineVoucherRepo,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.7.0 Delivery proof usecases initialized (shipping + tontine)")
 
 	// ============ 🆕 v2.9.0 : TONTINE USECASES ============
 	createTontineGroupUC := tontineusecase.NewCreateTontineGroupUsecase(
@@ -613,17 +612,15 @@ func (a *App) setupRouter() {
 		tontineGroupRepo,
 	)
 
-	// 🆕 PHASE 6 : Sync UseCase (pour cron ou appel manuel si webhook échoue)
 	syncTontinePaymentUC := tontineusecase.NewSyncTontinePaymentUsecase(
 		tontinePaymentRepo,
 		tontineGroupRepo,
 		paymentRegistry,
-		processTontineWebhookUC, // On réutilise le usecase webhook pour la logique de complétion
+		processTontineWebhookUC,
 	)
 
 	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments, sync)")
 
-	// (Ajustez les paramètres si votre signature locale diffère, par ex. si elle nécessite notifService)
 	redeemTontineVoucherUC := tontineusecase.NewRedeemTontineVoucherUsecase(
 		tontineVoucherRepo,
 		releaseHeldWalletUC,
@@ -729,24 +726,21 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	// 🆕 AJOUT : PayDownPayment Usecase sécurisé (initie le paiement via YengaPay)
 	payDownPaymentUC := creditusecase.NewPayDownPaymentUsecase(
 		creditContractRepo,
 		paymentRepo,
-		paymentRegistry, // Implémente l'interface locale PaymentRegistry
+		paymentRegistry,
 		txmanagerRepo,
 	)
 
-	// 🆕 AJOUT : PayInstallment Usecase
 	payInstallmentUC := creditusecase.NewPayInstallmentUsecase(
 		creditInstallmentRepo,
 		creditContractRepo,
 		paymentRepo,
-		paymentRegistry, // Implémente l'interface locale GetAvailable
+		paymentRegistry,
 		txmanagerRepo,
 	)
 
-	// 🆕 v3.5.0 : MERCHANT OVERVIEW USECASE
 	getMerchantOverviewUC := merchantusecase.NewGetMerchantOverviewUsecase(
 		postgresOrderRepo,
 		paymentRepo,
@@ -755,10 +749,9 @@ func (a *App) setupRouter() {
 		walletRepo,
 		freezeRepo,
 		batchRepo,
-		escrowRepo, // 🆕 AJOUTÉ ICI
+		escrowRepo,
 	)
 
-	// 🆕 v3.6.0 : PUBLIC PRODUCT CATALOG USECASE & HANDLER
 	listPublicProductsUC := productuscase.NewListPublicProductsUsecase(postgreProductRepo)
 	publicProductHandler := productHandler.NewPublicProductHandler(listPublicProductsUC)
 
@@ -898,7 +891,6 @@ func (a *App) setupRouter() {
 		notifService,
 	)
 
-	// 🆕 AJOUT : Admin Dispute Usecase pour le dashboard
 	adminDisputeUC := disputeusecase.NewAdminDisputeUsecase(disputeRepo)
 
 	a.Logger.Info().Msg("✅ v4.6.0 Dispute usecases initialized")
@@ -947,15 +939,15 @@ func (a *App) setupRouter() {
 
 	// ============ 🆕 v3.4.0 : CREDIT SCHEDULER ============
 	creditSched := appscheduler.NewCreditScheduler(
-		creditInstallmentRepo, // 1. installmentRepo
-		creditContractRepo,    // 2. contractRepo (NOUVEAU)
-		postgresCustomerRepo,  // 3. customerRepo (NOUVEAU)
-		payInstallmentUC,      // 4. payInstallmentUC (NOUVEAU)
-		batchRepo,             // 5. batchRepo
-		rateRepo,              // 6. rateRepo
-		debitWalletUC,         // 7. debitUC
-		freezeAccountUC,       // 8. freezeUC
-		a.Logger.Logger,       // 9. logger
+		creditInstallmentRepo,
+		creditContractRepo,
+		postgresCustomerRepo,
+		payInstallmentUC,
+		batchRepo,
+		rateRepo,
+		debitWalletUC,
+		freezeAccountUC,
+		a.Logger.Logger,
 	)
 
 	a.Logger.Info().Msg("✅ v3.4.0 Credit scheduler initialized (with auto-trigger capability)")
@@ -974,7 +966,6 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	// 🆕 Client Dashboard Handler
 	clientDashboardHandler := customerhandler.NewCustomerDashboardHandler(getDashboardUC, postgresCustomerRepo)
 
 	orderHandler := ordershandler.NewOrderHandler(
@@ -987,7 +978,6 @@ func (a *App) setupRouter() {
 		codProofRepo,
 	)
 
-	// Cash Order Handler
 	cashOrderHandler := ordershandler.NewCashOrderHandler(
 		acceptOrderUC,
 		rejectOrderUC,
@@ -996,7 +986,6 @@ func (a *App) setupRouter() {
 		cancelOrderUC,
 	)
 
-	// 🆕 v4.4.21 : Initialisation du Rate Limiter pour le login
 	var loginRateLimiter service.LoginRateLimiter
 	if utils.Rdb != nil {
 		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
@@ -1009,11 +998,10 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ v4.4.21 Login rate limiter initialisé (mémoire - fallback)")
 	}
 
-	// 🆕 v4.4.21 : Ajout de rateLimiter comme 3ème paramètre
 	userHandler := userhandler.NewUserHandler(
 		postgresUserRepo,
-		userSessionRepo,  // 🆕 v4.4.2
-		loginRateLimiter, // 🆕 v4.4.21
+		userSessionRepo,
+		loginRateLimiter,
 		a.Logger.WithComponent("user_handler"),
 	)
 
@@ -1023,13 +1011,9 @@ func (a *App) setupRouter() {
 		updateShopUsecase,
 	)
 
-	// Payment Settings Handler
 	paymentSettingsHandler := shophandler.NewPaymentSettingsHandler(configurePaymentUC)
-
-	// 🆕 v2.9.0 : Tontine Settings Handler (handler dédié)
 	tontineSettingsHandler := shophandler.NewTontineSettingsHandler(configureTontineUC, shopRepo)
 
-	// Payment Handlers
 	paymentHandler := paymenthandler.NewPaymentHandler(
 		initiatePaymentUC,
 		checkPaymentStatusUC,
@@ -1039,32 +1023,29 @@ func (a *App) setupRouter() {
 	)
 	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
 
-	// Withdrawal Handler
 	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
 		createWithdrawalUC,
 		listWithdrawalsUC,
 		debitWalletUC,
 	)
 
-	// 🆕 v2.9.0 : Tontine Handler
 	tontineHandler := tontinehandler.NewTontineHandler(
 		createTontineGroupUC,
 		joinTontineGroupUC,
 		payCycleUC,
 		listCustomerPaymentsUC,
-		syncTontinePaymentUC,   // 🆕 AJOUT PHASE 6
-		redeemTontineVoucherUC, // Phase 5
+		syncTontinePaymentUC,
+		redeemTontineVoucherUC,
 		tontineVoucherRepo,
 		postgresCustomerRepo,
 	)
 
-	// 🆕 v2.9.0 : KYC Handler (Client)
 	kycHandler := customerhandler.NewKYCHandler(
 		uploadKYCUC,
 		getKYCStatusUC,
 		reviewKYCUC,
 		listPendingKYCUC,
-		postgresCustomerRepo, // 🆕 AJOUTÉ
+		postgresCustomerRepo,
 	)
 
 	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
@@ -1084,7 +1065,6 @@ func (a *App) setupRouter() {
 		codProofRepo,
 	)
 
-	// 🆕 AJOUT : Injection de payDownPaymentUC et payInstallmentUC dans le CreditHandler
 	creditHandler := credithandler.NewCreditHandler(
 		configureCreditPlanUC,
 		applyForCreditUC,
@@ -1094,16 +1074,13 @@ func (a *App) setupRouter() {
 		payInstallmentUC,
 	)
 
-	// 🆕 v3.5.0 : MERCHANT OVERVIEW HANDLER
 	merchantOverviewHandler := merchanthandler.NewMerchantOverviewHandler(getMerchantOverviewUC)
 
-	// ============ 🆕 v3.1.0 : SCHEDULER HANDLER ============
 	schedulerHandler := schedulerhandler.NewSchedulerHandler(
 		commissionSched,
 		batchRepo,
 	)
 
-	// ============ 🆕 v3.3.0 : COMMISSION RATE HANDLER ============
 	commissionRateHandler := commissionratehandler.NewCommissionRateHandler(
 		rateRepo,
 		onlinePaymentSched,
@@ -1111,7 +1088,6 @@ func (a *App) setupRouter() {
 		creditSched,
 	)
 
-	// ============ 🆕 v4.1.0 : MERCHANT KYC HANDLER ============
 	merchantKYCHandler := merchantkyhandler.NewMerchantKYCHandler(
 		submitMerchantKYCUC,
 		reviewMerchantKYCUC,
@@ -1119,7 +1095,6 @@ func (a *App) setupRouter() {
 		getMerchantKYCStatusUC,
 	)
 
-	// ============ 🆕 v4.2.0 : ADMIN SHOP HANDLER ============
 	adminShopHandler := adminshophandler.NewAdminShopHandler(
 		adminListShopsUC,
 		adminGetShopDetailsUC,
@@ -1128,7 +1103,6 @@ func (a *App) setupRouter() {
 		adminActivateShopUC,
 	)
 
-	// ============ 🆕 v4.3.0 : COLLABORATOR HANDLER ============
 	collaboratorHandler := collaboratorhandler.NewCollaboratorHandler(
 		invitePlatformUC,
 		inviteShopUC,
@@ -1138,7 +1112,6 @@ func (a *App) setupRouter() {
 		removeCollabUC,
 	)
 
-	// ============ 🆕 v4.4.0 : 2FA HANDLER ============
 	twoFAHandler := twofahandler.NewTwoFAHandler(
 		setup2FAUC,
 		verifyEnable2FAUC,
@@ -1147,7 +1120,6 @@ func (a *App) setupRouter() {
 		regenerateCodesUC,
 	)
 
-	// ============ 🆕 v4.4.2 : SESSION MANAGEMENT HANDLER ============
 	sessionHandler := sessionhandler.NewSessionHandler(
 		listSessionsUC,
 		revokeSessionUC,
@@ -1156,7 +1128,6 @@ func (a *App) setupRouter() {
 		cleanupSessionsUC,
 	)
 
-	// ============ 🆕 v4.4.3 : API KEY MANAGEMENT HANDLER ============
 	apiKeyHandler := apikeyhandler.NewAPIKeyHandler(
 		createAPIKeyUC,
 		listAPIKeysUC,
@@ -1165,12 +1136,17 @@ func (a *App) setupRouter() {
 		getAPIKeyStatsUC,
 	)
 
-	// ============ 🆕 v4.6.0 : DISPUTE HANDLER ============
 	disputeHandler := disputehandler.NewDisputeHandler(
 		openDisputeUC,
 		resolveDisputeUC,
-		adminDisputeUC, // 🆕 AJOUTÉ
+		adminDisputeUC,
 		disputeRepo,
+	)
+
+	// ============ 🆕 v4.7.0 : DELIVERY PROOF HANDLER ============
+	deliveryProofHandler := deliveryproofhandler.NewDeliveryProofHandler(
+		submitShippingUC,
+		submitTontineShippingUC,
 	)
 
 	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
@@ -1179,7 +1155,7 @@ func (a *App) setupRouter() {
 		wsHandler = handlers.NewWSHandler(wsHub)
 	}
 
-	a.Logger.Info().Msg("✅ v4.6.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute)")
+	a.Logger.Info().Msg("✅ v4.7.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1198,7 +1174,6 @@ func (a *App) setupRouter() {
 	r.Post("/register", middl.ErrorHandler(userHandler.Register))
 	r.Post("/login", middl.ErrorHandler(userHandler.Login))
 
-	// 🆕 v4.4.2 : Logout route (nécessite auth + session active)
 	r.With(authMiddlewareWithSession).
 		Post("/logout", middl.ErrorHandler(userHandler.Logout))
 
@@ -1206,22 +1181,17 @@ func (a *App) setupRouter() {
 		w.Write([]byte("Goshop API est en ligne !"))
 	})
 
-	// 🆕 v3.6.0 : Catalogue public (Pas d'authentification requise)
 	r.Get("/api/public/products", middl.ErrorHandler(publicProductHandler.GetPublicProducts))
 
 	r.Handle("/metrics", promhttp.Handler())
 	r.Get("/swagger/*", httpSwagger.Handler())
 
-	// Webhooks (public, pas d'auth requise)
 	r.Post("/webhooks/{provider}", middl.ErrorHandler(webhookHandler.HandleWebhook))
 
 	// ============================================================
 	// 🆕 v4.4.3 : ROUTES PROTÉGÉES PAR API KEY (pour intégrations tierces)
 	// ============================================================
-	// Ces routes peuvent être appelées avec une API Key au lieu d'un JWT
-	// Exemple : curl -H "X-API-Key: gsk_live_..." https://api.goshop.com/v1/public/products
 
-	// Route publique avec authentification API Key (lecture produits)
 	r.With(middl.APIKeyAuth(middl.APIKeyAuthConfig{
 		APIKeyRepo:    apiKeyRepo,
 		RequiredScope: entity.ScopeReadProducts,
@@ -1234,7 +1204,6 @@ func (a *App) setupRouter() {
 		})
 	})
 
-	// Route publique avec authentification API Key (lecture shops)
 	r.With(middl.APIKeyAuth(middl.APIKeyAuthConfig{
 		APIKeyRepo:    apiKeyRepo,
 		RequiredScope: entity.ScopeReadShops,
@@ -1257,7 +1226,6 @@ func (a *App) setupRouter() {
 	r.With(authMiddlewareWithSession).
 		Get("/auth/me", middl.ErrorHandler(userHandler.Me))
 
-	// 🆕 v4.5.0 : WebSocket Notifications Route (nécessite Auth)
 	if wsHandler != nil {
 		r.With(authMiddlewareWithSession).
 			Get("/ws/notifications", wsHandler.HandleNotifications)
@@ -1273,11 +1241,9 @@ func (a *App) setupRouter() {
 			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
 			r.Put("/{id}", middl.ErrorHandler(shopHandler.UpdateShop))
 
-			// Routes de configuration des paiements par boutique
 			r.Get("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.GetPaymentSettings))
 			r.Put("/{id}/payment-settings", middl.ErrorHandler(paymentSettingsHandler.UpdatePaymentSettings))
 
-			// 🆕 v2.9.0 : Routes de configuration tontine par boutique
 			r.Get("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.GetTontineSettings))
 			r.Put("/{id}/tontine-settings", middl.ErrorHandler(tontineSettingsHandler.UpdateTontineSettings))
 		})
@@ -1286,10 +1252,7 @@ func (a *App) setupRouter() {
 		// ✅ FIX AUDIT #2 : GROUPE A - Routes Marchand (Nécessite RequireShopAccess)
 		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
-			// 1. Résoudre la boutique à partir du header/sous-domaine
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
-
-			// 🛡️ SÉCURITÉ CRITIQUE (IDOR) : Vérifier que l'utilisateur est owner ou collaborateur
 			r.Use(middl.RequireShopAccess(shopCollabRepo))
 
 			// Products
@@ -1323,7 +1286,6 @@ func (a *App) setupRouter() {
 				r.Post("/{id}/out-for-delivery", middl.ErrorHandler(cashOrderHandler.OutForDelivery))
 				r.Post("/{id}/deliver", middl.ErrorHandler(cashOrderHandler.DeliverOrder))
 				r.Post("/{id}/cancel", middl.ErrorHandler(cashOrderHandler.CancelOrder))
-
 			})
 
 			// Payments
@@ -1345,9 +1307,6 @@ func (a *App) setupRouter() {
 			r.Route("/merchant/kyc", func(r chi.Router) {
 				r.Get("/pending", middl.ErrorHandler(kycHandler.ListPendingKYC))
 				r.Post("/{customer_id}/review", middl.ErrorHandler(kycHandler.ReviewKYC))
-
-				// 🆕 ALIAS v4.1.0 : Soumission KYC Marchand (compatibilité scripts E2E)
-				// Accepte /api/merchant/kyc/submit en plus de /api/merchant-kyc/submit
 				merchantKYCHandler.RegisterMerchantRoutes(r)
 			})
 
@@ -1379,6 +1338,12 @@ func (a *App) setupRouter() {
 			r.Route("/merchant", func(r chi.Router) {
 				r.Get("/overview", middl.ErrorHandler(merchantOverviewHandler.GetOverview))
 			})
+
+			// ============ 🆕 v4.7.0 : DELIVERY PROOF ROUTES ============
+			r.Route("/delivery/proof", func(r chi.Router) {
+				r.Post("/shipping", deliveryProofHandler.SubmitShippingProof)
+				r.Post("/tontine-shipping", deliveryProofHandler.SubmitTontineShippingProof)
+			})
 		})
 
 		// ---------------------------------------------------------
@@ -1386,24 +1351,16 @@ func (a *App) setupRouter() {
 		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
 			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
-			// PAS de middl.RequireShopAccess ici !
 
-			// Dashboard financier du client connecté
 			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
-
-			// Upload KYC par le client pour lui-même
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
 
-			// Actions Tontine pour le client
 			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
 			r.Post("/tontine/groups/{group_id}/pay", middl.ErrorHandler(tontineHandler.PayCycle))
 			r.Get("/tontine/groups/{group_id}/payments", middl.ErrorHandler(tontineHandler.ListCustomerPayments))
 
-			// ✅ CORRECTION : La route de sync est STRICTEMENT À L'INTÉRIEUR de ce groupe
-			// pour bénéficier du middleware TenantResolver.
 			r.Post("/tontine/payments/sync", middl.ErrorHandler(tontineHandler.SyncPayment))
-			// 🆕 Phase 5 : Lister ses propres vouchers
 			r.Get("/tontine/vouchers", middl.ErrorHandler(tontineHandler.ListVouchers))
 
 			r.Post("/orders/{id}/dispute", middl.ErrorHandler(disputeHandler.OpenDispute))
@@ -1478,14 +1435,9 @@ func (a *App) setupRouter() {
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(middl.RequireRoles("super_admin", "admin"))
 
-			// 🆕 Dashboard Admin : Liste et détails des litiges
 			r.Get("/disputes", middl.ErrorHandler(disputeHandler.GetAllDisputes))
 			r.Get("/disputes/{id}", middl.ErrorHandler(disputeHandler.GetDisputeByID))
-
-			// Résoudre un litige par dispute_id
 			r.Post("/disputes/{id}/resolve", middl.ErrorHandler(disputeHandler.ResolveDispute))
-
-			// 🆕 Résoudre un litige par order_id (utilisé par le script E2E)
 			r.Post("/orders/{id}/dispute/resolve", middl.ErrorHandler(disputeHandler.ResolveOrderByDispute))
 		})
 	})
@@ -1531,7 +1483,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
-			Msg("✅ v4.6.0 Commission schedulers started")
+			Msg("✅ v4.7.0 Commission schedulers started")
 	}
 
 	a.Router = r
@@ -1539,7 +1491,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.6.0: + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
+		Msg("✅ Router configuré avec succès (v4.7.0: + Delivery Proof System + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1596,17 +1548,15 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Handler retourne le handler HTTP
 func (a *App) Handler() http.Handler {
 	return a.Router
 }
 
-// NewRouter crée et retourne un router HTTP configuré (pour les tests)
 func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.6.0", // 🆕 v4.6.0
+		Version:     "4.7.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
