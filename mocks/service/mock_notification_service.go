@@ -239,6 +239,20 @@ func (mr *MockNotificationServiceMockRecorder) NotifyTontineCyclePaid(ctx, userI
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineCyclePaid", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineCyclePaid), ctx, userID, payerName, groupName, amount)
 }
 
+// NotifyTontineMerchantCycleCompleted mocks base method.
+func (m *MockNotificationService) NotifyTontineMerchantCycleCompleted(ctx context.Context, ownerUserID, groupName, amountStr, voucherCode string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "NotifyTontineMerchantCycleCompleted", ctx, ownerUserID, groupName, amountStr, voucherCode)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// NotifyTontineMerchantCycleCompleted indicates an expected call of NotifyTontineMerchantCycleCompleted.
+func (mr *MockNotificationServiceMockRecorder) NotifyTontineMerchantCycleCompleted(ctx, ownerUserID, groupName, amountStr, voucherCode any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineMerchantCycleCompleted", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineMerchantCycleCompleted), ctx, ownerUserID, groupName, amountStr, voucherCode)
+}
+
 // NotifyTontineTurnSoon mocks base method.
 func (m *MockNotificationService) NotifyTontineTurnSoon(ctx context.Context, userID, groupName, turnDate string) error {
 	m.ctrl.T.Helper()
@@ -265,20 +279,6 @@ func (m *MockNotificationService) NotifyTontineVoucherReady(ctx context.Context,
 func (mr *MockNotificationServiceMockRecorder) NotifyTontineVoucherReady(ctx, userID, groupName, voucherCode, amountStr any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineVoucherReady", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineVoucherReady), ctx, userID, groupName, voucherCode, amountStr)
-}
-
-// NotifyTontineMerchantCycleCompleted mocks base method.
-func (m *MockNotificationService) NotifyTontineMerchantCycleCompleted(ctx context.Context, ownerUserID, groupName, amountStr, voucherCode string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NotifyTontineMerchantCycleCompleted", ctx, ownerUserID, groupName, amountStr, voucherCode)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// NotifyTontineMerchantCycleCompleted indicates an expected call of NotifyTontineMerchantCycleCompleted.
-func (mr *MockNotificationServiceMockRecorder) NotifyTontineMerchantCycleCompleted(ctx, ownerUserID, groupName, amountStr, voucherCode any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NotifyTontineMerchantCycleCompleted", reflect.TypeOf((*MockNotificationService)(nil).NotifyTontineMerchantCycleCompleted), ctx, ownerUserID, groupName, amountStr, voucherCode)
 }
 
 // SendNotification mocks base method.

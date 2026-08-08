@@ -33,18 +33,21 @@ func creditWalletValidRequest(shopID string) *walletusecase.CreditWalletRequest 
 	}
 }
 
+// 🆕 v4.8.0 : Ajout de MockEscrowAccountRepository
 func newCreditWalletUsecase(ctrl *gomock.Controller) (
 	*walletusecase.CreditWalletUsecase,
 	*mockrepo.MockMerchantWalletRepository,
 	*mockrepo.MockWalletTransactionRepository,
+	*mockrepo.MockEscrowAccountRepository, // 🆕 v4.8.0
 	*mockrepo.MockTxManager,
 ) {
 	walletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
 	txnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
+	escrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl) // 🆕 v4.8.0
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := walletusecase.NewCreditWalletUsecase(walletRepo, txnRepo, txManager)
-	return uc, walletRepo, txnRepo, txManager
+	uc := walletusecase.NewCreditWalletUsecase(walletRepo, txnRepo, escrowRepo, txManager)
+	return uc, walletRepo, txnRepo, escrowRepo, txManager
 }
 
 func expectWalletRepoWithTXSelf(walletRepo *mockrepo.MockMerchantWalletRepository, tx interface{}) {
@@ -63,7 +66,7 @@ func TestCreditWalletUsecase_ValidationError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, _ := newCreditWalletUsecase(ctrl)
+	uc, _, _, _, _ := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -80,7 +83,7 @@ func TestCreditWalletUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, _ := newCreditWalletUsecase(ctrl)
+	uc, _, _, _, _ := newCreditWalletUsecase(ctrl)
 
 	ctx := context.Background()
 	req := creditWalletValidRequest("shop-1")
@@ -96,7 +99,7 @@ func TestCreditWalletUsecase_ShopIDMismatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, _ := newCreditWalletUsecase(ctrl)
+	uc, _, _, _, _ := newCreditWalletUsecase(ctrl)
 
 	ctx, _ := walletTestContext()
 	req := creditWalletValidRequest("other-shop-id")
@@ -112,7 +115,7 @@ func TestCreditWalletUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, _, _, txManager := newCreditWalletUsecase(ctrl)
+	uc, _, _, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -130,7 +133,7 @@ func TestCreditWalletUsecase_WalletNotFound_AutoCreates_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -159,7 +162,7 @@ func TestCreditWalletUsecase_WalletNotFound_CreateError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -184,7 +187,7 @@ func TestCreditWalletUsecase_FindWalletError_Other(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -208,7 +211,7 @@ func TestCreditWalletUsecase_WalletFrozen(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -235,7 +238,7 @@ func TestCreditWalletUsecase_UpdateWalletError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -261,7 +264,7 @@ func TestCreditWalletUsecase_CreateTransactionError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -288,7 +291,7 @@ func TestCreditWalletUsecase_CommitError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -316,7 +319,7 @@ func TestCreditWalletUsecase_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	uc, walletRepo, txnRepo, _, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	req := creditWalletValidRequest(shopID.String())
@@ -352,7 +355,8 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
+	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
@@ -360,6 +364,10 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	// 🆕 v4.8.0 : Mock pour la vérification escrow (CreditFromSale passe ReferenceType="order")
+	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
@@ -384,7 +392,8 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, walletRepo, txnRepo, txManager := newCreditWalletUsecase(ctrl)
+	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
+	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
@@ -392,6 +401,10 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	// 🆕 v4.8.0 : Mock pour la vérification escrow (CreditFromCOD passe ReferenceType="order")
+	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)

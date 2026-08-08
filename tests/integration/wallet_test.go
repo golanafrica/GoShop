@@ -8,6 +8,7 @@ import (
 	walletusecase "Goshop/application/usecase/wallet_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
+	escrowinfra "Goshop/infrastructure/postgres/escrow" // 🆕 v4.8.0
 	freezeinfra "Goshop/infrastructure/postgres/freeze"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	walletinfra "Goshop/infrastructure/postgres/wallet"
@@ -33,8 +34,11 @@ func setupWalletTest(t *testing.T) (*walletusecase.CreditWalletUsecase, *walletu
 	freezeRepo := freezeinfra.NewAccountFreezeRepositoryInfrastructure(sharedDB)
 	txManager := txmanager.NewTxManagerPostgresInfra(sharedDB)
 
+	// 🆕 v4.8.0 : Escrow repository pour CreditWalletUsecase
+	escrowRepo := escrowinfra.NewEscrowAccountRepositoryInfrastructure(sharedDB)
+
 	// Créer les usecases
-	creditUC := walletusecase.NewCreditWalletUsecase(walletRepo, txnRepo, txManager)
+	creditUC := walletusecase.NewCreditWalletUsecase(walletRepo, txnRepo, escrowRepo, txManager)
 	debitUC := walletusecase.NewDebitWalletUsecase(walletRepo, txnRepo, txManager)
 	freezeUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txManager)
 

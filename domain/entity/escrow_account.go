@@ -296,6 +296,16 @@ func (a *EscrowAccount) GetMerchantAmount() int64 {
 	return a.TotalAmountCents - a.CommissionCents
 }
 
+// CanReleaseToMerchant vérifie si les fonds peuvent être libérés vers le wallet marchand
+func (a *EscrowAccount) CanReleaseToMerchant() bool {
+	return a.Status == EscrowAccountFullyReleased || a.Status == EscrowAccountPartialRelease
+}
+
+// IsBlockedFromRelease vérifie si les fonds sont bloqués et ne peuvent pas être libérés
+func (a *EscrowAccount) IsBlockedFromRelease() bool {
+	return a.Status == EscrowAccountFundsHeld || a.Status == EscrowAccountDisputed
+}
+
 // GetReleasedPercentage retourne le pourcentage de fonds libérés
 func (a *EscrowAccount) GetReleasedPercentage() float64 {
 	if a.TotalAmountCents == 0 {

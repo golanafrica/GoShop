@@ -475,7 +475,7 @@ func (a *App) setupRouter() {
 	)
 
 	// 🆕 v3.0.0 : WALLET USECASES
-	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
+	creditWalletUC := walletusecase.NewCreditWalletUsecase(walletRepo, walletTxnRepo, escrowRepo, txmanagerRepo)
 	debitWalletUC := walletusecase.NewDebitWalletUsecase(walletRepo, walletTxnRepo, txmanagerRepo)
 	freezeAccountUC := walletusecase.NewFreezeAccountUsecase(walletRepo, freezeRepo, txmanagerRepo)
 	unfreezeAccountUC := walletusecase.NewUnfreezeAccountUsecase(walletRepo, freezeRepo, walletTxnRepo, txmanagerRepo)

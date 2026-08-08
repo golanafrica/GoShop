@@ -65,20 +65,25 @@ func (r *CreditWalletRequest) Validate() error {
 	return nil
 }
 
+// CreditWalletUsecase crédite le wallet d'un marchand
 type CreditWalletUsecase struct {
 	walletRepo repository.MerchantWalletRepository
 	txnRepo    repository.WalletTransactionRepository
+	escrowRepo repository.EscrowAccountRepository // 🆕 v4.8.0 : Pour vérifier l'état de l'escrow
 	txManager  repository.TxManager
 }
 
+// NewCreditWalletUsecase crée une nouvelle instance
 func NewCreditWalletUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	txnRepo repository.WalletTransactionRepository,
+	escrowRepo repository.EscrowAccountRepository, // 🆕 v4.8.0
 	txManager repository.TxManager,
 ) *CreditWalletUsecase {
 	return &CreditWalletUsecase{
 		walletRepo: walletRepo,
 		txnRepo:    txnRepo,
+		escrowRepo: escrowRepo, // 🆕 v4.8.0
 		txManager:  txManager,
 	}
 }
@@ -106,6 +111,75 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	// ============================================================
+	// 🛡️ SÉCURITÉ CRITIQUE v4.8.0 : Vérifier l'état de l'escrow
+	// ============================================================
+	// Si le crédit provient d'une vente (order, credit_contract, tontine),
+	// vérifier que l'escrow est libéré avant de créditer le wallet
+	if req.ReferenceType != nil && req.ReferenceID != nil && uc.escrowRepo != nil {
+		switch *req.ReferenceType {
+		case "order", "credit_contract", "tontine_group", "escrow_release":
+			// Trouver l'escrow correspondant
+			var escrow *entity.EscrowAccount
+			var findErr error
+
+			switch *req.ReferenceType {
+			case "order":
+				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByOrderID(ctx, *req.ReferenceID)
+			case "credit_contract":
+				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByCreditContractID(ctx, *req.ReferenceID)
+			case "tontine_group":
+				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByTontineGroupID(ctx, *req.ReferenceID)
+			case "escrow_release":
+				// ReferenceID est directement l'escrow ID
+				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByID(ctx, *req.ReferenceID)
+			}
+
+			if findErr == nil && escrow != nil {
+				// 🛡️ BLOQUER le crédit si l'escrow n'est pas encore libéré
+				if escrow.IsBlockedFromRelease() {
+					logger.Error().
+						Str("shop_id", req.ShopID).
+						Str("escrow_id", escrow.ID).
+						Str("escrow_status", string(escrow.Status)).
+						Str("reference_type", *req.ReferenceType).
+						Str("reference_id", *req.ReferenceID).
+						Msg("🚨 BLOCKED: Attempted to credit wallet while escrow is still locked")
+
+					return nil, fmt.Errorf(
+						"cannot credit wallet: escrow %s is locked (status: %s). Funds must be released first via delivery confirmation or auto-release after 3 days",
+						escrow.ID,
+						escrow.Status,
+					)
+				}
+
+				// Vérifier que l'escrow permet le crédit
+				if !escrow.CanReleaseToMerchant() {
+					logger.Error().
+						Str("escrow_id", escrow.ID).
+						Str("escrow_status", string(escrow.Status)).
+						Msg("Escrow cannot release funds to merchant")
+
+					return nil, fmt.Errorf(
+						"escrow %s cannot release funds (status: %s)",
+						escrow.ID,
+						escrow.Status,
+					)
+				}
+
+				logger.Info().
+					Str("escrow_id", escrow.ID).
+					Str("escrow_status", string(escrow.Status)).
+					Int64("escrow_total", escrow.TotalAmountCents).
+					Int64("escrow_released", escrow.ReleasedAmountCents).
+					Msg("✅ Escrow verified and allows wallet credit")
+			}
+		}
+	}
+	// ============================================================
+	// Fin de la vérification escrow
+	// ============================================================
 
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
