@@ -580,7 +580,21 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	a.Logger.Info().Msg("✅ v4.7.0 Delivery proof usecases initialized (shipping + tontine)")
+	submitDeliveryUC := deliveryproofusecase.NewSubmitDeliveryProofUsecase(
+		deliveryProofRepo,
+		postgresOrderRepo,
+		postgresCustomerRepo,
+		txmanagerRepo,
+	)
+
+	submitTontineDeliveryUC := deliveryproofusecase.NewSubmitTontineDeliveryProofUsecase(
+		deliveryProofRepo,
+		tontineVoucherRepo,
+		postgresCustomerRepo,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ v4.7.0 Delivery proof usecases initialized (shipping + delivery + tontine)")
 
 	// ============ 🆕 v2.9.0 : TONTINE USECASES ============
 	createTontineGroupUC := tontineusecase.NewCreateTontineGroupUsecase(
@@ -1147,6 +1161,8 @@ func (a *App) setupRouter() {
 	deliveryProofHandler := deliveryproofhandler.NewDeliveryProofHandler(
 		submitShippingUC,
 		submitTontineShippingUC,
+		submitDeliveryUC,
+		submitTontineDeliveryUC,
 	)
 
 	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
@@ -1341,8 +1357,16 @@ func (a *App) setupRouter() {
 
 			// ============ 🆕 v4.7.0 : DELIVERY PROOF ROUTES ============
 			r.Route("/delivery/proof", func(r chi.Router) {
-				r.Post("/shipping", deliveryProofHandler.SubmitShippingProof)
-				r.Post("/tontine-shipping", deliveryProofHandler.SubmitTontineShippingProof)
+				// ============ 🆕 v4.7.0 : DELIVERY PROOF ROUTES ============
+				r.Route("/delivery/proof", func(r chi.Router) {
+					// Marchand : Preuve d'expédition
+					r.Post("/shipping", deliveryProofHandler.SubmitShippingProof)
+					r.Post("/tontine-shipping", deliveryProofHandler.SubmitTontineShippingProof)
+
+					// Client : Confirmation de réception (optionnel)
+					r.Post("/delivery", deliveryProofHandler.SubmitDeliveryProof)
+					r.Post("/tontine-delivery", deliveryProofHandler.SubmitTontineDeliveryProof)
+				})
 			})
 		})
 
