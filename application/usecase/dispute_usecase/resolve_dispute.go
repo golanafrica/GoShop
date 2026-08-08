@@ -95,15 +95,17 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	walletRepoTx := uc.walletRepo.WithTX(tx)
 	walletTxnRepoTx := uc.walletTxnRepo.WithTX(tx)
 
-	// 🆕 Variable pour stocker le montant remboursé (utilisé plus bas pour les notifications)
+	// Variable pour stocker le montant remboursé (utilisé plus bas pour les notifications)
 	var refundedAmount int64 = 0
 
 	switch req.Resolution {
 	case "merchant_wins":
 		dispute.Status = entity.DisputeStatusResolvedMerchant
 
-		if err := escrow.ReleaseFunds(); err != nil {
-			return nil, fmt.Errorf("failed to release escrow: %w", err)
+		// 🆕 CORRECTION PHASE 2 : On utilise la machine à états au lieu de ReleaseFunds() direct
+		// Cela garantit que l'escrow était bien en statut "disputed" avant d'être libéré.
+		if err := escrow.ResolveDispute(true); err != nil {
+			return nil, fmt.Errorf("failed to resolve escrow for merchant: %w", err)
 		}
 		if err := escrowRepoTx.Update(ctx, escrow); err != nil {
 			return nil, fmt.Errorf("failed to update escrow: %w", err)
@@ -178,7 +180,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		}
 
 		refundAmount := escrow.TotalAmountCents
-		refundedAmount = refundAmount // 🆕 On capture le montant pour la notification
+		refundedAmount = refundAmount
 
 		customerPhone := ""
 		if successPayment.CustomerPhone != nil {
@@ -197,7 +199,11 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("failed to process refund with provider: %w", err)
 		}
 
-		escrow.Status = "refunded"
+		// 🆕 CORRECTION PHASE 2 : On utilise la machine à états au lieu de forcer escrow.Status = "refunded"
+		// Cela garantit la cohérence (remet la commission à 0, met à jour les timestamps, etc.)
+		if err := escrow.ResolveDispute(false); err != nil {
+			return nil, fmt.Errorf("failed to resolve escrow for customer: %w", err)
+		}
 		if err := escrowRepoTx.Update(ctx, escrow); err != nil {
 			return nil, fmt.Errorf("failed to update escrow to refunded: %w", err)
 		}
@@ -227,18 +233,16 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	}
 
 	// ============================================================
-	// 🆕 NOTIFICATIONS TEMPS RÉEL (Hors transaction, après succès)
+	// NOTIFICATIONS TEMPS RÉEL (Hors transaction, après succès)
 	// ============================================================
 	shop := &entity.Shop{ID: dispute.ShopID}
 	tenantCtx := tenant.WithTenant(context.Background(), shop)
 
 	order, err := uc.orderRepo.FindByID(tenantCtx, dispute.OrderID.String())
 	if err == nil && order != nil {
-		// 🆕 Notifier le client avec le montant remboursé
 		if notifyErr := uc.notificationSvc.NotifyClientDisputeResolved(tenantCtx, order.CustomerID, orderIDStr, req.Resolution, refundedAmount); notifyErr != nil {
 			logger.Warn().Err(notifyErr).Msg("Failed to send client dispute notification")
 		}
-		// Notifier le marchand
 		if notifyErr := uc.notificationSvc.NotifyMerchantDisputeResolved(tenantCtx, dispute.ShopID.String(), orderIDStr, req.Resolution); notifyErr != nil {
 			logger.Warn().Err(notifyErr).Msg("Failed to send merchant dispute notification")
 		}
