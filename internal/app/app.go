@@ -565,7 +565,18 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel)")
+	// ============ 🆕 v4.8.0 : SYNC ORDER PAYMENT USECASE ============
+	syncOrderPaymentUC := orderusecase.NewSyncOrderPaymentUsecase(
+		postgresOrderRepo,
+		paymentRepo,
+		escrowRepo,
+		deliveryProofRepo,
+		paymentRegistry,
+		notifService,
+		txmanagerRepo,
+	)
+
+	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
 	// ============ 🆕 v4.7.0 : DELIVERY PROOF USECASES ============
 	submitShippingUC := deliveryproofusecase.NewSubmitShippingProofUsecase(
@@ -1015,6 +1026,9 @@ func (a *App) setupRouter() {
 		cancelOrderUC,
 	)
 
+	// ============ 🆕 v4.8.0 : SYNC ORDER HANDLER ============
+	syncOrderHandler := ordershandler.NewSyncOrderHandler(syncOrderPaymentUC)
+
 	var loginRateLimiter service.LoginRateLimiter
 	if utils.Rdb != nil {
 		if err := utils.Rdb.Ping(context.Background()).Err(); err == nil {
@@ -1186,7 +1200,7 @@ func (a *App) setupRouter() {
 		wsHandler = handlers.NewWSHandler(wsHub)
 	}
 
-	a.Logger.Info().Msg("✅ v4.7.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof)")
+	a.Logger.Info().Msg("✅ v4.8.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1306,12 +1320,16 @@ func (a *App) setupRouter() {
 				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
 			})
 
-			// Orders (existant + cash workflow + dispute)
+			// Orders (existant + cash workflow + dispute + sync)
 			r.Route("/orders", func(r chi.Router) {
 				r.Get("/", middl.ErrorHandler(orderHandler.GetAllOrderHandler))
 				r.Post("/", middl.ErrorHandler(orderHandler.CreateOrderHandler))
 				r.Get("/{id}", middl.ErrorHandler(orderHandler.GetOrderByIdHandler))
 				r.Post("/{id}/pay", middl.ErrorHandler(paymentHandler.InitiatePayment))
+
+				// 🆕 v4.8.0 : Sync payment endpoint (comme tontine)
+				r.Post("/{id}/sync", middl.ErrorHandler(syncOrderHandler.SyncOrderPayment))
+
 				r.Post("/{id}/accept", middl.ErrorHandler(cashOrderHandler.AcceptOrder))
 				r.Post("/{id}/reject", middl.ErrorHandler(cashOrderHandler.RejectOrder))
 				r.Post("/{id}/out-for-delivery", middl.ErrorHandler(cashOrderHandler.OutForDelivery))
@@ -1527,7 +1545,7 @@ func (a *App) setupRouter() {
 			Str("tontine_schedule", tontineSchedule).
 			Str("credit_schedule", creditSchedule).
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
-			Msg("✅ v4.7.0 All schedulers started (including escrow auto-release)")
+			Msg("✅ v4.8.0 All schedulers started (including escrow auto-release)")
 	}
 
 	a.Router = r
@@ -1535,7 +1553,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v4.7.0: + Delivery Proof System + Escrow Auto-Release + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
+		Msg("✅ Router configuré avec succès (v4.8.0: + Sync Order Payment + Delivery Proof + Escrow Auto-Release + Dispute System + CORS + Proxy IP Fix + Client Route Separation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1600,7 +1618,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "4.7.0",
+		Version:     "4.8.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
