@@ -106,24 +106,49 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 	// Prendre le premier paiement (le plus récent)
 	payment := payments[0]
 
-	// 5. Si le payment est déjà success, vérifier l'escrow
+	// 5. 🆕 Phase 2 : Si le payment est déjà success, vérifier l'escrow ET confirmer l'order
 	if payment.Status == entity.PaymentStatusSuccess {
 		escrow, escrowErr := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 		if escrowErr == nil && escrow != nil {
+			// 🆕 Phase 2 : Filet de sécurité - confirmer l'order si encore pending
+			orderConfirmed := false
+			if order.Status == string(entity.OrderStatusPending) {
+				if markErr := order.MarkAccepted(); markErr == nil {
+					if updateErr := uc.orderRepo.UpdateOrder(ctx, order); updateErr == nil {
+						orderConfirmed = true
+						logger.Info().
+							Str("order_id", req.OrderID).
+							Str("new_status", order.Status).
+							Msg("✅ Order confirmed (payment already success, escrow exists)")
+					} else {
+						logger.Warn().Err(updateErr).Str("order_id", req.OrderID).
+							Msg("Failed to confirm order during sync")
+					}
+				} else {
+					logger.Warn().Err(markErr).Str("order_id", req.OrderID).
+						Msg("Failed to mark order accepted during sync")
+				}
+			}
+
 			return &SyncOrderPaymentResponse{
 				OrderID:       req.OrderID,
-				PaymentID:     payment.ID.String(), // ✅ uuid.UUID → string
-				OrderStatus:   order.Status,
+				PaymentID:     payment.ID.String(),
+				OrderStatus:   order.Status, // Sera "confirmed" si on vient de le confirmer
 				PaymentStatus: string(payment.Status),
 				EscrowStatus:  string(escrow.Status),
-				Synced:        false,
-				Message:       "Payment already confirmed, escrow exists",
+				Synced:        orderConfirmed, // 🆕 Phase 2 : true si on a confirmé l'order
+				Message: func() string {
+					if orderConfirmed {
+						return "Payment already confirmed, escrow exists, order ensured confirmed"
+					}
+					return "Payment already confirmed, escrow exists"
+				}(),
 			}, nil
 		}
 	}
 
 	// 6. Récupérer le provider
-	provider, err := uc.paymentRegistry.GetAvailable(ctx, payment.Provider) // ✅ entity.PaymentProvider
+	provider, err := uc.paymentRegistry.GetAvailable(ctx, payment.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("payment provider not available: %w", err)
 	}
@@ -131,7 +156,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 	// 7. Vérifier le statut auprès du provider
 	providerRef := ""
 	if payment.ProviderRef != nil {
-		providerRef = *payment.ProviderRef // ✅ *string → string
+		providerRef = *payment.ProviderRef
 	}
 
 	logger.Info().
@@ -185,7 +210,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		payment.Status = entity.PaymentStatusSuccess
 		payment.CompletedAt = &now
 		payment.UpdatedAt = now
-		if err = paymentRepoTx.Update(ctx, payment); err != nil { // ✅ *entity.Payment
+		if err = paymentRepoTx.Update(ctx, payment); err != nil {
 			return nil, fmt.Errorf("failed to update payment: %w", err)
 		}
 
