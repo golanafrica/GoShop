@@ -251,6 +251,20 @@ func (mr *MockDeliveryProofRepositoryMockRecorder) FindShippedByShopID(ctx, shop
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindShippedByShopID", reflect.TypeOf((*MockDeliveryProofRepository)(nil).FindShippedByShopID), ctx, shopID)
 }
 
+// ForceDeliveryDate mocks base method.
+func (m *MockDeliveryProofRepository) ForceDeliveryDate(ctx context.Context, orderID string, daysAgo int) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ForceDeliveryDate", ctx, orderID, daysAgo)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ForceDeliveryDate indicates an expected call of ForceDeliveryDate.
+func (mr *MockDeliveryProofRepositoryMockRecorder) ForceDeliveryDate(ctx, orderID, daysAgo any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForceDeliveryDate", reflect.TypeOf((*MockDeliveryProofRepository)(nil).ForceDeliveryDate), ctx, orderID, daysAgo)
+}
+
 // Update mocks base method.
 func (m *MockDeliveryProofRepository) Update(ctx context.Context, proof *entity.DeliveryProof) error {
 	m.ctrl.T.Helper()
