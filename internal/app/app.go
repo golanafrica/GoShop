@@ -505,7 +505,7 @@ func (a *App) setupRouter() {
 		paymentRegistry,
 		a.DB,
 		shopRepo,
-		shopRepo,
+		shopRepo, // ShopPaymentSettingsRepository
 		processTontineWebhookUC,
 		&creditUpdaterWrapper{
 			installmentRepo: creditInstallmentRepo,
@@ -513,7 +513,7 @@ func (a *App) setupRouter() {
 			creditWalletUC:  creditWalletUC,
 		},
 		escrowRepo,
-		postgresOrderRepo,
+		postgresOrderRepo, // Phase 1 : confirmer order au webhook SUCCESS
 	)
 
 	// Withdrawal Usecases
