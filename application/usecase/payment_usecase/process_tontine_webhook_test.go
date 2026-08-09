@@ -538,7 +538,7 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 
 	uc := paymentusecase.NewProcessWebhookUsecase(
 		mockPaymentRepo, mockRegistry, mockDB, mockShopRepo,
-		nil, mockTontineUC, nil, nil,
+		nil, mockTontineUC, nil, nil, nil,
 	)
 
 	ctx := context.Background()

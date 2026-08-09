@@ -38,6 +38,7 @@ type ProcessWebhookUsecase struct {
 	tontineWebhookUC *ProcessTontineWebhookUsecase
 	creditUpdater    CreditUpdater
 	escrowRepo       repository.EscrowAccountRepository
+	orderRepo        repository.OrderRepository // 🆕 Phase 1 : pour confirmer l'order au webhook
 }
 
 func NewProcessWebhookUsecase(
@@ -49,6 +50,7 @@ func NewProcessWebhookUsecase(
 	tontineWebhookUC *ProcessTontineWebhookUsecase,
 	creditUpdater CreditUpdater,
 	escrowRepo repository.EscrowAccountRepository,
+	orderRepo repository.OrderRepository, // 🆕 Phase 1 : nouveau paramètre
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
@@ -59,6 +61,7 @@ func NewProcessWebhookUsecase(
 		tontineWebhookUC: tontineWebhookUC,
 		creditUpdater:    creditUpdater,
 		escrowRepo:       escrowRepo,
+		orderRepo:        orderRepo, // 🆕 Phase 1
 	}
 }
 
@@ -292,6 +295,28 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					Int64("escrow_amount", netAmountCents).
 					Str("escrow_id", escrow.ID).
 					Msg("✅ Funds successfully locked in Escrow")
+
+				// 🆕 Phase 1 : Confirmer l'order (aligné avec SyncOrderPaymentUsecase)
+				if uc.orderRepo != nil {
+					order, orderErr := uc.orderRepo.FindByID(ctx, orderIDStr)
+					if orderErr == nil && order != nil && order.Status == string(entity.OrderStatusPending) {
+						if markErr := order.MarkAccepted(); markErr != nil {
+							logger.Warn().Err(markErr).Str("order_id", orderIDStr).
+								Msg("Failed to mark order accepted after webhook")
+						} else if updateErr := uc.orderRepo.UpdateOrder(ctx, order); updateErr != nil {
+							logger.Warn().Err(updateErr).Str("order_id", orderIDStr).
+								Msg("Failed to update order after webhook")
+						} else {
+							logger.Info().
+								Str("order_id", orderIDStr).
+								Str("new_status", order.Status).
+								Msg("✅ Order confirmed after payment webhook SUCCESS")
+						}
+					} else if orderErr != nil {
+						logger.Warn().Err(orderErr).Str("order_id", orderIDStr).
+							Msg("Failed to find order for confirmation after webhook")
+					}
+				}
 			}
 		}
 	}

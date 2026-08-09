@@ -513,6 +513,7 @@ func (a *App) setupRouter() {
 			creditWalletUC:  creditWalletUC,
 		},
 		escrowRepo,
+		postgresOrderRepo,
 	)
 
 	// Withdrawal Usecases

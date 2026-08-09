@@ -73,6 +73,7 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 		mockTontineUC,
 		nil,
 		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -110,6 +111,7 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
@@ -157,6 +159,7 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
@@ -212,6 +215,7 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 		mockTontineUC,
 		nil,
 		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -259,6 +263,7 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
@@ -320,6 +325,7 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
@@ -391,6 +397,7 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 		mockTontineUC,
 		nil,
 		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -456,6 +463,7 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
@@ -527,6 +535,7 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 		mockTontineUC,
 		nil,
 		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -594,6 +603,7 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 		mockTontineUC,
 		nil,
 		nil,
+		nil,
 	)
 
 	ctx := context.Background()
@@ -659,6 +669,7 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 		mockShopRepo,
 		nil,
 		mockTontineUC,
+		nil,
 		nil,
 		nil,
 	)
