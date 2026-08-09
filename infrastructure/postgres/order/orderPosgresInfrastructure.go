@@ -124,6 +124,7 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 	baseQuery := `
 		SELECT 
 			o.id AS order_id,
+			o.shop_id,
 			o.customer_id,
 			o.total_cents,
 			o.status,
@@ -173,6 +174,7 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 	for rows.Next() {
 		var (
 			orderID       string
+			shopIDVal     string
 			customerID    string
 			totalCents    int64
 			status        string
@@ -187,6 +189,7 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 
 		err := rows.Scan(
 			&orderID,
+			&shopIDVal,
 			&customerID,
 			&totalCents,
 			&status,
@@ -206,6 +209,7 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 		if !exists {
 			order = &entity.Order{
 				ID:         orderID,
+				ShopID:     shopIDVal,
 				CustomerID: customerID,
 				TotalCents: totalCents,
 				Status:     status,
@@ -261,7 +265,7 @@ func (or *OrderPostgresInfra) Create(ctx context.Context, order *entity.Order) (
 			created_at, updated_at
 		) 
 		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-		RETURNING id, customer_id, total_cents, status, 
+		RETURNING id, shop_id, customer_id, total_cents, status, 
 		          payment_method, reserved_until,
 		          created_at, updated_at
 	`
@@ -275,6 +279,7 @@ func (or *OrderPostgresInfra) Create(ctx context.Context, order *entity.Order) (
 		order.ReservedUntil,
 	).Scan(
 		&order.ID,
+		&order.ShopID,
 		&order.CustomerID,
 		&order.TotalCents,
 		&order.Status,
@@ -299,7 +304,7 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 	}
 
 	query := `
-		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		SELECT id, shop_id, customer_id, total_cents, status, created_at, updated_at,
 		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
 		       delivery_notes, amount_received_cents, reserved_until
 		FROM orders 
@@ -309,6 +314,7 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 	order := &entity.Order{}
 	err = or.queryRowContext(ctx, query, id, shopID).Scan(
 		&order.ID,
+		&order.ShopID,
 		&order.CustomerID,
 		&order.TotalCents,
 		&order.Status,
@@ -372,6 +378,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 	query := `
 		SELECT 
 			o.id AS order_id,
+			o.shop_id,
 			o.customer_id,
 			o.total_cents,
 			o.status,
@@ -399,6 +406,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 	for rows.Next() {
 		var (
 			orderID       string
+			shopIDVal     string
 			customerID    string
 			totalCents    int64
 			status        string
@@ -413,6 +421,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 
 		err := rows.Scan(
 			&orderID,
+			&shopIDVal,
 			&customerID,
 			&totalCents,
 			&status,
@@ -432,6 +441,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 		if !exists {
 			order = &entity.Order{
 				ID:         orderID,
+				ShopID:     shopIDVal,
 				CustomerID: customerID,
 				TotalCents: totalCents,
 				Status:     status,
@@ -534,7 +544,7 @@ func (or *OrderPostgresInfra) UpdateOrder(ctx context.Context, order *entity.Ord
 // FindCashPendingByShop retourne les commandes cash en attente de confirmation
 func (or *OrderPostgresInfra) FindCashPendingByShop(ctx context.Context, shopID string) ([]*entity.Order, error) {
 	query := `
-		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		SELECT id, shop_id, customer_id, total_cents, status, created_at, updated_at,
 		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
 		       delivery_notes, amount_received_cents, reserved_until
 		FROM orders
@@ -567,6 +577,7 @@ func (or *OrderPostgresInfra) scanOrderWithCashFields(rows *sql.Rows) (*entity.O
 	order := &entity.Order{}
 	err := rows.Scan(
 		&order.ID,
+		&order.ShopID,
 		&order.CustomerID,
 		&order.TotalCents,
 		&order.Status,
@@ -584,5 +595,73 @@ func (or *OrderPostgresInfra) scanOrderWithCashFields(rows *sql.Rows) (*entity.O
 	if err != nil {
 		return nil, fmt.Errorf("scan order with cash fields: %w", err)
 	}
+	return order, nil
+}
+
+// 🆕 v4.8.3 : FindByIDAdmin trouve une commande par ID SANS vérification multi-tenant
+// Utilisé par le scheduler auto-release qui tourne en dehors d'un contexte HTTP
+func (or *OrderPostgresInfra) FindByIDAdmin(ctx context.Context, id string) (*entity.Order, error) {
+	query := `
+		SELECT id, shop_id, customer_id, total_cents, status, created_at, updated_at,
+		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
+		       delivery_notes, amount_received_cents, reserved_until
+		FROM orders 
+		WHERE id = $1
+	`
+
+	order := &entity.Order{}
+	err := or.queryRowContext(ctx, query, id).Scan(
+		&order.ID,
+		&order.ShopID,
+		&order.CustomerID,
+		&order.TotalCents,
+		&order.Status,
+		&order.CreatedAt,
+		&order.UpdatedAt,
+		&order.PaymentMethod,
+		&order.AcceptedAt,
+		&order.RejectedAt,
+		&order.DeliveredAt,
+		&order.CancelledAt,
+		&order.DeliveryNotes,
+		&order.AmountReceivedCents,
+		&order.ReservedUntil,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("order %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to fetch order: %w", err)
+	}
+
+	// Récupérer les items de la commande
+	queryItem := `SELECT id, order_id, product_id, quantity, price_cents, subtotal_cents 
+		FROM order_items
+		WHERE order_id = $1`
+
+	rows, err := or.queryContext(ctx, queryItem, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch order items: %w", err)
+	}
+	defer rows.Close()
+
+	order.Items = []*entity.OrderItem{}
+	for rows.Next() {
+		item := &entity.OrderItem{}
+		err := rows.Scan(
+			&item.ID,
+			&item.OrderID,
+			&item.ProductID,
+			&item.Quantity,
+			&item.PriceCents,
+			&item.SubTotal_Cents,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan order item: %w", err)
+		}
+		order.Items = append(order.Items, item)
+	}
+
 	return order, nil
 }

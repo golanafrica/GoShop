@@ -969,3 +969,27 @@ func (r *DeliveryProofEventRepositoryInfrastructure) CountByProofID(ctx context.
 
 	return count, nil
 }
+
+// ============================================================
+// 🆕 v4.8.4 : MÉTHODES ADMIN/TEST
+// ============================================================
+
+// ForceDeliveryDate force le delivery_date pour tests (bypass tenant)
+// Utilisé par l'endpoint admin pour simuler l'écoulement du temps
+func (r *DeliveryProofRepositoryInfrastructure) ForceDeliveryDate(ctx context.Context, orderID string, daysAgo int) error {
+	query := `
+		UPDATE delivery_proofs 
+		SET delivery_date = NOW() - INTERVAL '1 day' * $2,
+		    updated_at = NOW()
+		WHERE order_id = $1
+	`
+	result, err := r.execContext(ctx, query, orderID, daysAgo)
+	if err != nil {
+		return fmt.Errorf("failed to force delivery date: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no delivery proof found for order %s", orderID)
+	}
+	return nil
+}

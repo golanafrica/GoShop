@@ -99,5 +99,6 @@ type TontineVoucherRepository interface {
 	FindActiveByShopID(ctx context.Context, shopID string) ([]*entity.TontineVoucher, error)
 	Redeem(ctx context.Context, voucherCode string, redeemedBy string) error
 	ExpireOldVouchers(ctx context.Context) (int, error)
+	FindByIDAdmin(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	WithTX(tx Tx) TontineVoucherRepository
 }

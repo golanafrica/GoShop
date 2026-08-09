@@ -1,4 +1,5 @@
-// application/usecase/order_usecase/create_order_usecase.go
+// application/usecase/order_usecase/created_order_usecase.go
+
 package orderusecase
 
 import (
@@ -60,7 +61,6 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
-
 	defer func() {
 		if err != nil {
 			if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
@@ -83,6 +83,17 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 	if ouc.codProofRepo != nil {
 		codProofRepo = ouc.codProofRepo.WithTX(tx)
 	}
+
+	// 🆕 v4.8.1 FIX B1 : Lire le tenant AVANT la création pour assigner ShopID
+	shop, tenantErr := tenant.FromContext(ctx)
+	if tenantErr != nil {
+		return nil, fmt.Errorf("multi-tenant: no tenant in context: %w", tenantErr)
+	}
+	order.ShopID = shop.ID.String()
+
+	logger.Debug().
+		Str("shop_id", order.ShopID).
+		Msg("ShopID assigned from tenant context")
 
 	// 3. Vérifier le client
 	customer, err := customerRepo.FindByCustomerID(ctx, order.CustomerID)
@@ -166,6 +177,7 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 			Str("status", order.Status).
 			Time("reserved_until", reservedUntil).
 			Msg("Cash order created - waiting for merchant confirmation")
+
 	default:
 		order.Status = string(entity.OrderStatusPending)
 		logger.Info().
@@ -174,7 +186,7 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 			Msg("Mobile money order created - waiting for payment")
 	}
 
-	// 6. Créer la commande
+	// 6. Créer la commande (avec ShopID maintenant défini)
 	createdOrder, err := orderRepo.Create(ctx, order)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create order: %w", err)
@@ -194,13 +206,8 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 
 	// 🆕 v3.0.1 : Créer automatiquement une preuve COD si paiement à la livraison
 	if createdOrder.PaymentMethod == string(entity.PaymentMethodCashOnDelivery) && codProofRepo != nil {
-		// Récupérer le shop_id depuis le contexte multi-tenant
-		var shopID string
-		if shop, tenantErr := tenant.FromContext(ctx); tenantErr == nil {
-			shopID = shop.ID.String()
-		} else {
-			logger.Warn().Err(tenantErr).Msg("Failed to get tenant from context, skipping COD proof creation")
-		}
+		// Le shopID est déjà dans order.ShopID (fix B1)
+		shopID := createdOrder.ShopID
 
 		if shopID != "" {
 			// Calculer la commission (2.5% du total)
@@ -244,6 +251,7 @@ func (ouc *CreateOrderUsecase) Execute(ctx context.Context, order *entity.Order)
 	logger.Info().
 		Str("order_id", createdOrder.ID).
 		Str("customer_id", createdOrder.CustomerID).
+		Str("shop_id", createdOrder.ShopID). // 🆕 v4.8.1 : Log ShopID
 		Str("payment_method", createdOrder.PaymentMethod).
 		Str("status", createdOrder.Status).
 		Int64("total_amount", createdOrder.TotalCents).

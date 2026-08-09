@@ -381,3 +381,20 @@ func (r *TontineVoucherRepositoryInfrastructure) ExpireOldVouchers(ctx context.C
 	rows, _ := result.RowsAffected()
 	return int(rows), nil
 }
+
+// 🆕 v4.8.3 : FindByIDAdmin sans vérification multi-tenant
+// Utilisé par le scheduler escrow auto-release qui tourne en contexte background
+func (r *TontineVoucherRepositoryInfrastructure) FindByIDAdmin(ctx context.Context, id string) (*entity.TontineVoucher, error) {
+	query := `
+		SELECT id, group_id, participant_id, customer_id,
+		       product_id, shop_id, voucher_code,
+		       cycle_number, status, expires_at,
+		       redeemed_at, redeemed_by,
+		       held_amount_cents,
+		       created_at
+		FROM tontine_vouchers
+		WHERE id = $1
+	`
+
+	return r.scanVoucher(r.queryRowContext(ctx, query, id))
+}

@@ -16,7 +16,7 @@ type EscrowAccountStatus string
 const (
 	EscrowAccountFundsHeld      EscrowAccountStatus = "funds_held"      // Fonds bloqués
 	EscrowAccountPartialRelease EscrowAccountStatus = "partial_release" // Déblocage partiel (crédit)
-	EscrowAccountFullyReleased  EscrowAccountStatus = "fully_released"  // Déblocage total
+	EscrowAccountFullyReleased  EscrowAccountStatus = "released"        // 🆕 v4.8.3 : Déblocage total (aligné contrainte SQL)
 	EscrowAccountRefunded       EscrowAccountStatus = "refunded"        // Remboursé au client
 	EscrowAccountDisputed       EscrowAccountStatus = "disputed"        // En litige
 )

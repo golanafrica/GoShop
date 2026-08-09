@@ -30,6 +30,7 @@ func createCashOrder(status string) *entity.Order {
 	reservedUntil := time.Now().Add(24 * time.Hour)
 	return &entity.Order{
 		ID:            uuid.New().String(),
+		ShopID:        uuid.New().String(), // 🆕 v4.8.1 FIX B1 : ShopID obligatoire
 		CustomerID:    "customer-1",
 		TotalCents:    50000,
 		Status:        status,
@@ -53,6 +54,7 @@ func createExpiredCashOrder() *entity.Order {
 	reservedUntil := time.Now().Add(-24 * time.Hour)
 	return &entity.Order{
 		ID:            uuid.New().String(),
+		ShopID:        uuid.New().String(), // 🆕 v4.8.1 FIX B1
 		CustomerID:    "customer-1",
 		TotalCents:    50000,
 		Status:        string(entity.OrderStatusPendingConfirmation),
@@ -606,10 +608,10 @@ func TestOutForDeliveryUsecase_MultiTenantError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	ctx := context.Background()
 	order, err := uc.Execute(ctx, "order-1")
@@ -624,10 +626,10 @@ func TestOutForDeliveryUsecase_BeginTxError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -645,10 +647,10 @@ func TestOutForDeliveryUsecase_OrderNotFound(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -671,10 +673,10 @@ func TestOutForDeliveryUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -685,7 +687,7 @@ func TestOutForDeliveryUsecase_NotSupportedPaymentMethod(t *testing.T) {
 
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 
-	unsupportedOrder := createCashOrder(string(entity.OrderStatusConfirmed)) // 🆕 Correction du nom du helper
+	unsupportedOrder := createCashOrder(string(entity.OrderStatusConfirmed))
 	unsupportedOrder.PaymentMethod = "card"
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(unsupportedOrder, nil)
 
@@ -700,10 +702,10 @@ func TestOutForDeliveryUsecase_InvalidStatusTransition(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -728,10 +730,10 @@ func TestOutForDeliveryUsecase_UpdateOrderError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -757,10 +759,10 @@ func TestOutForDeliveryUsecase_CommitError(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -788,10 +790,10 @@ func TestOutForDeliveryUsecase_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	orderRepo := mockrepo.NewMockOrderRepository(ctrl)
-	notifService := mockservice.NewMockNotificationService(ctrl) // 🆕 AJOUTÉ
+	notifService := mockservice.NewMockNotificationService(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
-	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService) // 🆕 AJOUTÉ
+	uc := orderusecase.NewOutForDeliveryUsecase(orderRepo, txManager, notifService)
 
 	shop := createTestShopForOrder()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -1036,6 +1038,7 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 
 	createdOrder := &entity.Order{
 		ID:            uuid.New().String(),
+		ShopID:        shop.ID.String(), // 🆕 v4.8.1 FIX B1
 		CustomerID:    customer.ID,
 		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
 		TotalCents:    10000,
@@ -1045,6 +1048,7 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 	orderRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, order *entity.Order) (*entity.Order, error) {
 			order.ID = createdOrder.ID
+			order.ShopID = shop.ID.String() // 🆕 v4.8.1 FIX B1
 			return order, nil
 		},
 	)
@@ -1069,10 +1073,12 @@ func TestCreateOrderUsecase_Success_CashOnDelivery_WithCODProof(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, string(entity.OrderStatusPendingConfirmation), result.Status)
+	assert.Equal(t, shop.ID.String(), result.ShopID) // 🆕 v4.8.1 FIX B1
 	assert.NotNil(t, result.ReservedUntil)
 }
 
-func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) {
+// 🆕 v4.8.1 FIX B1 : Renommé - Sans tenant → erreur (pas de skip COD proof)
+func TestCreateOrderUsecase_CashOnDelivery_NoTenant_ReturnsError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -1087,12 +1093,12 @@ func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) 
 		txManager, productRepo, customerRepo, orderItemRepo, orderRepo, codProofRepo,
 	)
 
-	ctx := context.Background()
+	ctx := context.Background() // SANS tenant
 	mockTx := mockrepo.NewMockTx(ctrl)
 
+	// L'erreur se produit APRÈS BeginTx et WithTX, mais AVANT Create
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
-	mockTx.EXPECT().Commit().Return(nil)
 
 	productRepo.EXPECT().WithTX(mockTx).Return(productRepo).AnyTimes()
 	customerRepo.EXPECT().WithTX(mockTx).Return(customerRepo).AnyTimes()
@@ -1100,29 +1106,16 @@ func TestCreateOrderUsecase_CashOnDelivery_TenantError_SkipsProof(t *testing.T) 
 	orderRepo.EXPECT().WithTX(mockTx).Return(orderRepo).AnyTimes()
 	codProofRepo.EXPECT().WithTX(mockTx).Return(codProofRepo).AnyTimes()
 
-	customer := &entity.Customer{ID: uuid.New().String(), FirstName: "John", LastName: "Doe"}
-	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), gomock.Any()).Return(customer, nil)
-
-	product := &entity.Product{ID: uuid.New().String(), PriceCents: 10000, Stock: 10}
-	productRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(product, nil)
-	productRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(product, nil)
-
-	createdOrder := &entity.Order{ID: uuid.New().String(), CustomerID: customer.ID, PaymentMethod: string(entity.PaymentMethodCashOnDelivery), TotalCents: 10000}
-	orderRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, order *entity.Order) (*entity.Order, error) {
-			order.ID = createdOrder.ID
-			return order, nil
-		},
-	)
-	orderItemRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{}, nil)
-
 	order := &entity.Order{
-		CustomerID:    customer.ID,
+		CustomerID:    "customer-1",
 		PaymentMethod: string(entity.PaymentMethodCashOnDelivery),
-		Items:         []*entity.OrderItem{{ProductID: product.ID, Quantity: 1}},
+		Items:         []*entity.OrderItem{{ProductID: "product-1", Quantity: 1}},
 	}
 
 	result, err := uc.Execute(ctx, order)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
+
+	// 🆕 v4.8.1 FIX B1 : L'erreur se produit maintenant
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "multi-tenant")
 }

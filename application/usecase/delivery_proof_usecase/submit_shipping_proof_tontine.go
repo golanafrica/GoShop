@@ -13,10 +13,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ============================================================
-// SUBMIT SHIPPING PROOF USECASE (TONTINE VOUCHER)
-// ============================================================
-
 // SubmitTontineShippingProofRequest représente la requête pour soumettre une preuve d'expédition tontine
 type SubmitTontineShippingProofRequest struct {
 	VoucherID      string `json:"voucher_id"`
@@ -55,19 +51,19 @@ func (r *SubmitTontineShippingProofRequest) Validate() error {
 // SubmitTontineShippingProofUsecase permet au marchand de soumettre une preuve d'expédition pour un voucher tontine
 type SubmitTontineShippingProofUsecase struct {
 	deliveryProofRepo  repository.DeliveryProofRepository
-	tontineVoucherRepo repository.TontineVoucherRepository // ✅ CORRIGÉ
+	tontineVoucherRepo repository.TontineVoucherRepository
 	txManager          repository.TxManager
 }
 
 // NewSubmitTontineShippingProofUsecase crée une nouvelle instance
 func NewSubmitTontineShippingProofUsecase(
 	deliveryProofRepo repository.DeliveryProofRepository,
-	tontineVoucherRepo repository.TontineVoucherRepository, // ✅ CORRIGÉ
+	tontineVoucherRepo repository.TontineVoucherRepository,
 	txManager repository.TxManager,
 ) *SubmitTontineShippingProofUsecase {
 	return &SubmitTontineShippingProofUsecase{
 		deliveryProofRepo:  deliveryProofRepo,
-		tontineVoucherRepo: tontineVoucherRepo, // ✅ CORRIGÉ
+		tontineVoucherRepo: tontineVoucherRepo,
 		txManager:          txManager,
 	}
 }
@@ -86,7 +82,6 @@ func (uc *SubmitTontineShippingProofUsecase) Execute(ctx context.Context, req *S
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
-	shopID := shop.ID.String()
 
 	// 3. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -96,13 +91,14 @@ func (uc *SubmitTontineShippingProofUsecase) Execute(ctx context.Context, req *S
 	defer tx.Rollback()
 
 	// 4. Récupérer le voucher
-	voucher, err := uc.tontineVoucherRepo.WithTX(tx).FindByID(ctx, req.VoucherID) // ✅ CORRIGÉ
+	voucher, err := uc.tontineVoucherRepo.WithTX(tx).FindByID(ctx, req.VoucherID)
 	if err != nil {
 		return nil, fmt.Errorf("tontine voucher not found: %w", err)
 	}
 
-	// 5. Vérifier que le voucher appartient au shop
-	if voucher.ShopID != shopID {
+	// 5. Vérifier que le voucher appartient au shop (FIX: comparaison UUID robuste)
+	voucherShopUUID, err := uuid.Parse(voucher.ShopID)
+	if err != nil || voucherShopUUID != shop.ID {
 		return nil, fmt.Errorf("access denied: voucher does not belong to tenant shop")
 	}
 
@@ -154,7 +150,7 @@ func (uc *SubmitTontineShippingProofUsecase) Execute(ctx context.Context, req *S
 	// 13. Logger le succès
 	logger.Info().
 		Str("voucher_id", req.VoucherID).
-		Str("shop_id", shopID).
+		Str("shop_id", shop.ID.String()).
 		Str("proof_id", proof.ID).
 		Str("tracking_number", req.TrackingNumber).
 		Msg("Tontine voucher shipping proof submitted successfully")

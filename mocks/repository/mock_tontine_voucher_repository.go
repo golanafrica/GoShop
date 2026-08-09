@@ -146,6 +146,21 @@ func (mr *MockTontineVoucherRepositoryMockRecorder) FindByID(ctx, id any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockTontineVoucherRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByIDAdmin mocks base method.
+func (m *MockTontineVoucherRepository) FindByIDAdmin(ctx context.Context, id string) (*entity.TontineVoucher, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDAdmin", ctx, id)
+	ret0, _ := ret[0].(*entity.TontineVoucher)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDAdmin indicates an expected call of FindByIDAdmin.
+func (mr *MockTontineVoucherRepositoryMockRecorder) FindByIDAdmin(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDAdmin", reflect.TypeOf((*MockTontineVoucherRepository)(nil).FindByIDAdmin), ctx, id)
+}
+
 // FindByParticipantAndCycle mocks base method.
 func (m *MockTontineVoucherRepository) FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontineVoucher, error) {
 	m.ctrl.T.Helper()

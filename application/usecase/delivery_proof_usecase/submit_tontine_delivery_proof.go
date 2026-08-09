@@ -13,10 +13,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ============================================================
-// SUBMIT TONTINE DELIVERY PROOF USECASE (TONTINE VOUCHER)
-// ============================================================
-
 // SubmitTontineDeliveryProofRequest représente la requête pour confirmer la réception d'un voucher tontine
 type SubmitTontineDeliveryProofRequest struct {
 	VoucherID string `json:"voucher_id"`
@@ -91,7 +87,6 @@ func (uc *SubmitTontineDeliveryProofUsecase) Execute(ctx context.Context, req *S
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
-	shopID := shop.ID.String()
 
 	// 3. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -106,8 +101,9 @@ func (uc *SubmitTontineDeliveryProofUsecase) Execute(ctx context.Context, req *S
 		return nil, fmt.Errorf("tontine voucher not found: %w", err)
 	}
 
-	// 5. Vérifier que le voucher appartient au shop
-	if voucher.ShopID != shopID {
+	// 5. Vérifier que le voucher appartient au shop (FIX: comparaison UUID robuste)
+	voucherShopUUID, err := uuid.Parse(voucher.ShopID)
+	if err != nil || voucherShopUUID != shop.ID {
 		return nil, fmt.Errorf("access denied: voucher does not belong to tenant shop")
 	}
 

@@ -26,16 +26,17 @@ func NewSyncOrderHandler(syncUC *orderusecase.SyncOrderPaymentUsecase) *SyncOrde
 // @Tags Orders
 // @Accept json
 // @Produce json
-// @Param order_id path string true "ID de la commande"
+// @Param id path string true "ID de la commande"
 // @Success 200 {object} orderusecase.SyncOrderPaymentResponse
 // @Failure 400 {object} utils.AppError "Order ID invalide"
 // @Failure 401 {object} utils.AppError "Non autorisé"
 // @Failure 403 {object} utils.AppError "Accès refusé"
 // @Failure 404 {object} utils.AppError "Order non trouvée"
 // @Security ApiKeyAuth
-// @Router /api/orders/{order_id}/sync [post]
+// @Router /api/orders/{id}/sync [post]
 func (h *SyncOrderHandler) SyncOrderPayment(w http.ResponseWriter, r *http.Request) error {
-	orderID := chi.URLParam(r, "order_id")
+	// 🔧 FIX PHASE 1 : "id" au lieu de "order_id" pour matcher la route /{id}/sync
+	orderID := chi.URLParam(r, "id")
 	if orderID == "" {
 		return utils.NewAppError("INVALID_ORDER_ID", "order_id is required", http.StatusBadRequest)
 	}

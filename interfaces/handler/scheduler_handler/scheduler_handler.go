@@ -19,23 +19,29 @@ import (
 
 // SchedulerHandler gère les endpoints admin du scheduler
 type SchedulerHandler struct {
-	scheduler *appscheduler.CommissionScheduler
-	batchRepo repository.CommissionBatchRepository
+	scheduler              *appscheduler.CommissionScheduler
+	batchRepo              repository.CommissionBatchRepository
+	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler // 🆕 v4.8.3
+	deliveryProofRepo      repository.DeliveryProofRepository       // 🆕 v4.8.4
 }
 
 // NewSchedulerHandler crée une nouvelle instance
 func NewSchedulerHandler(
 	scheduler *appscheduler.CommissionScheduler,
 	batchRepo repository.CommissionBatchRepository,
+	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler, // 🆕 v4.8.3
+	deliveryProofRepo repository.DeliveryProofRepository, // 🆕 v4.8.4
 ) *SchedulerHandler {
 	return &SchedulerHandler{
-		scheduler: scheduler,
-		batchRepo: batchRepo,
+		scheduler:              scheduler,
+		batchRepo:              batchRepo,
+		escrowAutoReleaseSched: escrowAutoReleaseSched, // 🆕 v4.8.3
+		deliveryProofRepo:      deliveryProofRepo,      // 🆕 v4.8.4
 	}
 }
 
 // ============================================================
-// ENDPOINTS
+// ENDPOINTS EXISTANTS
 // ============================================================
 
 // @Summary Déclencher manuellement la collecte des commissions
@@ -81,6 +87,126 @@ func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *htt
 	})
 	return nil
 }
+
+// ============================================================
+// 🆕 v4.8.3 : ESCROW AUTO-RELEASE TRIGGER
+// ============================================================
+
+// @Summary Déclencher manuellement l'auto-release des escrows
+// @Description Lance immédiatement le processus d'auto-release des escrows éligibles (livré + 3 jours sans litige).
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param X-Admin-ID header string false "ID de l'administrateur déclencheur"
+// @Success 202 {object} map[string]interface{} "Auto-release déclenché avec succès"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/trigger-escrow-auto-release [post]
+func (h *SchedulerHandler) TriggerEscrowAutoRelease(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	logger.Info().Msg("🔧 Manual escrow auto-release triggered by admin")
+
+	// Récupérer l'ID de l'admin qui déclenche (optionnel)
+	executedBy := r.Header.Get("X-Admin-ID")
+	if executedBy == "" {
+		executedBy = "admin-manual"
+	}
+
+	// Lancer l'auto-release en arrière-plan
+	go func() {
+		bgCtx := context.Background()
+		if err := h.escrowAutoReleaseSched.RunAutoRelease(bgCtx); err != nil {
+			logger.Error().
+				Err(err).
+				Str("executed_by", executedBy).
+				Msg("❌ Escrow auto-release failed")
+		} else {
+			logger.Info().
+				Str("executed_by", executedBy).
+				Msg("✅ Escrow auto-release completed successfully")
+		}
+	}()
+
+	// Réponse immédiate
+	utils.WriteJSON(w, http.StatusAccepted, map[string]interface{}{
+		"success":     true,
+		"message":     "Escrow auto-release triggered in background",
+		"executed_by": executedBy,
+	})
+	return nil
+}
+
+// ============================================================
+// 🆕 v4.8.4 : FORCE AUTO-RELEASE (TEST/ADMIN)
+// ============================================================
+
+// @Summary Forcer l'auto-release d'une commande spécifique
+// @Description Met le delivery_date à -N jours et déclenche immédiatement le scheduler (utile pour tests E2E)
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param order_id path string true "ID de la commande"
+// @Param days query int false "Nombre de jours dans le passé (défaut: 4)"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/admin/scheduler/force-auto-release/{order_id} [post]
+func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	orderID := r.PathValue("order_id")
+	if orderID == "" {
+		return utils.NewAppError("MISSING_ORDER_ID", "order_id is required", http.StatusBadRequest)
+	}
+
+	daysAgo := 4
+	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			daysAgo = d
+		}
+	}
+
+	logger.Info().
+		Str("order_id", orderID).
+		Int("days_ago", daysAgo).
+		Msg("🔧 Force auto-release triggered")
+
+	// 1. Forcer le delivery_date
+	if err := h.deliveryProofRepo.ForceDeliveryDate(ctx, orderID, daysAgo); err != nil {
+		logger.Error().Err(err).Msg("Failed to force delivery date")
+		return utils.NewAppError("FORCE_DATE_FAILED", err.Error(), http.StatusInternalServerError)
+	}
+
+	logger.Info().
+		Str("order_id", orderID).
+		Int("days_ago", daysAgo).
+		Msg("✅ Delivery date forced, triggering scheduler")
+
+	// 2. Déclencher le scheduler en arrière-plan
+	go func() {
+		bgCtx := context.Background()
+		if err := h.escrowAutoReleaseSched.RunAutoRelease(bgCtx); err != nil {
+			logger.Error().Err(err).Msg("❌ Auto-release failed after force")
+		} else {
+			logger.Info().Msg("✅ Auto-release completed after force")
+		}
+	}()
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"order_id": orderID,
+		"days_ago": daysAgo,
+		"message":  fmt.Sprintf("delivery_date set to -%d days, auto-release triggered", daysAgo),
+	})
+	return nil
+}
+
+// ============================================================
+// ENDPOINTS EXISTANTS (batch, stats, etc.)
+// ============================================================
 
 // @Summary Récupérer les derniers batches de commissions
 // @Description Retourne la liste des N derniers batches de collecte de commissions traités.

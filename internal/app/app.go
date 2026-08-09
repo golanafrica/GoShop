@@ -984,6 +984,7 @@ func (a *App) setupRouter() {
 		postgresOrderRepo,
 		tontineVoucherRepo,
 		tontineGroupRepo,
+		shopRepo,
 		walletRepo,
 		walletTxnRepo,
 		creditWalletUC,
@@ -1122,6 +1123,8 @@ func (a *App) setupRouter() {
 	schedulerHandler := schedulerhandler.NewSchedulerHandler(
 		commissionSched,
 		batchRepo,
+		escrowAutoReleaseSched,
+		deliveryProofRepo,
 	)
 
 	commissionRateHandler := commissionratehandler.NewCommissionRateHandler(
@@ -1431,6 +1434,11 @@ func (a *App) setupRouter() {
 			r.Get("/batches", middl.ErrorHandler(schedulerHandler.GetRecentBatches))
 			r.Get("/batches/{id}", middl.ErrorHandler(schedulerHandler.GetBatchDetails))
 			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
+			// 🆕 v4.8.3 : Trigger escrow auto-release
+			r.Post("/trigger-escrow-auto-release", middl.ErrorHandler(schedulerHandler.TriggerEscrowAutoRelease))
+
+			// 🆕 v4.8.4 : Force auto-release pour tests E2E
+			r.Post("/force-auto-release/{order_id}", middl.ErrorHandler(schedulerHandler.ForceAutoRelease))
 		})
 
 		// ============ COMMISSION RATES ROUTES ============

@@ -13,11 +13,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// ============================================================
-// SUBMIT SHIPPING PROOF USECASE (ORDER)
-// ============================================================
-
-// SubmitShippingProofRequest représente la requête pour soumettre une preuve d'expédition
 type SubmitShippingProofRequest struct {
 	OrderID        string `json:"order_id"`
 	ProofURL       string `json:"proof_url"`
@@ -26,7 +21,6 @@ type SubmitShippingProofRequest struct {
 	Notes          string `json:"notes,omitempty"`
 }
 
-// SubmitShippingProofResponse représente la réponse après soumission
 type SubmitShippingProofResponse struct {
 	ProofID        string `json:"proof_id"`
 	OrderID        string `json:"order_id"`
@@ -37,7 +31,6 @@ type SubmitShippingProofResponse struct {
 	Message        string `json:"message"`
 }
 
-// Validate valide la requête
 func (r *SubmitShippingProofRequest) Validate() error {
 	if r.OrderID == "" {
 		return fmt.Errorf("order_id is required")
@@ -52,14 +45,12 @@ func (r *SubmitShippingProofRequest) Validate() error {
 	return nil
 }
 
-// SubmitShippingProofUsecase permet au marchand de soumettre une preuve d'expédition pour une commande
 type SubmitShippingProofUsecase struct {
 	deliveryProofRepo repository.DeliveryProofRepository
 	orderRepo         repository.OrderRepository
 	txManager         repository.TxManager
 }
 
-// NewSubmitShippingProofUsecase crée une nouvelle instance
 func NewSubmitShippingProofUsecase(
 	deliveryProofRepo repository.DeliveryProofRepository,
 	orderRepo repository.OrderRepository,
@@ -72,41 +63,35 @@ func NewSubmitShippingProofUsecase(
 	}
 }
 
-// Execute soumet la preuve d'expédition
 func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitShippingProofRequest) (*SubmitShippingProofResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Valider la requête
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 2. Vérifier le multi-tenant
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
-	shopID := shop.ID.String()
 
-	// 3. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// 4. Récupérer la commande
 	order, err := uc.orderRepo.WithTX(tx).FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// 5. Vérifier que la commande appartient au shop
-	if order.ShopID != shopID {
+	// Vérifier que la commande appartient au shop (comparaison UUID robuste)
+	orderShopUUID, parseErr := uuid.Parse(order.ShopID)
+	if parseErr != nil || orderShopUUID != shop.ID {
 		return nil, fmt.Errorf("access denied: order does not belong to tenant shop")
 	}
 
-	// 6. Vérifier que la commande est dans un état valide
 	validStatuses := map[string]bool{
 		string(entity.OrderStatusConfirmed):      true,
 		string(entity.OrderStatusOutForDelivery): true,
@@ -115,22 +100,18 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 		return nil, fmt.Errorf("cannot submit shipping proof for order status: %s", order.Status)
 	}
 
-	// 7. Récupérer ou créer la preuve de livraison
 	proof, err := uc.deliveryProofRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
 	if err != nil {
-		// Créer une nouvelle preuve si elle n'existe pas
 		proof = entity.NewDeliveryProofForOrder(req.OrderID)
 		if err := uc.deliveryProofRepo.WithTX(tx).Create(ctx, proof); err != nil {
 			return nil, fmt.Errorf("failed to create delivery proof: %w", err)
 		}
 	}
 
-	// 8. Vérifier que la preuve n'a pas déjà été soumise
 	if proof.HasShippingProof() {
 		return nil, fmt.Errorf("shipping proof already submitted for this order")
 	}
 
-	// 9. Soumettre la preuve d'expédition
 	if err := proof.SubmitShippingProof(
 		req.ProofURL,
 		req.TrackingNumber,
@@ -140,25 +121,27 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 		return nil, fmt.Errorf("failed to submit shipping proof: %w", err)
 	}
 
-	// 10. Mettre à jour en base
 	if err := uc.deliveryProofRepo.WithTX(tx).Update(ctx, proof); err != nil {
 		return nil, fmt.Errorf("failed to update delivery proof: %w", err)
 	}
 
-	// 11. Commit la transaction
+	// 🆕 FIX : Mettre à jour le statut de l'order à out_for_delivery
+	order.Status = string(entity.OrderStatusOutForDelivery)
+	if err := uc.orderRepo.WithTX(tx).UpdateOrder(ctx, order); err != nil {
+		return nil, fmt.Errorf("failed to update order status to out_for_delivery: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 12. Logger le succès
 	logger.Info().
 		Str("order_id", req.OrderID).
-		Str("shop_id", shopID).
+		Str("shop_id", shop.ID.String()).
 		Str("proof_id", proof.ID).
 		Str("tracking_number", req.TrackingNumber).
-		Msg("Shipping proof submitted successfully")
+		Msg("Shipping proof submitted successfully, order status updated to out_for_delivery")
 
-	// 13. Construire la réponse
 	shippingDate := ""
 	if proof.ShippingDate != nil {
 		shippingDate = proof.ShippingDate.Format(time.RFC3339)
@@ -171,6 +154,6 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 		ShippingDate:   shippingDate,
 		TrackingNumber: req.TrackingNumber,
 		Carrier:        req.Carrier,
-		Message:        "Shipping proof submitted successfully. Escrow status updated to 'shipped'.",
+		Message:        "Shipping proof submitted successfully. Order status updated to 'out_for_delivery'. Escrow status updated to 'shipped'.",
 	}, nil
 }

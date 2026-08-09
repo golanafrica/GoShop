@@ -100,6 +100,9 @@ type DeliveryProofRepository interface {
 	// FindAutoReleaseEligible retourne les preuves éligibles au déblocage automatique
 	FindAutoReleaseEligible(ctx context.Context) ([]*entity.DeliveryProof, error)
 
+	// 🆕 v4.8.4 : Force le delivery_date pour tests/admin (bypass tenant)
+	ForceDeliveryDate(ctx context.Context, orderID string, daysAgo int) error
+
 	// FindDisputeDeadlineExpired retourne les preuves dont le délai de litige est expiré
 	FindDisputeDeadlineExpired(ctx context.Context) ([]*entity.DeliveryProof, error)
 

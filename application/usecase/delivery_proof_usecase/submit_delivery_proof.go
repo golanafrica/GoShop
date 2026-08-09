@@ -7,14 +7,11 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+	"Goshop/domain/tenant"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
-
-// ============================================================
-// SUBMIT DELIVERY PROOF USECASE (ORDER)
-// ============================================================
 
 // SubmitDeliveryProofRequest représente la requête pour confirmer la réception d'une commande
 type SubmitDeliveryProofRequest struct {
@@ -85,41 +82,47 @@ func (uc *SubmitDeliveryProofUsecase) Execute(ctx context.Context, req *SubmitDe
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 2. Démarrer une transaction
+	// 2. Vérifier le multi-tenant (FIX: ajout de la vérification tenant manquante)
+	_, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("multi-tenant: %w", err)
+	}
+
+	// 3. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// 3. Récupérer la commande
+	// 4. Récupérer la commande
 	order, err := uc.orderRepo.WithTX(tx).FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// 4. Vérifier que la commande est dans un état valide
+	// 5. Vérifier que la commande est dans un état valide
 	if order.Status != string(entity.OrderStatusOutForDelivery) {
 		return nil, fmt.Errorf("cannot confirm delivery for order status: %s", order.Status)
 	}
 
-	// 5. Récupérer la preuve de livraison
+	// 6. Récupérer la preuve de livraison
 	proof, err := uc.deliveryProofRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("delivery proof not found: %w", err)
 	}
 
-	// 6. Vérifier que la preuve marchande existe
+	// 7. Vérifier que la preuve marchande existe
 	if !proof.HasShippingProof() {
 		return nil, fmt.Errorf("merchant must submit shipping proof first")
 	}
 
-	// 7. Vérifier que la preuve client n'a pas déjà été soumise
+	// 8. Vérifier que la preuve client n'a pas déjà été soumise
 	if proof.HasDeliveryProof() {
 		return nil, fmt.Errorf("delivery proof already submitted for this order")
 	}
 
-	// 8. Soumettre la preuve de réception
+	// 9. Soumettre la preuve de réception
 	if err := proof.SubmitDeliveryProof(
 		req.ProofURL,
 		req.Signature,
@@ -129,23 +132,23 @@ func (uc *SubmitDeliveryProofUsecase) Execute(ctx context.Context, req *SubmitDe
 		return nil, fmt.Errorf("failed to submit delivery proof: %w", err)
 	}
 
-	// 9. Mettre à jour en base
+	// 10. Mettre à jour en base
 	if err := uc.deliveryProofRepo.WithTX(tx).Update(ctx, proof); err != nil {
 		return nil, fmt.Errorf("failed to update delivery proof: %w", err)
 	}
 
-	// 10. Commit la transaction
+	// 11. Commit la transaction
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 11. Logger le succès
+	// 12. Logger le succès
 	logger.Info().
 		Str("order_id", req.OrderID).
 		Str("proof_id", proof.ID).
 		Msg("Delivery proof submitted successfully by customer")
 
-	// 12. Construire la réponse
+	// 13. Construire la réponse
 	deliveryDate := ""
 	if proof.DeliveryDate != nil {
 		deliveryDate = proof.DeliveryDate.Format(time.RFC3339)
