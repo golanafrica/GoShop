@@ -13,7 +13,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// SubmitDeliveryProofRequest représente la requête pour confirmer la réception d'une commande
+// ============================================================
+// SUBMIT DELIVERY PROOF (ORDER — client)
+// Phase 3.3 : refuse si escrow disputed / released / refunded
+// ============================================================
+
 type SubmitDeliveryProofRequest struct {
 	OrderID   string `json:"order_id"`
 	ProofURL  string `json:"proof_url"`
@@ -22,7 +26,6 @@ type SubmitDeliveryProofRequest struct {
 	Rating    *int   `json:"rating,omitempty"`
 }
 
-// SubmitDeliveryProofResponse représente la réponse après confirmation
 type SubmitDeliveryProofResponse struct {
 	ProofID      string `json:"proof_id"`
 	OrderID      string `json:"order_id"`
@@ -32,7 +35,6 @@ type SubmitDeliveryProofResponse struct {
 	Message      string `json:"message"`
 }
 
-// Validate valide la requête
 func (r *SubmitDeliveryProofRequest) Validate() error {
 	if r.OrderID == "" {
 		return fmt.Errorf("order_id is required")
@@ -40,8 +42,7 @@ func (r *SubmitDeliveryProofRequest) Validate() error {
 	if r.ProofURL == "" {
 		return fmt.Errorf("proof_url is required")
 	}
-	_, err := uuid.Parse(r.OrderID)
-	if err != nil {
+	if _, err := uuid.Parse(r.OrderID); err != nil {
 		return fmt.Errorf("invalid order_id format: %w", err)
 	}
 	if r.Rating != nil && (*r.Rating < 1 || *r.Rating > 5) {
@@ -50,79 +51,80 @@ func (r *SubmitDeliveryProofRequest) Validate() error {
 	return nil
 }
 
-// SubmitDeliveryProofUsecase permet au client de confirmer la réception d'une commande
 type SubmitDeliveryProofUsecase struct {
 	deliveryProofRepo repository.DeliveryProofRepository
 	orderRepo         repository.OrderRepository
 	customerRepo      repository.CustomerRepositoryInterface
+	escrowRepo        repository.EscrowAccountRepository // Phase 3.3
 	txManager         repository.TxManager
 }
 
-// NewSubmitDeliveryProofUsecase crée une nouvelle instance
 func NewSubmitDeliveryProofUsecase(
 	deliveryProofRepo repository.DeliveryProofRepository,
 	orderRepo repository.OrderRepository,
 	customerRepo repository.CustomerRepositoryInterface,
+	escrowRepo repository.EscrowAccountRepository,
 	txManager repository.TxManager,
 ) *SubmitDeliveryProofUsecase {
 	return &SubmitDeliveryProofUsecase{
 		deliveryProofRepo: deliveryProofRepo,
 		orderRepo:         orderRepo,
 		customerRepo:      customerRepo,
+		escrowRepo:        escrowRepo,
 		txManager:         txManager,
 	}
 }
 
-// Execute confirme la réception
 func (uc *SubmitDeliveryProofUsecase) Execute(ctx context.Context, req *SubmitDeliveryProofRequest) (*SubmitDeliveryProofResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Valider la requête
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 2. Vérifier le multi-tenant (FIX: ajout de la vérification tenant manquante)
-	_, err := tenant.FromContext(ctx)
-	if err != nil {
+	if _, err := tenant.FromContext(ctx); err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
 
-	// 3. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	// 4. Récupérer la commande
 	order, err := uc.orderRepo.WithTX(tx).FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// 5. Vérifier que la commande est dans un état valide
 	if order.Status != string(entity.OrderStatusOutForDelivery) {
 		return nil, fmt.Errorf("cannot confirm delivery for order status: %s", order.Status)
 	}
 
-	// 6. Récupérer la preuve de livraison
+	// ── Phase 3.3 : bloquer si litige ou escrow terminal ──
+	escrow, err := uc.escrowRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
+	if err != nil {
+		return nil, fmt.Errorf("escrow not found for this order: %w", err)
+	}
+	switch escrow.Status {
+	case entity.EscrowAccountDisputed:
+		return nil, fmt.Errorf("cannot submit delivery proof: order is under dispute")
+	case entity.EscrowAccountFullyReleased, entity.EscrowAccountRefunded:
+		return nil, fmt.Errorf("cannot submit delivery proof: escrow is already %s", escrow.Status)
+	}
+
 	proof, err := uc.deliveryProofRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("delivery proof not found: %w", err)
 	}
 
-	// 7. Vérifier que la preuve marchande existe
 	if !proof.HasShippingProof() {
 		return nil, fmt.Errorf("merchant must submit shipping proof first")
 	}
-
-	// 8. Vérifier que la preuve client n'a pas déjà été soumise
 	if proof.HasDeliveryProof() {
 		return nil, fmt.Errorf("delivery proof already submitted for this order")
 	}
 
-	// 9. Soumettre la preuve de réception
 	if err := proof.SubmitDeliveryProof(
 		req.ProofURL,
 		req.Signature,
@@ -132,23 +134,19 @@ func (uc *SubmitDeliveryProofUsecase) Execute(ctx context.Context, req *SubmitDe
 		return nil, fmt.Errorf("failed to submit delivery proof: %w", err)
 	}
 
-	// 10. Mettre à jour en base
 	if err := uc.deliveryProofRepo.WithTX(tx).Update(ctx, proof); err != nil {
 		return nil, fmt.Errorf("failed to update delivery proof: %w", err)
 	}
 
-	// 11. Commit la transaction
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// 12. Logger le succès
 	logger.Info().
 		Str("order_id", req.OrderID).
 		Str("proof_id", proof.ID).
 		Msg("Delivery proof submitted successfully by customer")
 
-	// 13. Construire la réponse
 	deliveryDate := ""
 	if proof.DeliveryDate != nil {
 		deliveryDate = proof.DeliveryDate.Format(time.RFC3339)

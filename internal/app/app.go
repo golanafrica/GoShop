@@ -594,9 +594,11 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
 	// ============ 🆕 v4.7.0 : DELIVERY PROOF USECASES ============
+	// Phase 3.3 : escrowRepo injecté pour bloquer preuves si disputed / terminal
 	submitShippingUC := deliveryproofusecase.NewSubmitShippingProofUsecase(
 		deliveryProofRepo,
 		postgresOrderRepo,
+		escrowRepo,
 		txmanagerRepo,
 	)
 
@@ -610,6 +612,7 @@ func (a *App) setupRouter() {
 		deliveryProofRepo,
 		postgresOrderRepo,
 		postgresCustomerRepo,
+		escrowRepo,
 		txmanagerRepo,
 	)
 

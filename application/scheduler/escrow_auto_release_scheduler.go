@@ -25,7 +25,7 @@ type EscrowAutoReleaseScheduler struct {
 	orderRepo          repository.OrderRepository
 	tontineVoucherRepo repository.TontineVoucherRepository
 	tontineGroupRepo   repository.TontineGroupRepository
-	shopRepo           repository.ShopRepository // 🆕 v4.8.3 : pour créer le tenant context
+	shopRepo           repository.ShopRepository // pour créer le tenant context
 	walletRepo         repository.MerchantWalletRepository
 	walletTxnRepo      repository.WalletTransactionRepository
 	creditWalletUC     *walletusecase.CreditWalletUsecase
@@ -41,7 +41,7 @@ func NewEscrowAutoReleaseScheduler(
 	orderRepo repository.OrderRepository,
 	tontineVoucherRepo repository.TontineVoucherRepository,
 	tontineGroupRepo repository.TontineGroupRepository,
-	shopRepo repository.ShopRepository, // 🆕 v4.8.3
+	shopRepo repository.ShopRepository,
 	walletRepo repository.MerchantWalletRepository,
 	walletTxnRepo repository.WalletTransactionRepository,
 	creditWalletUC *walletusecase.CreditWalletUsecase,
@@ -53,7 +53,7 @@ func NewEscrowAutoReleaseScheduler(
 		orderRepo:          orderRepo,
 		tontineVoucherRepo: tontineVoucherRepo,
 		tontineGroupRepo:   tontineGroupRepo,
-		shopRepo:           shopRepo, // 🆕 v4.8.3
+		shopRepo:           shopRepo,
 		walletRepo:         walletRepo,
 		walletTxnRepo:      walletTxnRepo,
 		creditWalletUC:     creditWalletUC,
@@ -71,7 +71,7 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 		Int("batch_size", s.batchSize).
 		Msg("🚀 Starting escrow auto-release")
 
-	// 1. Récupérer les preuves éligibles (delivered + 3 jours + pas de litige actif)
+	// 1. Récupérer les preuves éligibles (delivered + 3 jours + pas de litige actif côté proof)
 	proofs, err := s.deliveryProofRepo.FindAutoReleaseEligible(ctx)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to fetch eligible proofs")
@@ -120,11 +120,11 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 }
 
 // processProof traite une preuve individuelle
-// 🆕 v4.8.3 : Utilise FindByIDAdmin pour bypasser le multi-tenant (contexte scheduler)
+// Utilise FindByIDAdmin pour bypasser le multi-tenant (contexte scheduler).
 func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *entity.DeliveryProof) (int64, error) {
 	itemLogger := s.logger.With().
 		Str("proof_id", proof.ID).
-		Str("escrow_status", string(proof.EscrowStatus)).
+		Str("proof_escrow_status", string(proof.EscrowStatus)).
 		Logger()
 
 	// 1. Vérifier que la preuve est bien éligible
@@ -133,7 +133,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	}
 
 	// 2. Déterminer le shop_id selon le type de référence
-	// 🆕 v4.8.3 : Utiliser FindByIDAdmin (pas de tenant dans contexte scheduler)
 	var shopID string
 	var err error
 
@@ -155,22 +154,17 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger = itemLogger.With().Str("shop_id", shopID).Logger()
 
-	// 3. Appeler ReleaseFunds sur la DeliveryProof
-	if err := proof.ReleaseFunds(); err != nil {
-		return 0, fmt.Errorf("failed to release delivery proof: %w", err)
-	}
-
-	// 4. Trouver l'EscrowAccount correspondant
+	// 3. Trouver l'EscrowAccount AVANT de muter la proof
+	//    (si litige / terminal → on ne touche ni proof ni wallet)
 	var escrow *entity.EscrowAccount
 	if proof.OrderID != nil {
 		escrow, err = s.escrowRepo.FindByOrderID(ctx, *proof.OrderID)
 	} else if proof.TontineVoucherID != nil {
-		// Pour tontine, l'escrow est lié au TontineGroup
 		voucher, _ := s.tontineVoucherRepo.FindByIDAdmin(ctx, *proof.TontineVoucherID)
 		if voucher != nil {
-			group, err := s.findTontineGroupByVoucher(ctx, voucher)
-			if err != nil {
-				return 0, fmt.Errorf("failed to find tontine group: %w", err)
+			group, gErr := s.findTontineGroupByVoucher(ctx, voucher)
+			if gErr != nil {
+				return 0, fmt.Errorf("failed to find tontine group: %w", gErr)
 			}
 			escrow, err = s.escrowRepo.FindByTontineGroupID(ctx, group.ID)
 		}
@@ -182,16 +176,36 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger = itemLogger.With().
 		Str("escrow_id", escrow.ID).
+		Str("escrow_account_status", string(escrow.Status)).
 		Int64("total_cents", escrow.TotalAmountCents).
 		Int64("commission_cents", escrow.CommissionCents).
 		Logger()
+
+	// ────────────────────────────────────────────────────────────
+	// Phase 3.1 — sécurité litige / double release
+	// Ne JAMAIS auto-libérer un escrow disputed ou déjà terminal.
+	// funds_held reste autorisé (happy path après preuves).
+	// ────────────────────────────────────────────────────────────
+	switch escrow.Status {
+	case entity.EscrowAccountDisputed:
+		itemLogger.Warn().Msg("skip auto-release: escrow is disputed")
+		return 0, fmt.Errorf("escrow is disputed — auto-release blocked until admin resolution")
+	case entity.EscrowAccountFullyReleased, entity.EscrowAccountRefunded:
+		itemLogger.Info().Msg("skip auto-release: escrow already terminal")
+		return 0, fmt.Errorf("escrow already terminal (status: %s)", escrow.Status)
+	}
+
+	// 4. Marquer la DeliveryProof comme released
+	if err := proof.ReleaseFunds(); err != nil {
+		return 0, fmt.Errorf("failed to release delivery proof: %w", err)
+	}
 
 	// 5. Libérer les fonds de l'escrow
 	if err := escrow.ReleaseFunds(); err != nil {
 		return 0, fmt.Errorf("failed to release escrow: %w", err)
 	}
 
-	// 6. Calculer le montant net pour le marchand
+	// 6. Montant net marchand = TotalAmountCents - CommissionCents (GoShop)
 	merchantAmount := escrow.GetMerchantAmount()
 
 	// 7. Créditer le wallet du marchand (avec retry)
@@ -209,6 +223,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 			}
 			continue
 		}
+		lastErr = nil
 		break
 	}
 
@@ -216,12 +231,12 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return 0, fmt.Errorf("failed to credit merchant wallet after %d attempts: %w", s.maxRetries, lastErr)
 	}
 
-	// 8. Mettre à jour la preuve en base
+	// 8. Persister la preuve
 	if err := s.deliveryProofRepo.Update(ctx, proof); err != nil {
 		return 0, fmt.Errorf("failed to update delivery proof: %w", err)
 	}
 
-	// 9. Mettre à jour l'escrow en base
+	// 9. Persister l'escrow
 	if err := s.escrowRepo.Update(ctx, escrow); err != nil {
 		return 0, fmt.Errorf("failed to update escrow: %w", err)
 	}
@@ -234,7 +249,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 }
 
 // creditMerchantWallet crédite le wallet du marchand
-// 🆕 v4.8.3 : Crée un contexte avec tenant pour les appels wallet
+// Crée un contexte avec tenant pour les appels wallet.
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -242,7 +257,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	proofID string,
 	escrowID string,
 ) error {
-	// 🆕 v4.8.3 : Créer un contexte avec tenant pour les appels wallet
 	shopUUID, err := uuid.Parse(shopID)
 	if err != nil {
 		return fmt.Errorf("invalid shop UUID: %w", err)

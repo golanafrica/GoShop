@@ -13,6 +13,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ============================================================
+// SUBMIT SHIPPING PROOF (ORDER)
+// Phase 3.3 : refuse si escrow disputed / released / refunded
+// ============================================================
+
 type SubmitShippingProofRequest struct {
 	OrderID        string `json:"order_id"`
 	ProofURL       string `json:"proof_url"`
@@ -38,8 +43,7 @@ func (r *SubmitShippingProofRequest) Validate() error {
 	if r.ProofURL == "" {
 		return fmt.Errorf("proof_url is required")
 	}
-	_, err := uuid.Parse(r.OrderID)
-	if err != nil {
+	if _, err := uuid.Parse(r.OrderID); err != nil {
 		return fmt.Errorf("invalid order_id format: %w", err)
 	}
 	return nil
@@ -48,17 +52,20 @@ func (r *SubmitShippingProofRequest) Validate() error {
 type SubmitShippingProofUsecase struct {
 	deliveryProofRepo repository.DeliveryProofRepository
 	orderRepo         repository.OrderRepository
+	escrowRepo        repository.EscrowAccountRepository // Phase 3.3
 	txManager         repository.TxManager
 }
 
 func NewSubmitShippingProofUsecase(
 	deliveryProofRepo repository.DeliveryProofRepository,
 	orderRepo repository.OrderRepository,
+	escrowRepo repository.EscrowAccountRepository,
 	txManager repository.TxManager,
 ) *SubmitShippingProofUsecase {
 	return &SubmitShippingProofUsecase{
 		deliveryProofRepo: deliveryProofRepo,
 		orderRepo:         orderRepo,
+		escrowRepo:        escrowRepo,
 		txManager:         txManager,
 	}
 }
@@ -79,14 +86,13 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	order, err := uc.orderRepo.WithTX(tx).FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// Vérifier que la commande appartient au shop (comparaison UUID robuste)
 	orderShopUUID, parseErr := uuid.Parse(order.ShopID)
 	if parseErr != nil || orderShopUUID != shop.ID {
 		return nil, fmt.Errorf("access denied: order does not belong to tenant shop")
@@ -98,6 +104,18 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 	}
 	if !validStatuses[order.Status] {
 		return nil, fmt.Errorf("cannot submit shipping proof for order status: %s", order.Status)
+	}
+
+	// ── Phase 3.3 : bloquer si litige ou escrow terminal ──
+	escrow, err := uc.escrowRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
+	if err != nil {
+		return nil, fmt.Errorf("escrow not found for this order: %w", err)
+	}
+	switch escrow.Status {
+	case entity.EscrowAccountDisputed:
+		return nil, fmt.Errorf("cannot submit shipping proof: order is under dispute")
+	case entity.EscrowAccountFullyReleased, entity.EscrowAccountRefunded:
+		return nil, fmt.Errorf("cannot submit shipping proof: escrow is already %s", escrow.Status)
 	}
 
 	proof, err := uc.deliveryProofRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)
@@ -125,7 +143,6 @@ func (uc *SubmitShippingProofUsecase) Execute(ctx context.Context, req *SubmitSh
 		return nil, fmt.Errorf("failed to update delivery proof: %w", err)
 	}
 
-	// 🆕 FIX : Mettre à jour le statut de l'order à out_for_delivery
 	order.Status = string(entity.OrderStatusOutForDelivery)
 	if err := uc.orderRepo.WithTX(tx).UpdateOrder(ctx, order); err != nil {
 		return nil, fmt.Errorf("failed to update order status to out_for_delivery: %w", err)
