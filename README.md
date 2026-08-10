@@ -4,6 +4,26 @@
 
 # 🛒 GoShop - Plateforme E-commerce SaaS Multi-tenant pour l'Afrique
 
+<div align="center">
+
+# 🛒 GoShop
+
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8)](https://go.dev/)
+[![Production Ready](https://img.shields.io/badge/Status-Production_Ready-green)]()
+
+**Plateforme E-commerce SaaS Multi-tenant pour l'Afrique**
+
+</div>
+
+---
+
+## 📜 Licence
+
+GoShop est distribué sous licence **Apache 2.0**. Voir le fichier [LICENSE](./LICENSE) pour plus de détails.
+
+**Copyright © 2025-2026 GolAfrica. Tous droits réservés.**
+
 **Vision** : Devenir le Shopify africain avec paiements Mobile Money intégrés (Wave, Orange Money, Moov Money), vente à crédit, système de tontine, et notifications temps réel.
 
 **Statut** : ✅ **v4.5.0-production-ready** - Plateforme complète avec sécurité renforcée, WebSockets, et 200+ tests
