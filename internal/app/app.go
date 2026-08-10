@@ -594,7 +594,8 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
 	// ============ 🆕 v4.7.0 : DELIVERY PROOF USECASES ============
-	// Phase 3.3 : escrowRepo injecté pour bloquer preuves si disputed / terminal
+	// ============ 🆕 v4.7.0 : DELIVERY PROOF USECASES ============
+	// Phase 3.3 / 3.3b : escrowRepo pour bloquer preuves si disputed / terminal
 	submitShippingUC := deliveryproofusecase.NewSubmitShippingProofUsecase(
 		deliveryProofRepo,
 		postgresOrderRepo,
@@ -605,6 +606,7 @@ func (a *App) setupRouter() {
 	submitTontineShippingUC := deliveryproofusecase.NewSubmitTontineShippingProofUsecase(
 		deliveryProofRepo,
 		tontineVoucherRepo,
+		escrowRepo,
 		txmanagerRepo,
 	)
 
@@ -620,9 +622,9 @@ func (a *App) setupRouter() {
 		deliveryProofRepo,
 		tontineVoucherRepo,
 		postgresCustomerRepo,
+		escrowRepo,
 		txmanagerRepo,
 	)
-
 	a.Logger.Info().Msg("✅ v4.7.0 Delivery proof usecases initialized (shipping + delivery + tontine)")
 
 	// ============ 🆕 v2.9.0 : TONTINE USECASES ============
