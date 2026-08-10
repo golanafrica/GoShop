@@ -917,6 +917,7 @@ func (a *App) setupRouter() {
 		disputeRepo,
 		postgresOrderRepo,
 		escrowRepo,
+		txmanagerRepo, // même TxManager que resolve / shipping proof
 	)
 
 	resolveDisputeUC := disputeusecase.NewResolveDisputeUsecase(
