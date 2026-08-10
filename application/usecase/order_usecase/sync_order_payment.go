@@ -84,7 +84,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
 
-	// 2. Récupérer l'order (FindByID attend string)
+	// 2. Récupérer l'order
 	order, err := uc.orderRepo.FindByID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("order not found: %w", err)
@@ -110,14 +110,12 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		return nil, fmt.Errorf("no payment found for order %s", req.OrderID)
 	}
 
-	// Prendre le premier paiement (le plus récent)
 	payment := payments[0]
 
 	// 5. Si le payment est déjà success, vérifier l'escrow
 	if payment.Status == entity.PaymentStatusSuccess {
 		escrow, escrowErr := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 		if escrowErr == nil && escrow != nil {
-			// Safety net : order encore pending → confirmer
 			if order.Status == string(entity.OrderStatusPending) {
 				if markErr := order.MarkAccepted(); markErr == nil {
 					_ = uc.orderRepo.UpdateOrder(ctx, order)
@@ -193,11 +191,30 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		escrowRepoTx := uc.escrowRepo.WithTX(tx)
 		deliveryProofRepoTx := uc.deliveryProofRepo.WithTX(tx)
 
-		// 8.1. Mettre à jour le payment
 		now := time.Now().UTC()
+
+		// --------------------------------------------------------
+		// Phase 2 : même settlement que process_webhook
+		// - ProviderFees : déjà connus sur payment, sinon 0 (sync)
+		// - Commission GoShop : commission_rates / fallback 250 bps
+		// --------------------------------------------------------
+		shopIDStr := shop.ID.String()
+		rateBps := paymentusecase.ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
+		providerFeesCents := payment.ProviderFeesCents // 0 si jamais reçu via webhook
+
+		settlement := paymentusecase.ComputeOrderSettlement(
+			payment.AmountCents,
+			providerFeesCents,
+			rateBps,
+		)
+
+		// 8.1. Mettre à jour le payment (+ traçabilité commission)
 		payment.Status = entity.PaymentStatusSuccess
 		payment.CompletedAt = &now
 		payment.UpdatedAt = now
+		payment.ProviderFeesCents = settlement.ProviderFeesCents
+		payment.CommissionRateBps = settlement.CommissionRateBps
+		payment.CommissionCents = settlement.CommissionCents
 		if err = paymentRepoTx.Update(ctx, payment); err != nil {
 			return nil, fmt.Errorf("failed to update payment: %w", err)
 		}
@@ -210,25 +227,24 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			return nil, fmt.Errorf("failed to update order: %w", err)
 		}
 
-		// 8.3. Créer l'escrow — Phase 1 : taux via commission_rates (0–15 %)
-		shopIDStr := shop.ID.String()
-		rateBps := paymentusecase.ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
-		commissionCents := paymentusecase.CalculateGoShopCommissionCents(payment.AmountCents, rateBps)
-
+		// 8.3. Créer l'escrow (aligné webhook)
 		logger.Info().
 			Str("shop_id", shopIDStr).
-			Int("commission_rate_bps", rateBps).
-			Int64("commission_cents", commissionCents).
-			Int64("amount_cents", payment.AmountCents).
-			Msg("Escrow commission resolved (Phase 1)")
+			Int64("gross_cents", settlement.GrossCents).
+			Int64("provider_fees_cents", settlement.ProviderFeesCents).
+			Int("commission_rate_bps", settlement.CommissionRateBps).
+			Int64("commission_cents", settlement.CommissionCents).
+			Int64("escrow_total_cents", settlement.EscrowTotalCents).
+			Int64("merchant_net_cents", settlement.MerchantNetCents).
+			Msg("Escrow settlement resolved (Phase 2 / sync)")
 
 		orderIDStr := req.OrderID
 		escrow := &entity.EscrowAccount{
 			ID:                  uuid.New().String(),
 			OrderID:             &orderIDStr,
 			SourceType:          entity.EscrowSourceOrder,
-			TotalAmountCents:    payment.AmountCents,
-			CommissionCents:     commissionCents,
+			TotalAmountCents:    settlement.EscrowTotalCents,
+			CommissionCents:     settlement.CommissionCents,
 			ReleasedAmountCents: 0,
 			Status:              entity.EscrowAccountFundsHeld,
 			FundsHeldAt:         now,
@@ -240,7 +256,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			return nil, fmt.Errorf("failed to create escrow: %w", err)
 		}
 
-		// 8.4. Créer la delivery proof (pour le marchand)
+		// 8.4. Créer la delivery proof
 		proof := &entity.DeliveryProof{
 			ID:           uuid.New().String(),
 			OrderID:      &orderIDStr,
@@ -253,7 +269,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			return nil, fmt.Errorf("failed to create delivery proof: %w", err)
 		}
 
-		// 8.5. Commit transaction
+		// 8.5. Commit
 		if err = tx.Commit(); err != nil {
 			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
@@ -277,7 +293,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		}, nil
 	}
 
-	// 9. Sinon, retourner le statut actuel
+	// 9. Statut actuel
 	return &SyncOrderPaymentResponse{
 		OrderID:       req.OrderID,
 		PaymentID:     payment.ID.String(),

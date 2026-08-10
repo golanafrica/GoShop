@@ -38,8 +38,8 @@ type ProcessWebhookUsecase struct {
 	tontineWebhookUC   *ProcessTontineWebhookUsecase
 	creditUpdater      CreditUpdater
 	escrowRepo         repository.EscrowAccountRepository
-	orderRepo          repository.OrderRepository          // confirm order on SUCCESS
-	commissionRateRepo repository.CommissionRateRepository // Phase 1 — optionnel nil-safe
+	orderRepo          repository.OrderRepository
+	commissionRateRepo repository.CommissionRateRepository
 }
 
 func NewProcessWebhookUsecase(
@@ -198,7 +198,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 		if escrowAlreadyCreated {
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
-			// Safety : s'assurer que l'order est bien confirmed
 			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 			return nil
 		}
@@ -248,29 +247,40 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
 
 		if !isCredit && paymentEntity.OrderID != uuid.Nil {
-			// Phase 1 : taux GoShop via commission_rates (0–15 %), fallback 2.5 %
+			// --------------------------------------------------------
+			// Phase 2 : settlement unique (frais Yenga + commission GoShop)
+			// --------------------------------------------------------
 			shopIDStr := paymentEntity.ShopID.String()
-			commissionRate := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
-			commissionCents := CalculateGoShopCommissionCents(paymentEntity.AmountCents, commissionRate)
+			rateBps := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
 
+			// Frais PSP (Yenga) — metadata webhook ; 0 si absent
 			providerFeesCents := int64(0)
 			if fees, ok := event.Metadata["payment_fees"].(float64); ok {
+				// Yenga envoie souvent les frais en unités monétaires (XOF), pas en centimes
 				providerFeesCents = int64(fees * 100)
 			}
-			paymentEntity.ProviderFeesCents = providerFeesCents
 
-			netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
+			settlement := ComputeOrderSettlement(
+				paymentEntity.AmountCents,
+				providerFeesCents,
+				rateBps,
+			)
 
-			if netAmountCents > 0 && uc.escrowRepo != nil {
+			// Persister sur le payment (traçabilité audit / commission_scheduler)
+			paymentEntity.ProviderFeesCents = settlement.ProviderFeesCents
+			paymentEntity.CommissionRateBps = settlement.CommissionRateBps
+			paymentEntity.CommissionCents = settlement.CommissionCents
+
+			if settlement.MerchantNetCents > 0 && uc.escrowRepo != nil {
 				orderIDStr := paymentEntity.OrderID.String()
 				now := time.Now().UTC()
 
 				escrow := &entity.EscrowAccount{
 					OrderID:             &orderIDStr,
 					SourceType:          entity.EscrowSourceOrder,
-					TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents,
+					TotalAmountCents:    settlement.EscrowTotalCents, // brut - frais PSP
 					ReleasedAmountCents: 0,
-					CommissionCents:     commissionCents,
+					CommissionCents:     settlement.CommissionCents, // commission GoShop
 					Status:              entity.EscrowAccountFundsHeld,
 					FundsHeldAt:         now,
 					CreatedAt:           now,
@@ -291,16 +301,16 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				}
 
 				logger.Info().
-					Int64("gross_amount", paymentEntity.AmountCents).
-					Int64("provider_fees_cents", providerFeesCents).
-					Int("commission_rate_bps", commissionRate).
-					Int64("commission_cents", commissionCents).
-					Int64("escrow_amount", netAmountCents).
+					Int64("gross_cents", settlement.GrossCents).
+					Int64("provider_fees_cents", settlement.ProviderFeesCents).
+					Int("commission_rate_bps", settlement.CommissionRateBps).
+					Int64("commission_cents", settlement.CommissionCents).
+					Int64("escrow_total_cents", settlement.EscrowTotalCents).
+					Int64("merchant_net_cents", settlement.MerchantNetCents).
 					Str("escrow_id", escrow.ID).
-					Msg("✅ Funds successfully locked in Escrow")
+					Msg("✅ Funds locked in Escrow (Phase 2 settlement)")
 			}
 
-			// Confirmer l'order (pending → confirmed) pour débloquer shipping proof
 			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 		}
 	}
