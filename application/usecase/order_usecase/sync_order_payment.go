@@ -37,13 +37,14 @@ type SyncOrderPaymentResponse struct {
 
 // SyncOrderPaymentUsecase synchronise le statut d'un paiement order
 type SyncOrderPaymentUsecase struct {
-	orderRepo         repository.OrderRepository
-	paymentRepo       repository.PaymentRepository
-	escrowRepo        repository.EscrowAccountRepository
-	deliveryProofRepo repository.DeliveryProofRepository
-	paymentRegistry   paymentusecase.PaymentRegistry // ✅ Bon type
-	notifService      service.NotificationService
-	txManager         repository.TxManager
+	orderRepo          repository.OrderRepository
+	paymentRepo        repository.PaymentRepository
+	escrowRepo         repository.EscrowAccountRepository
+	deliveryProofRepo  repository.DeliveryProofRepository
+	paymentRegistry    paymentusecase.PaymentRegistry
+	notifService       service.NotificationService
+	txManager          repository.TxManager
+	commissionRateRepo repository.CommissionRateRepository // Phase 1 — optionnel nil-safe
 }
 
 // NewSyncOrderPaymentUsecase crée une nouvelle instance
@@ -52,7 +53,7 @@ func NewSyncOrderPaymentUsecase(
 	paymentRepo repository.PaymentRepository,
 	escrowRepo repository.EscrowAccountRepository,
 	deliveryProofRepo repository.DeliveryProofRepository,
-	paymentRegistry paymentusecase.PaymentRegistry, // ✅ Bon type
+	paymentRegistry paymentusecase.PaymentRegistry,
 	notifService service.NotificationService,
 	txManager repository.TxManager,
 ) *SyncOrderPaymentUsecase {
@@ -65,6 +66,12 @@ func NewSyncOrderPaymentUsecase(
 		notifService:      notifService,
 		txManager:         txManager,
 	}
+}
+
+// WithCommissionRateRepo injecte les taux boutique pour online_payment (Phase 1)
+func (uc *SyncOrderPaymentUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *SyncOrderPaymentUsecase {
+	uc.commissionRateRepo = r
+	return uc
 }
 
 // Execute synchronise le statut du paiement et crée l'escrow si nécessaire
@@ -88,7 +95,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		return nil, fmt.Errorf("access denied: order does not belong to tenant shop")
 	}
 
-	// 4. Récupérer les payments associés (FindByOrderID attend uuid.UUID, retourne slice)
+	// 4. Récupérer les payments associés
 	orderUUID, err := uuid.Parse(req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order ID format: %w", err)
@@ -106,43 +113,25 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 	// Prendre le premier paiement (le plus récent)
 	payment := payments[0]
 
-	// 5. 🆕 Phase 2 : Si le payment est déjà success, vérifier l'escrow ET confirmer l'order
+	// 5. Si le payment est déjà success, vérifier l'escrow
 	if payment.Status == entity.PaymentStatusSuccess {
 		escrow, escrowErr := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 		if escrowErr == nil && escrow != nil {
-			// 🆕 Phase 2 : Filet de sécurité - confirmer l'order si encore pending
-			orderConfirmed := false
+			// Safety net : order encore pending → confirmer
 			if order.Status == string(entity.OrderStatusPending) {
 				if markErr := order.MarkAccepted(); markErr == nil {
-					if updateErr := uc.orderRepo.UpdateOrder(ctx, order); updateErr == nil {
-						orderConfirmed = true
-						logger.Info().
-							Str("order_id", req.OrderID).
-							Str("new_status", order.Status).
-							Msg("✅ Order confirmed (payment already success, escrow exists)")
-					} else {
-						logger.Warn().Err(updateErr).Str("order_id", req.OrderID).
-							Msg("Failed to confirm order during sync")
-					}
-				} else {
-					logger.Warn().Err(markErr).Str("order_id", req.OrderID).
-						Msg("Failed to mark order accepted during sync")
+					_ = uc.orderRepo.UpdateOrder(ctx, order)
+					logger.Info().Str("order_id", req.OrderID).Msg("✅ Order confirmed (already-success path)")
 				}
 			}
-
 			return &SyncOrderPaymentResponse{
 				OrderID:       req.OrderID,
 				PaymentID:     payment.ID.String(),
-				OrderStatus:   order.Status, // Sera "confirmed" si on vient de le confirmer
+				OrderStatus:   order.Status,
 				PaymentStatus: string(payment.Status),
 				EscrowStatus:  string(escrow.Status),
-				Synced:        orderConfirmed, // 🆕 Phase 2 : true si on a confirmé l'order
-				Message: func() string {
-					if orderConfirmed {
-						return "Payment already confirmed, escrow exists, order ensured confirmed"
-					}
-					return "Payment already confirmed, escrow exists"
-				}(),
+				Synced:        false,
+				Message:       "Payment already confirmed, escrow exists",
 			}, nil
 		}
 	}
@@ -183,13 +172,12 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		Str("order_status", order.Status).
 		Msg("Payment status retrieved from provider")
 
-	// 8. Si le statut est SUCCESS et que l'order n'est pas encore confirmée
+	// 8. Si SUCCESS et order pas encore confirmée
 	if statusResp.Status == entity.PaymentStatusSuccess && order.Status != string(entity.OrderStatusConfirmed) {
 		logger.Info().
 			Str("order_id", req.OrderID).
 			Msg("Payment is SUCCESS, confirming order and creating escrow")
 
-		// Démarrer une transaction
 		tx, err := uc.txManager.BeginTx(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start transaction: %w", err)
@@ -222,8 +210,18 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			return nil, fmt.Errorf("failed to update order: %w", err)
 		}
 
-		// 8.3. Créer l'escrow account
-		commissionCents := calculateOrderCommission(payment.AmountCents, 250) // 2.5%
+		// 8.3. Créer l'escrow — Phase 1 : taux via commission_rates (0–15 %)
+		shopIDStr := shop.ID.String()
+		rateBps := paymentusecase.ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
+		commissionCents := paymentusecase.CalculateGoShopCommissionCents(payment.AmountCents, rateBps)
+
+		logger.Info().
+			Str("shop_id", shopIDStr).
+			Int("commission_rate_bps", rateBps).
+			Int64("commission_cents", commissionCents).
+			Int64("amount_cents", payment.AmountCents).
+			Msg("Escrow commission resolved (Phase 1)")
+
 		orderIDStr := req.OrderID
 		escrow := &entity.EscrowAccount{
 			ID:                  uuid.New().String(),
@@ -289,9 +287,4 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		Synced:        false,
 		Message:       fmt.Sprintf("Payment status is %s, no action needed", statusResp.Status),
 	}, nil
-}
-
-// calculateOrderCommission calcule la commission pour une order (en bps)
-func calculateOrderCommission(amountCents int64, commissionBps int) int64 {
-	return (amountCents * int64(commissionBps)) / 10000
 }

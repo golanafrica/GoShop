@@ -30,15 +30,16 @@ type CreditUpdater interface {
 }
 
 type ProcessWebhookUsecase struct {
-	paymentRepo      repository.PaymentRepository
-	registry         PaymentRegistry
-	db               repository.DBExecutor
-	shopRepo         repository.ShopRepository
-	shopSettingsRepo ShopPaymentSettingsRepository
-	tontineWebhookUC *ProcessTontineWebhookUsecase
-	creditUpdater    CreditUpdater
-	escrowRepo       repository.EscrowAccountRepository
-	orderRepo        repository.OrderRepository // Phase 1 : confirmer order après SUCCESS
+	paymentRepo        repository.PaymentRepository
+	registry           PaymentRegistry
+	db                 repository.DBExecutor
+	shopRepo           repository.ShopRepository
+	shopSettingsRepo   ShopPaymentSettingsRepository
+	tontineWebhookUC   *ProcessTontineWebhookUsecase
+	creditUpdater      CreditUpdater
+	escrowRepo         repository.EscrowAccountRepository
+	orderRepo          repository.OrderRepository          // confirm order on SUCCESS
+	commissionRateRepo repository.CommissionRateRepository // Phase 1 — optionnel nil-safe
 }
 
 func NewProcessWebhookUsecase(
@@ -50,7 +51,7 @@ func NewProcessWebhookUsecase(
 	tontineWebhookUC *ProcessTontineWebhookUsecase,
 	creditUpdater CreditUpdater,
 	escrowRepo repository.EscrowAccountRepository,
-	orderRepo repository.OrderRepository, // Phase 1
+	orderRepo repository.OrderRepository,
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
@@ -63,6 +64,12 @@ func NewProcessWebhookUsecase(
 		escrowRepo:       escrowRepo,
 		orderRepo:        orderRepo,
 	}
+}
+
+// WithCommissionRateRepo injecte les taux boutique pour online_payment (Phase 1)
+func (uc *ProcessWebhookUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *ProcessWebhookUsecase {
+	uc.commissionRateRepo = r
+	return uc
 }
 
 func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error {
@@ -94,7 +101,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		logger.Error().Err(err).Msg("Failed to record webhook audit")
 	}
 
-	// ---------- Tontine ----------
 	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
 		logger.Info().
 			Str("reference", reference).
@@ -116,7 +122,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	// ---------- Order payment ----------
 	var paymentEntity *entity.Payment
 	var findErr error
 
@@ -135,21 +140,33 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 		if oid, ok := event.Metadata["order_id"].(string); ok && oid != "" {
 			orderIDStr = oid
+			logger.Info().Str("found_order_id", orderIDStr).Msg("DEBUG: Found order_id directly in metadata")
 		} else if ref, ok := event.Metadata["reference"].(string); ok {
+			logger.Info().Str("found_reference", ref).Msg("DEBUG: Found reference in metadata")
 			if strings.HasPrefix(ref, "ORDER-") {
 				orderIDStr = strings.TrimPrefix(ref, "ORDER-")
+				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Extracted order_id from reference")
 			}
 		}
 
 		if orderIDStr != "" {
+			logger.Info().Str("fallback_order_id", orderIDStr).Msg("Tentative de fallback par order_id")
 			if orderUUID, parseErr := uuid.Parse(orderIDStr); parseErr == nil {
 				payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
-				if searchErr == nil && len(payments) > 0 {
+				if searchErr != nil {
+					logger.Error().Err(searchErr).Msg("DEBUG: FindByOrderIDUnscoped returned an error")
+				} else if len(payments) > 0 {
 					paymentEntity = payments[0]
 					findErr = nil
-					logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("✅ Payment retrouvé via fallback order_id")
+					logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("✅ Payment retrouvé avec succès via fallback order_id (Unscoped)")
+				} else {
+					logger.Warn().Msg("DEBUG: FindByOrderIDUnscoped returned 0 payments (empty slice)")
 				}
+			} else {
+				logger.Error().Err(parseErr).Str("order_id_str", orderIDStr).Msg("DEBUG: Failed to parse orderUUID")
 			}
+		} else {
+			logger.Warn().Msg("DEBUG: orderIDStr is empty, skipping fallback")
 		}
 	}
 
@@ -180,9 +197,9 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		}
 
 		if escrowAlreadyCreated {
-			// Phase 1 : même si déjà terminal, s'assurer que l'order est confirmed
-			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
+			// Safety : s'assurer que l'order est bien confirmed
+			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 			return nil
 		}
 
@@ -231,17 +248,10 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
 
 		if !isCredit && paymentEntity.OrderID != uuid.Nil {
-			commissionRate := 250
-			if uc.shopSettingsRepo != nil {
-				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
-				if err == nil && settings != nil {
-					if settings.CashCommissionRate > 0 {
-						commissionRate = settings.CashCommissionRate
-					}
-				}
-			}
-
-			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
+			// Phase 1 : taux GoShop via commission_rates (0–15 %), fallback 2.5 %
+			shopIDStr := paymentEntity.ShopID.String()
+			commissionRate := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
+			commissionCents := CalculateGoShopCommissionCents(paymentEntity.AmountCents, commissionRate)
 
 			providerFeesCents := int64(0)
 			if fees, ok := event.Metadata["payment_fees"].(float64); ok {
@@ -283,16 +293,14 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				logger.Info().
 					Int64("gross_amount", paymentEntity.AmountCents).
 					Int64("provider_fees_cents", providerFeesCents).
+					Int("commission_rate_bps", commissionRate).
 					Int64("commission_cents", commissionCents).
 					Int64("escrow_amount", netAmountCents).
 					Str("escrow_id", escrow.ID).
 					Msg("✅ Funds successfully locked in Escrow")
 			}
 
-			// ============================================================
-			// Phase 1 : confirmer l'order (pending → confirmed)
-			// Débloque submit_shipping_proof (exige confirmed | out_for_delivery)
-			// ============================================================
+			// Confirmer l'order (pending → confirmed) pour débloquer shipping proof
 			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 		}
 	}
@@ -305,8 +313,7 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	return nil
 }
 
-// ensureOrderConfirmed passe l'order de pending → confirmed si besoin.
-// Idempotent : no-op si déjà confirmed ou orderRepo nil.
+// ensureOrderConfirmed passe l'order de pending → confirmed si nécessaire (idempotent).
 func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) {
 	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
 		return
@@ -315,7 +322,9 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	orderIDStr := paymentEntity.OrderID.String()
 	order, err := uc.orderRepo.FindByID(ctx, orderIDStr)
 	if err != nil || order == nil {
-		logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("Failed to load order for confirmation after webhook")
+		if logger != nil {
+			logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: order not found")
+		}
 		return
 	}
 
@@ -323,19 +332,17 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 		return
 	}
 
-	if err := order.MarkAccepted(); err != nil {
-		logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("Failed to MarkAccepted after webhook SUCCESS")
-		return
-	}
-
+	order.MarkAccepted()
 	if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
-		logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("Failed to UpdateOrder after webhook SUCCESS")
+		if logger != nil {
+			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
+		}
 		return
 	}
 
-	logger.Info().
-		Str("order_id", orderIDStr).
-		Msg("✅ Order confirmed after payment webhook SUCCESS")
+	if logger != nil {
+		logger.Info().Str("order_id", orderIDStr).Msg("✅ Order confirmed after payment SUCCESS (webhook)")
+	}
 }
 
 func (uc *ProcessWebhookUsecase) recordWebhook(

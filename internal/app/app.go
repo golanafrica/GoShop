@@ -489,6 +489,15 @@ func (a *App) setupRouter() {
 		escrowRepo,
 	)
 
+	// ============================================================
+	// WEBHOOKS PAIEMENT (Yenga + Tontine)
+	// ------------------------------------------------------------
+	// rateRepo (commission_rates) est partagé :
+	//  - tontine  → WithCommissionRateRepo (taux par circle_type)
+	//  - orders   → WithCommissionRateRepo (transaction_type = online_payment)
+	// Sans WithCommissionRateRepo → fallback plateforme 2.5 % (250 bps).
+	// Plage autorisée : 0–1500 bps (0–15 %), voir entity.CommissionRate.Validate.
+	// ============================================================
 	processTontineWebhookUC := paymentusecase.NewProcessTontineWebhookUsecase(
 		tontinePaymentRepo,
 		tontineGroupRepo,
@@ -498,14 +507,17 @@ func (a *App) setupRouter() {
 		notifService,
 		postgresCustomerRepo,
 	).WithWalletCreditor(creditWalletUC).
-		WithCommissionRateRepo(rateRepo)
+		WithCommissionRateRepo(rateRepo) // taux tontine par boutique
 
+	// ProcessWebhookUsecase :
+	//  - 9e arg = orderRepo → confirm order (pending→confirmed) sur SUCCESS
+	//  - WithCommissionRateRepo → commission escrow orders via commission_rates
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
 		a.DB,
 		shopRepo,
-		shopRepo, // ShopPaymentSettingsRepository
+		shopRepo, // ShopPaymentSettingsRepository (settings boutique)
 		processTontineWebhookUC,
 		&creditUpdaterWrapper{
 			installmentRepo: creditInstallmentRepo,
@@ -513,8 +525,8 @@ func (a *App) setupRouter() {
 			creditWalletUC:  creditWalletUC,
 		},
 		escrowRepo,
-		postgresOrderRepo, // Phase 1 : confirmer order au webhook SUCCESS
-	)
+		postgresOrderRepo, // 9e arg : confirmation order sur webhook SUCCESS
+	).WithCommissionRateRepo(rateRepo) // Phase 1 : commission orders 0–15 %
 
 	// Withdrawal Usecases
 	createWithdrawalUC := withdrawalusecase.NewCreateWithdrawalUsecase(
@@ -567,6 +579,8 @@ func (a *App) setupRouter() {
 	)
 
 	// ============ 🆕 v4.8.0 : SYNC ORDER PAYMENT USECASE ============
+	// Même source de taux que le webhook (commission_rates / online_payment).
+	// Obligatoire pour que sync + webhook créent un escrow avec la même commission.
 	syncOrderPaymentUC := orderusecase.NewSyncOrderPaymentUsecase(
 		postgresOrderRepo,
 		paymentRepo,
@@ -575,7 +589,7 @@ func (a *App) setupRouter() {
 		paymentRegistry,
 		notifService,
 		txmanagerRepo,
-	)
+	).WithCommissionRateRepo(rateRepo) // Phase 1 : aligné process_webhook
 
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
