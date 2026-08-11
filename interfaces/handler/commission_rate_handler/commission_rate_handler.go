@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	appscheduler "Goshop/application/scheduler"
 	"Goshop/domain/entity"
@@ -99,23 +100,52 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 		return utils.NewAppError("INVALID_RATE", "Rate must be between 0 and 1500 bps (15%)", http.StatusBadRequest)
 	}
 
-	// Upsert
-	rate := &entity.CommissionRate{
-		ID:                 uuid.New().String(),
-		ShopID:             req.ShopID,
-		TransactionType:    req.TransactionType,
-		RateBps:            req.RateBps,
-		MinCommissionCents: req.MinCommissionCents,
-		MaxCommissionCents: req.MaxCommissionCents,
-		IsActive:           req.IsActive,
+	now := time.Now().UTC()
+
+	// Vrai upsert : chercher d'abord, puis créer ou mettre à jour
+	existing, findErr := h.rateRepo.FindByShopAndType(ctx, req.ShopID, req.TransactionType)
+	if findErr != nil || existing == nil {
+		// CREATE
+		rate := &entity.CommissionRate{
+			ID:                 uuid.New().String(),
+			ShopID:             req.ShopID,
+			TransactionType:    req.TransactionType,
+			RateBps:            req.RateBps,
+			MinCommissionCents: req.MinCommissionCents,
+			MaxCommissionCents: req.MaxCommissionCents,
+			IsActive:           req.IsActive,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := h.rateRepo.Create(ctx, rate); err != nil {
+			logger.Error().Err(err).Msg("Failed to create commission rate")
+			return utils.NewAppError("RATE_CREATE_FAILED", "Failed to create rate", http.StatusInternalServerError)
+		}
+		logger.Info().
+			Str("shop_id", req.ShopID).
+			Str("transaction_type", req.TransactionType).
+			Int("rate_bps", req.RateBps).
+			Msg("Commission rate created")
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Commission rate created",
+			"rate":    rate,
+		})
+		return nil
 	}
 
-	err := h.rateRepo.Update(ctx, rate)
-	if err != nil {
-		if err := h.rateRepo.Create(ctx, rate); err != nil {
-			logger.Error().Err(err).Msg("Failed to upsert rate")
-			return utils.NewAppError("RATE_UPSERT_FAILED", "Failed to update rate", http.StatusInternalServerError)
-		}
+	// UPDATE
+	existing.RateBps = req.RateBps
+	existing.MinCommissionCents = req.MinCommissionCents
+	existing.MaxCommissionCents = req.MaxCommissionCents
+	existing.IsActive = req.IsActive
+	existing.UpdatedAt = now
+
+	if err := h.rateRepo.Update(ctx, existing); err != nil {
+		logger.Error().Err(err).Msg("Failed to update commission rate")
+		return utils.NewAppError("RATE_UPDATE_FAILED", "Failed to update rate", http.StatusInternalServerError)
 	}
 
 	logger.Info().
@@ -128,7 +158,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Commission rate updated",
-		"rate":    rate,
+		"rate":    existing,
 	})
 	return nil
 }
