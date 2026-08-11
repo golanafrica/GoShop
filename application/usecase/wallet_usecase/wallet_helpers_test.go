@@ -188,7 +188,7 @@ func TestCreditWalletUsecase_CreditFromTontine_Success(t *testing.T) {
 	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
-	resp, err := uc.CreditFromTontine(ctx, shopID, 10000, "group-789")
+	resp, err := uc.CreditFromTontine(ctx, shopID, 10000, "group-789", 1)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)

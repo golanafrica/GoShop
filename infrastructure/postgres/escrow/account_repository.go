@@ -515,6 +515,46 @@ func (r *EscrowAccountRepositoryInfrastructure) UpdateStatus(ctx context.Context
 // MÉTHODES UTILITAIRES
 // ============================================================
 
+// ClaimRelease — UPDATE conditionnel anti race multi-instance
+// fromStatus typique : funds_held (auto-release) ou disputed (merchant_wins)
+func (r *EscrowAccountRepositoryInfrastructure) ClaimRelease(
+	ctx context.Context,
+	escrowID string,
+	fromStatus entity.EscrowAccountStatus,
+	releasedAmountCents int64,
+) (bool, error) {
+	if escrowID == "" {
+		return false, fmt.Errorf("escrow id is required")
+	}
+	if !fromStatus.IsValid() {
+		return false, fmt.Errorf("invalid fromStatus: %s", fromStatus)
+	}
+
+	query := `
+		UPDATE escrow_accounts
+		SET status = $3,
+		    released_amount_cents = $4,
+		    funds_released_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND status = $2
+	`
+	res, err := r.execContext(ctx, query,
+		escrowID,
+		fromStatus,
+		entity.EscrowAccountFullyReleased, // "released"
+		releasedAmountCents,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim release failed: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim release rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
 // Exists vérifie si un compte séquestre existe
 func (r *EscrowAccountRepositoryInfrastructure) Exists(ctx context.Context, id string) (bool, error) {
 	query := `SELECT COUNT(*) FROM escrow_accounts WHERE id = $1`

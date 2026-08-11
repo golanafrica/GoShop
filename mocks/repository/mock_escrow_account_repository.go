@@ -42,6 +42,21 @@ func (m *MockEscrowAccountRepository) EXPECT() *MockEscrowAccountRepositoryMockR
 	return m.recorder
 }
 
+// ClaimRelease mocks base method.
+func (m *MockEscrowAccountRepository) ClaimRelease(ctx context.Context, escrowID string, fromStatus entity.EscrowAccountStatus, releasedAmountCents int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClaimRelease", ctx, escrowID, fromStatus, releasedAmountCents)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ClaimRelease indicates an expected call of ClaimRelease.
+func (mr *MockEscrowAccountRepositoryMockRecorder) ClaimRelease(ctx, escrowID, fromStatus, releasedAmountCents any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClaimRelease", reflect.TypeOf((*MockEscrowAccountRepository)(nil).ClaimRelease), ctx, escrowID, fromStatus, releasedAmountCents)
+}
+
 // Create mocks base method.
 func (m *MockEscrowAccountRepository) Create(ctx context.Context, account *entity.EscrowAccount) error {
 	m.ctrl.T.Helper()

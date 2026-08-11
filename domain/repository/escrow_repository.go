@@ -54,6 +54,12 @@ type EscrowAccountRepository interface {
 	// UpdateStatus met à jour uniquement le statut
 	UpdateStatus(ctx context.Context, id string, status entity.EscrowAccountStatus) error
 
+	// ClaimRelease tente de passer l'escrow de fromStatus vers "released" de façon atomique.
+	// Retourne (true, nil) si cette instance a gagné le claim (1 row updated).
+	// Retourne (false, nil) si une autre instance a déjà libéré / mauvais statut.
+	// Utilisé par l'auto-release pour éviter le double crédit wallet.
+	ClaimRelease(ctx context.Context, escrowID string, fromStatus entity.EscrowAccountStatus, releasedAmountCents int64) (bool, error)
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) EscrowAccountRepository
 }

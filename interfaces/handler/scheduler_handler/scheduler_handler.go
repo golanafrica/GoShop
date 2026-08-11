@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+
 	"strconv"
+	"strings"
 
 	appscheduler "Goshop/application/scheduler"
 	"Goshop/domain/repository"
@@ -164,13 +166,15 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 	// 🔒 SÉCURITÉ : Vérifier si l'endpoint est activé
 	// En production, ENABLE_FORCE_RELEASE ne doit PAS être défini ou doit être "false"
 	enableForceRelease := os.Getenv("ENABLE_FORCE_RELEASE")
-	if enableForceRelease != "true" {
+	appEnv := strings.ToLower(os.Getenv("APP_ENV"))
+	if enableForceRelease != "true" || appEnv == "production" {
 		logger.Warn().
 			Str("remote_ip", r.RemoteAddr).
-			Msg("🚨 Force auto-release attempt blocked (disabled in production)")
+			Str("app_env", appEnv).
+			Msg("🚨 Force auto-release attempt blocked")
 		return utils.NewAppError(
 			"FORCE_RELEASE_DISABLED",
-			"Force auto-release is disabled. Set ENABLE_FORCE_RELEASE=true to enable (DEV/TEST only).",
+			"Force auto-release is disabled in this environment.",
 			http.StatusForbidden,
 		)
 	}

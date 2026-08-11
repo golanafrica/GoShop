@@ -1083,3 +1083,19 @@ func (r *WalletTransactionRepositoryInfrastructure) CreateAdmin(ctx context.Cont
 	}
 	return nil
 }
+
+// FindByReferenceIDAdmin — sans filtre tenant (scheduler / system)
+func (r *WalletTransactionRepositoryInfrastructure) FindByReferenceIDAdmin(
+	ctx context.Context,
+	refType string,
+	refID string,
+) (*entity.WalletTransaction, error) {
+	query := `
+		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		       reference_type, reference_id, description, status, created_at
+		FROM wallet_transactions
+		WHERE reference_type = $1 AND reference_id = $2
+		LIMIT 1
+	`
+	return r.scanTransaction(r.queryRowContext(ctx, query, refType, refID))
+}

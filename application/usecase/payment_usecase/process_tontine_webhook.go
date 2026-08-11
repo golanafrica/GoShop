@@ -20,7 +20,7 @@ import (
 
 // TontineWalletCreditor abstrait le crédit wallet (évite import circulaire usecase→usecase)
 type TontineWalletCreditor interface {
-	CreditFromTontine(ctx context.Context, shopID string, amountCents int64, groupID string) (*walletusecase.CreditWalletResponse, error)
+	CreditFromTontine(ctx context.Context, shopID string, amountCents int64, groupID string, cycleNumber int) (*walletusecase.CreditWalletResponse, error)
 }
 
 // ProcessTontineWebhookUsecase traite les webhooks YengaPay pour les paiements de tontine
@@ -369,7 +369,7 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 
 	// Crédit NET + hold sur le wallet marchand
 	if uc.walletCreditor != nil && netCents > 0 {
-		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID); err != nil {
+		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
 			logger.Error().Err(err).
 				Str("shop_id", group.ShopID).
 				Int64("net_cents", netCents).

@@ -3,6 +3,7 @@ package walletusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -69,7 +70,7 @@ func (r *CreditWalletRequest) Validate() error {
 type CreditWalletUsecase struct {
 	walletRepo repository.MerchantWalletRepository
 	txnRepo    repository.WalletTransactionRepository
-	escrowRepo repository.EscrowAccountRepository // 🆕 v4.8.0 : Pour vérifier l'état de l'escrow
+	escrowRepo repository.EscrowAccountRepository
 	txManager  repository.TxManager
 }
 
@@ -77,13 +78,13 @@ type CreditWalletUsecase struct {
 func NewCreditWalletUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	txnRepo repository.WalletTransactionRepository,
-	escrowRepo repository.EscrowAccountRepository, // 🆕 v4.8.0
+	escrowRepo repository.EscrowAccountRepository,
 	txManager repository.TxManager,
 ) *CreditWalletUsecase {
 	return &CreditWalletUsecase{
 		walletRepo: walletRepo,
 		txnRepo:    txnRepo,
-		escrowRepo: escrowRepo, // 🆕 v4.8.0
+		escrowRepo: escrowRepo,
 		txManager:  txManager,
 	}
 }
@@ -113,14 +114,12 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	defer tx.Rollback()
 
 	// ============================================================
-	// 🛡️ SÉCURITÉ CRITIQUE v4.8.0 : Vérifier l'état de l'escrow
+	// 🛡️ SÉCURITÉ : Vérifier l'état de l'escrow (orders / credit only)
+	// tontine_cycle / tontine_group : crédit held en fin de cycle — PAS de gate escrow
 	// ============================================================
-	// Si le crédit provient d'une vente (order, credit_contract, tontine),
-	// vérifier que l'escrow est libéré avant de créditer le wallet
 	if req.ReferenceType != nil && req.ReferenceID != nil && uc.escrowRepo != nil {
 		switch *req.ReferenceType {
-		case "order", "credit_contract", "tontine_group", "escrow_release":
-			// Trouver l'escrow correspondant
+		case "order", "credit_contract", "escrow_release":
 			var escrow *entity.EscrowAccount
 			var findErr error
 
@@ -129,15 +128,11 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByOrderID(ctx, *req.ReferenceID)
 			case "credit_contract":
 				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByCreditContractID(ctx, *req.ReferenceID)
-			case "tontine_group":
-				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByTontineGroupID(ctx, *req.ReferenceID)
 			case "escrow_release":
-				// ReferenceID est directement l'escrow ID
 				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByID(ctx, *req.ReferenceID)
 			}
 
 			if findErr == nil && escrow != nil {
-				// 🛡️ BLOQUER le crédit si l'escrow n'est pas encore libéré
 				if escrow.IsBlockedFromRelease() {
 					logger.Error().
 						Str("shop_id", req.ShopID).
@@ -154,7 +149,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 					)
 				}
 
-				// Vérifier que l'escrow permet le crédit
 				if !escrow.CanReleaseToMerchant() {
 					logger.Error().
 						Str("escrow_id", escrow.ID).
@@ -177,9 +171,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			}
 		}
 	}
-	// ============================================================
-	// Fin de la vérification escrow
-	// ============================================================
 
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
@@ -204,9 +195,39 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		return nil, fmt.Errorf("wallet is frozen, cannot credit")
 	}
 
+	// ============================================================
+	// IDEMPOTENCE : déjà crédité pour cette référence ?
+	// ============================================================
+	if req.ReferenceType != nil && req.ReferenceID != nil {
+		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
+		if findErr == nil && existing != nil && existing.Status == entity.WalletTxCompleted {
+			logger.Info().
+				Str("ref_type", *req.ReferenceType).
+				Str("ref_id", *req.ReferenceID).
+				Str("existing_txn", existing.ID).
+				Msg("⏭️ Idempotent skip — credit already completed")
+			// Commit vide (rien modifié) pour libérer le FOR UPDATE proprement
+			if err := tx.Commit(); err != nil {
+				_ = tx.Rollback()
+			}
+			return &CreditWalletResponse{
+				ShopID:            wallet.ShopID,
+				BalanceCents:      wallet.BalanceCents,
+				HeldCents:         wallet.HeldCents,
+				AvailableCents:    wallet.AvailableCents(),
+				PreviousBalance:   wallet.BalanceCents,
+				IsFrozen:          wallet.IsFrozen,
+				TransactionID:     existing.ID,
+				TransactionType:   existing.TransactionType,
+				AmountCents:       existing.AmountCents,
+				BalanceAfterCents: existing.BalanceAfterCents,
+				Held:              req.HoldAfterCredit,
+			}, nil
+		}
+	}
+
 	previousBalance := wallet.BalanceCents
 
-	// Phase 2 : crédit simple OU crédit + hold
 	if req.HoldAfterCredit {
 		if err := wallet.CreditAndHold(req.AmountCents); err != nil {
 			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
@@ -243,6 +264,20 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate key") ||
+			strings.Contains(msg, "unique constraint") ||
+			strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+			strings.Contains(msg, "23505") {
+			logger.Info().Msg("⏭️ Unique constraint — concurrent credit, treat as success")
+			_ = tx.Rollback()
+			return &CreditWalletResponse{
+				ShopID:          req.ShopID,
+				AmountCents:     req.AmountCents,
+				TransactionType: req.TransactionType,
+				Held:            req.HoldAfterCredit,
+			}, nil
+		}
 		logger.Error().Err(err).Msg("Failed to create transaction")
 		return nil, fmt.Errorf("failed to create transaction: %w", err)
 	}
@@ -322,24 +357,27 @@ func (uc *CreditWalletUsecase) CreditFromCOD(
 }
 
 // CreditFromTontine crédite le NET du cycle et le met en held (non retirable).
-// Signature inchangée pour ProcessTontineWebhook / TontineWalletCreditor.
+// reference_id = "{groupID}:cycle:{N}" pour uq_wallet_txn_ref_completed
+// (un groupe a plusieurs cycles → un crédit distinct par cycle).
 func (uc *CreditWalletUsecase) CreditFromTontine(
 	ctx context.Context,
 	shopID string,
 	amountCents int64,
 	groupID string,
+	cycleNumber int,
 ) (*CreditWalletResponse, error) {
-	refType := "tontine_group"
-	description := fmt.Sprintf("Tontine cycle settlement (net) group %s", groupID)
+	refType := "tontine_cycle"
+	refID := fmt.Sprintf("%s:cycle:%d", groupID, cycleNumber)
+	description := fmt.Sprintf("Tontine cycle %d settlement (net) group %s", cycleNumber, groupID)
 
 	req := &CreditWalletRequest{
 		ShopID:          shopID,
 		AmountCents:     amountCents,
 		TransactionType: entity.WalletTxSaleTontine,
 		ReferenceType:   &refType,
-		ReferenceID:     &groupID,
+		ReferenceID:     &refID,
 		Description:     &description,
-		HoldAfterCredit: true, // Phase 2 : gel jusqu'à preuve / redeem
+		HoldAfterCredit: true,
 	}
 
 	return uc.Execute(ctx, req)
