@@ -112,8 +112,16 @@ type DeliveryProofRepository interface {
 	// Update met à jour une preuve
 	Update(ctx context.Context, proof *entity.DeliveryProof) error
 
+	// FindAutoReleaseEligibleForUpdate retourne les proofs éligibles avec verrouillage pessimiste
+	// Utilise FOR UPDATE SKIP LOCKED pour éviter les race conditions entre instances du scheduler
+	FindAutoReleaseEligibleForUpdate(ctx context.Context) ([]*entity.DeliveryProof, error)
+
 	// UpdateEscrowStatus met à jour uniquement le statut escrow
 	UpdateEscrowStatus(ctx context.Context, id string, status entity.EscrowStatus) error
+
+	// BeginTx démarre une nouvelle transaction SQL pour opérations atomiques
+	// Utilisé par le scheduler d'auto-release pour garantir l'atomicité des opérations
+	BeginTx(ctx context.Context) (Tx, error)
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) DeliveryProofRepository

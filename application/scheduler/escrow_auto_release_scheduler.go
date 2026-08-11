@@ -71,8 +71,9 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 		Int("batch_size", s.batchSize).
 		Msg("🚀 Starting escrow auto-release")
 
-	// 1. Récupérer les preuves éligibles (delivered + 3 jours + pas de litige actif côté proof)
-	proofs, err := s.deliveryProofRepo.FindAutoReleaseEligible(ctx)
+	// 1. Récupérer les preuves éligibles avec verrouillage pessimiste (FOR UPDATE SKIP LOCKED)
+	//    Cela garantit qu'aucune autre instance du scheduler ne peut traiter les mêmes proofs
+	proofs, err := s.deliveryProofRepo.FindAutoReleaseEligibleForUpdate(ctx)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to fetch eligible proofs")
 		return fmt.Errorf("failed to fetch eligible proofs: %w", err)
@@ -119,7 +120,7 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 	return nil
 }
 
-// processProof traite une preuve individuelle
+// processProof traite une preuve individuelle avec transaction SQL atomique
 // Utilise FindByIDAdmin pour bypasser le multi-tenant (contexte scheduler).
 func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *entity.DeliveryProof) (int64, error) {
 	itemLogger := s.logger.With().
@@ -155,7 +156,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	itemLogger = itemLogger.With().Str("shop_id", shopID).Logger()
 
 	// 3. Trouver l'EscrowAccount AVANT de muter la proof
-	//    (si litige / terminal → on ne touche ni proof ni wallet)
 	var escrow *entity.EscrowAccount
 	if proof.OrderID != nil {
 		escrow, err = s.escrowRepo.FindByOrderID(ctx, *proof.OrderID)
@@ -184,7 +184,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	// ────────────────────────────────────────────────────────────
 	// Phase 3.1 — sécurité litige / double release
 	// Ne JAMAIS auto-libérer un escrow disputed ou déjà terminal.
-	// funds_held reste autorisé (happy path après preuves).
 	// ────────────────────────────────────────────────────────────
 	switch escrow.Status {
 	case entity.EscrowAccountDisputed:
@@ -208,7 +207,42 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	// 6. Montant net marchand = TotalAmountCents - CommissionCents (GoShop)
 	merchantAmount := escrow.GetMerchantAmount()
 
-	// 7. Créditer le wallet du marchand (avec retry)
+	// ────────────────────────────────────────────────────────────
+	// 🔒 TRANSACTION SQL ATOMIQUE — Correction critique v5.0.0
+	// Persister proof + escrow AVANT le crédit wallet pour éviter
+	// le scénario de double-crédit en cas de crash serveur.
+	// ────────────────────────────────────────────────────────────
+
+	// Ouvrir une transaction pour la persistance atomique
+	// Ouvrir une transaction pour la persistance atomique
+	tx, err := s.deliveryProofRepo.BeginTx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Utiliser les repositories attachés à la transaction
+	txDeliveryProofRepo := s.deliveryProofRepo.WithTX(tx)
+	txEscrowRepo := s.escrowRepo.WithTX(tx)
+
+	// Persister la preuve (dans la TX)
+	if err := txDeliveryProofRepo.Update(ctx, proof); err != nil {
+		return 0, fmt.Errorf("failed to update delivery proof in transaction: %w", err)
+	}
+
+	// Persister l'escrow (dans la TX)
+	if err := txEscrowRepo.Update(ctx, escrow); err != nil {
+		return 0, fmt.Errorf("failed to update escrow in transaction: %w", err)
+	}
+
+	// COMMIT avant le crédit wallet
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	itemLogger.Info().Msg("✅ Escrow and proof persisted atomically")
+
+	// 7. Créditer le wallet du marchand (avec retry, HORS transaction)
 	var lastErr error
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, proof.ID, escrow.ID)
@@ -228,17 +262,15 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	}
 
 	if lastErr != nil {
+		// CRITIQUE : Les fonds ont été libérés mais le wallet n'a pas été crédité
+		// Une réconciliation manuelle est nécessaire
+		s.logger.Error().
+			Err(lastErr).
+			Str("proof_id", proof.ID).
+			Str("escrow_id", escrow.ID).
+			Int64("merchant_amount", merchantAmount).
+			Msg("🚨 CRITICAL: Wallet credit failed after escrow release - MANUAL RECONCILIATION NEEDED")
 		return 0, fmt.Errorf("failed to credit merchant wallet after %d attempts: %w", s.maxRetries, lastErr)
-	}
-
-	// 8. Persister la preuve
-	if err := s.deliveryProofRepo.Update(ctx, proof); err != nil {
-		return 0, fmt.Errorf("failed to update delivery proof: %w", err)
-	}
-
-	// 9. Persister l'escrow
-	if err := s.escrowRepo.Update(ctx, escrow); err != nil {
-		return 0, fmt.Errorf("failed to update escrow: %w", err)
 	}
 
 	itemLogger.Info().

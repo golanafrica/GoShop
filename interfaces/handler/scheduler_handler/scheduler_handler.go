@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 
 	appscheduler "Goshop/application/scheduler"
@@ -142,20 +143,37 @@ func (h *SchedulerHandler) TriggerEscrowAutoRelease(w http.ResponseWriter, r *ht
 
 // ============================================================
 // 🆕 v4.8.4 : FORCE AUTO-RELEASE (TEST/ADMIN)
+// 🔒 v5.0.0 : SÉCURISÉ - Désactivé en production par défaut
 // ============================================================
 
-// @Summary Forcer l'auto-release d'une commande spécifique
-// @Description Met le delivery_date à -N jours et déclenche immédiatement le scheduler (utile pour tests E2E)
+// @Summary Forcer l'auto-release d'une commande spécifique (DEV/TEST ONLY)
+// @Description Met le delivery_date à -N jours et déclenche immédiatement le scheduler.
+// @Description ⚠️ DÉSACTIVÉ EN PRODUCTION par défaut (ENABLE_FORCE_RELEASE=true requis).
 // @Tags Admin Scheduler
 // @Accept json
 // @Produce json
 // @Param order_id path string true "ID de la commande"
 // @Param days query int false "Nombre de jours dans le passé (défaut: 4)"
 // @Success 200 {object} map[string]interface{}
+// @Failure 403 {object} utils.AppError "Désactivé en production"
 // @Router /api/admin/scheduler/force-auto-release/{order_id} [post]
 func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
+
+	// 🔒 SÉCURITÉ : Vérifier si l'endpoint est activé
+	// En production, ENABLE_FORCE_RELEASE ne doit PAS être défini ou doit être "false"
+	enableForceRelease := os.Getenv("ENABLE_FORCE_RELEASE")
+	if enableForceRelease != "true" {
+		logger.Warn().
+			Str("remote_ip", r.RemoteAddr).
+			Msg("🚨 Force auto-release attempt blocked (disabled in production)")
+		return utils.NewAppError(
+			"FORCE_RELEASE_DISABLED",
+			"Force auto-release is disabled. Set ENABLE_FORCE_RELEASE=true to enable (DEV/TEST only).",
+			http.StatusForbidden,
+		)
+	}
 
 	orderID := r.PathValue("order_id")
 	if orderID == "" {
@@ -169,10 +187,19 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	logger.Info().
+	// Récupérer l'ID de l'admin pour audit
+	executedBy := r.Header.Get("X-Admin-ID")
+	if executedBy == "" {
+		executedBy = "admin-unknown"
+	}
+
+	// 📝 Log d'audit critique
+	logger.Warn().
 		Str("order_id", orderID).
 		Int("days_ago", daysAgo).
-		Msg("🔧 Force auto-release triggered")
+		Str("executed_by", executedBy).
+		Str("remote_ip", r.RemoteAddr).
+		Msg("⚠️ FORCE AUTO-RELEASE TRIGGERED (bypassing 3-day protection)")
 
 	// 1. Forcer le delivery_date
 	if err := h.deliveryProofRepo.ForceDeliveryDate(ctx, orderID, daysAgo); err != nil {
@@ -196,10 +223,11 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 	}()
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"success":  true,
-		"order_id": orderID,
-		"days_ago": daysAgo,
-		"message":  fmt.Sprintf("delivery_date set to -%d days, auto-release triggered", daysAgo),
+		"success":     true,
+		"order_id":    orderID,
+		"days_ago":    daysAgo,
+		"executed_by": executedBy,
+		"message":     fmt.Sprintf("delivery_date set to -%d days, auto-release triggered", daysAgo),
 	})
 	return nil
 }

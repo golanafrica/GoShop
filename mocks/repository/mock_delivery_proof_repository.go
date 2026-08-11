@@ -42,6 +42,21 @@ func (m *MockDeliveryProofRepository) EXPECT() *MockDeliveryProofRepositoryMockR
 	return m.recorder
 }
 
+// BeginTx mocks base method.
+func (m *MockDeliveryProofRepository) BeginTx(ctx context.Context) (repository.Tx, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BeginTx", ctx)
+	ret0, _ := ret[0].(repository.Tx)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BeginTx indicates an expected call of BeginTx.
+func (mr *MockDeliveryProofRepositoryMockRecorder) BeginTx(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BeginTx", reflect.TypeOf((*MockDeliveryProofRepository)(nil).BeginTx), ctx)
+}
+
 // CountByStatusByShopID mocks base method.
 func (m *MockDeliveryProofRepository) CountByStatusByShopID(ctx context.Context, shopID string, status entity.EscrowStatus) (int, error) {
 	m.ctrl.T.Helper()
@@ -84,6 +99,21 @@ func (m *MockDeliveryProofRepository) FindAutoReleaseEligible(ctx context.Contex
 func (mr *MockDeliveryProofRepositoryMockRecorder) FindAutoReleaseEligible(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAutoReleaseEligible", reflect.TypeOf((*MockDeliveryProofRepository)(nil).FindAutoReleaseEligible), ctx)
+}
+
+// FindAutoReleaseEligibleForUpdate mocks base method.
+func (m *MockDeliveryProofRepository) FindAutoReleaseEligibleForUpdate(ctx context.Context) ([]*entity.DeliveryProof, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindAutoReleaseEligibleForUpdate", ctx)
+	ret0, _ := ret[0].([]*entity.DeliveryProof)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindAutoReleaseEligibleForUpdate indicates an expected call of FindAutoReleaseEligibleForUpdate.
+func (mr *MockDeliveryProofRepositoryMockRecorder) FindAutoReleaseEligibleForUpdate(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindAutoReleaseEligibleForUpdate", reflect.TypeOf((*MockDeliveryProofRepository)(nil).FindAutoReleaseEligibleForUpdate), ctx)
 }
 
 // FindByCreditContractID mocks base method.
