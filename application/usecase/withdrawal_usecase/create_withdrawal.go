@@ -18,52 +18,54 @@ import (
 type CreateWithdrawalUsecase struct {
 	withdrawalRepo  repository.WithdrawalRepository
 	shopPaymentRepo ShopPaymentSettingsRepository
+	walletRepo      repository.MerchantWalletRepository // Phase 2 : available = balance - held
 	registry        PaymentRegistry
 	yengaPayFactory YengaPayProviderFactory
-	debitWalletUC   *walletusecase.DebitWalletUsecase // ✅ AJOUT : Pour débiter le wallet avant le retrait
+	debitWalletUC   *walletusecase.DebitWalletUsecase
 }
 
 func NewCreateWithdrawalUsecase(
 	withdrawalRepo repository.WithdrawalRepository,
 	shopPaymentRepo ShopPaymentSettingsRepository,
+	walletRepo repository.MerchantWalletRepository,
 	registry PaymentRegistry,
-	debitWalletUC *walletusecase.DebitWalletUsecase, // ✅ AJOUT
+	debitWalletUC *walletusecase.DebitWalletUsecase,
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
 		shopPaymentRepo: shopPaymentRepo,
+		walletRepo:      walletRepo,
 		registry:        registry,
 		yengaPayFactory: defaultYengaPayFactory,
-		debitWalletUC:   debitWalletUC, // ✅ AJOUT
+		debitWalletUC:   debitWalletUC,
 	}
 }
 
-// defaultYengaPayFactory est la factory par défaut qui crée un vrai provider
 func defaultYengaPayFactory(config payment.YengaPayConfig) (CashOutProvider, error) {
 	return payment.NewYengaPayProvider(config)
 }
 
-// NewCreateWithdrawalUsecaseWithFactory crée une instance avec factory personnalisée (pour tests)
 func NewCreateWithdrawalUsecaseWithFactory(
 	withdrawalRepo repository.WithdrawalRepository,
 	shopPaymentRepo ShopPaymentSettingsRepository,
+	walletRepo repository.MerchantWalletRepository,
 	registry PaymentRegistry,
 	yengaPayFactory YengaPayProviderFactory,
-	debitWalletUC *walletusecase.DebitWalletUsecase, // ✅ AJOUT
+	debitWalletUC *walletusecase.DebitWalletUsecase,
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
 		shopPaymentRepo: shopPaymentRepo,
+		walletRepo:      walletRepo,
 		registry:        registry,
 		yengaPayFactory: yengaPayFactory,
-		debitWalletUC:   debitWalletUC, // ✅ AJOUT
+		debitWalletUC:   debitWalletUC,
 	}
 }
 
 func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawaldto.CreateWithdrawalRequest) (*withdrawaldto.WithdrawalResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le shop du contexte
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
@@ -76,7 +78,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("Creating withdrawal")
 
 	// ============================================================
-	// 🆕 v4.1.0 : Vérification KYC pour les retraits
+	// KYC
 	// ============================================================
 	if !shop.CanWithdraw() {
 		logger.Warn().
@@ -111,14 +113,51 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("✅ KYC vérifié, retrait autorisé")
 
 	// ============================================================
-	// ✅ 2. NOUVEAU : Débiter le wallet AVANT d'appeler l'API externe
-	// Cela garantit que le marchand a les fonds et évite les découverts non gérés.
+	// Phase 2 : retrait UNIQUEMENT sur available = balance - held
 	// ============================================================
+	if req.AmountCents <= 0 {
+		return nil, fmt.Errorf("amount_cents must be positive")
+	}
+
+	// ℹ️ Ce check est un "fail-fast" pour l'UX (éviter d'appeler YengaPay pour rien).
+	// La garde de sécurité réelle est dans DebitWalletUsecase.Execute (vérif atomique
+	// sous FOR UPDATE). Ne pas supprimer ce bloc pour autant : il évite un appel API inutile.
+	if uc.walletRepo != nil {
+		wallet, err := uc.walletRepo.FindByShopID(ctx, shop.ID.String())
+		if err != nil {
+			logger.Error().Err(err).Msg("Failed to load wallet for available check")
+			return nil, fmt.Errorf("failed to load wallet: %w", err)
+		}
+		available := wallet.AvailableCents()
+		if req.AmountCents > available {
+			logger.Warn().
+				Str("shop_id", shop.ID.String()).
+				Int64("requested", req.AmountCents).
+				Int64("balance_cents", wallet.BalanceCents).
+				Int64("held_cents", wallet.HeldCents).
+				Int64("available_cents", available).
+				Msg("❌ Retrait bloqué : fonds insuffisants (held inclus)")
+			return nil, fmt.Errorf(
+				"insufficient available balance: requested=%d available=%d (balance=%d held=%d)",
+				req.AmountCents, available, wallet.BalanceCents, wallet.HeldCents,
+			)
+		}
+	} else {
+		logger.Warn().Msg("walletRepo not configured on CreateWithdrawalUsecase — skipping fail-fast available check (real guard still enforced in DebitWalletUsecase)")
+	}
+
+	// ============================================================
+	// Débit wallet (ledger) — garde atomique held dans DebitWalletUsecase
+	// ============================================================
+	if uc.debitWalletUC == nil {
+		return nil, fmt.Errorf("debit wallet usecase not configured")
+	}
+
 	debitReq := &walletusecase.DebitWalletRequest{
 		ShopID:          shop.ID.String(),
 		AmountCents:     req.AmountCents,
-		TransactionType: entity.WalletTxPayout, // ✅ Le nom exact de la constante dans ton code
-		AllowNegative:   false,                 // ✅ Interdire le négatif pour un retrait
+		TransactionType: entity.WalletTxPayout,
+		AllowNegative:   false,
 	}
 
 	_, err = uc.debitWalletUC.Execute(ctx, debitReq)
@@ -127,7 +166,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("insufficient funds or wallet error: %w", err)
 	}
 
-	// 3. Créer l'entité Withdrawal
+	// 3. Entité Withdrawal
 	withdrawal, err := entity.NewWithdrawal(
 		shop.ID,
 		req.AmountCents,
@@ -148,12 +187,11 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		withdrawal.Description = &req.Description
 	}
 
-	// 4. Sauvegarder en statut PENDING
 	if err := uc.withdrawalRepo.Create(ctx, withdrawal); err != nil {
 		return nil, fmt.Errorf("save withdrawal: %w", err)
 	}
 
-	// 5. Récupérer la config Yenga Pay de la boutique (fallback hybride)
+	// Config Yenga Pay
 	var providerConfig payment.YengaPayConfig
 
 	settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID)
@@ -169,7 +207,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		}
 		logger.Info().Msg("Using shop-specific Yenga Pay configuration for cash-out")
 	} else {
-		// Fallback sur config globale
 		providerConfig = payment.YengaPayConfig{
 			APIKey:         getEnvOrDefault("YENGA_PAY_API_KEY", ""),
 			OrganizationID: getEnvOrDefault("YENGA_PAY_ORGANIZATION_ID", ""),
@@ -180,17 +217,14 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		logger.Info().Msg("Using global Yenga Pay configuration for cash-out")
 	}
 
-	// 6. Créer un provider Yenga Pay avec la config
 	yengaProvider, err := uc.yengaPayFactory(providerConfig)
 	if err != nil {
-		// ✅ CORRECTION : Marquer le retrait comme échoué si la création du provider échoue
 		if markErr := withdrawal.MarkFailed(err.Error()); markErr == nil {
 			_ = uc.withdrawalRepo.Update(ctx, withdrawal)
 		}
 		return nil, fmt.Errorf("create yenga provider: %w", err)
 	}
 
-	// 7. Appeler l'API cash-out
 	cashOutReq := &payment.CashOutRequest{
 		AmountCents:       req.AmountCents,
 		PaymentMethod:     req.PaymentMethod,
@@ -208,7 +242,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("cash-out with Yenga Pay: %w", err)
 	}
 
-	// 8. Mettre à jour le retrait avec la réponse
 	if err := withdrawal.MarkProcessing(cashOutResp.ProviderRef); err != nil {
 		return nil, fmt.Errorf("mark processing: %w", err)
 	}

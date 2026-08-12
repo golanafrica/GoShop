@@ -48,16 +48,20 @@ func NewWalletHandler(
 
 // WalletResponse représente la réponse standard pour le wallet
 type WalletResponse struct {
-	ShopID           string `json:"shop_id"`
-	BalanceCents     int64  `json:"balance_cents"`
-	BalanceFormatted string `json:"balance_formatted"` // "50 000 FCFA"
-	IsFrozen         bool   `json:"is_frozen"`
-	FrozenReason     string `json:"frozen_reason,omitempty"`
-	FrozenUntil      string `json:"frozen_until,omitempty"`
-	MaxNegativeCents int64  `json:"max_negative_cents"`
-	TotalSalesCents  int64  `json:"total_sales_cents"`
-	TotalCommissions int64  `json:"total_commissions_cents"`
-	TotalPayouts     int64  `json:"total_payouts_cents"`
+	ShopID             string `json:"shop_id"`
+	BalanceCents       int64  `json:"balance_cents"`
+	BalanceFormatted   string `json:"balance_formatted"`   // "50 000 FCFA"
+	HeldCents          int64  `json:"held_cents"`          // 🆕 Phase 5 : fonds gelés (tontine vouchers non redeemés)
+	HeldFormatted      string `json:"held_formatted"`      // 🆕 Phase 5
+	AvailableCents     int64  `json:"available_cents"`     // 🆕 Phase 5 : balance - held (retirable)
+	AvailableFormatted string `json:"available_formatted"` // 🆕 Phase 5
+	IsFrozen           bool   `json:"is_frozen"`
+	FrozenReason       string `json:"frozen_reason,omitempty"`
+	FrozenUntil        string `json:"frozen_until,omitempty"`
+	MaxNegativeCents   int64  `json:"max_negative_cents"`
+	TotalSalesCents    int64  `json:"total_sales_cents"`
+	TotalCommissions   int64  `json:"total_commissions_cents"`
+	TotalPayouts       int64  `json:"total_payouts_cents"`
 }
 
 // DepositRequest représente la requête pour un dépôt
@@ -94,7 +98,7 @@ type FreezeStatusResponse struct {
 // ============================================================
 
 // @Summary Obtenir les informations du wallet
-// @Description Retourne le solde et le statut actuel du portefeuille de la boutique active.
+// @Description Retourne le solde, les fonds gelés (held) et le solde disponible du portefeuille de la boutique active.
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
@@ -124,25 +128,35 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 			Msg("Wallet not found, returning empty wallet")
 
 		utils.WriteJSON(w, http.StatusOK, WalletResponse{
-			ShopID:           shopID,
-			BalanceCents:     0,
-			BalanceFormatted: "0 FCFA",
-			IsFrozen:         false,
-			MaxNegativeCents: entity.DefaultMaxNegativeBalanceCents,
+			ShopID:             shopID,
+			BalanceCents:       0,
+			BalanceFormatted:   "0 FCFA",
+			HeldCents:          0,
+			HeldFormatted:      "0 FCFA",
+			AvailableCents:     0,
+			AvailableFormatted: "0 FCFA",
+			IsFrozen:           false,
+			MaxNegativeCents:   entity.DefaultMaxNegativeBalanceCents,
 		})
 		return
 	}
 
-	// 3. Construire la réponse
+	// 3. Construire la réponse avec held_cents et available_cents (Phase 5)
+	availableCents := wallet.AvailableCents()
+
 	response := WalletResponse{
-		ShopID:           wallet.ShopID,
-		BalanceCents:     wallet.BalanceCents,
-		BalanceFormatted: formatMoney(wallet.BalanceCents),
-		IsFrozen:         wallet.IsFrozen,
-		MaxNegativeCents: wallet.MaxNegativeBalanceCents,
-		TotalSalesCents:  wallet.TotalSalesCents,
-		TotalCommissions: wallet.TotalCommissionsCents,
-		TotalPayouts:     wallet.TotalPayoutsCents,
+		ShopID:             wallet.ShopID,
+		BalanceCents:       wallet.BalanceCents,
+		BalanceFormatted:   formatMoney(wallet.BalanceCents),
+		HeldCents:          wallet.HeldCents,
+		HeldFormatted:      formatMoney(wallet.HeldCents),
+		AvailableCents:     availableCents,
+		AvailableFormatted: formatMoney(availableCents),
+		IsFrozen:           wallet.IsFrozen,
+		MaxNegativeCents:   wallet.MaxNegativeBalanceCents,
+		TotalSalesCents:    wallet.TotalSalesCents,
+		TotalCommissions:   wallet.TotalCommissionsCents,
+		TotalPayouts:       wallet.TotalPayoutsCents,
 	}
 
 	// Ajouter les infos de gel si gelé
@@ -157,6 +171,8 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	logger.Debug().
 		Str("shop_id", shopID).
 		Int64("balance_cents", wallet.BalanceCents).
+		Int64("held_cents", wallet.HeldCents).
+		Int64("available_cents", availableCents).
 		Bool("is_frozen", wallet.IsFrozen).
 		Msg("Wallet retrieved")
 
@@ -360,7 +376,7 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 		"transaction_id":    resp.TransactionID,
 		"payout_id":         payoutID,
 		"amount_cents":      resp.AmountCents,
-		"amount_formatted":  formatMoney(resp.AmountCents),
+		"amount_formatted":  formatMoney(req.AmountCents),
 		"balance_cents":     resp.BalanceAfterCents,
 		"balance_formatted": formatMoney(resp.BalanceAfterCents),
 	})

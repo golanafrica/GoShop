@@ -61,15 +61,14 @@ func (r *TontinePaymentRepositoryInfrastructure) getShopID(ctx context.Context) 
 
 func (r *TontinePaymentRepositoryInfrastructure) scanPayment(row *sql.Row) (*entity.TontinePayment, error) {
 	p := &entity.TontinePayment{}
-	var yengapayRef sql.NullString
-	var yengapayTxID sql.NullString
+	var yengapayRef, providerIntentID, yengapayTxID sql.NullString
 	var paidAt sql.NullTime
 	var commissionStatus sql.NullString
 
 	err := row.Scan(
 		&p.ID, &p.GroupID, &p.ParticipantID, &p.CustomerID,
 		&p.CycleNumber, &p.AmountCents, &p.CommissionCents,
-		&yengapayRef, &yengapayTxID,
+		&yengapayRef, &providerIntentID, &yengapayTxID,
 		&p.PaymentProvider, &p.Status,
 		&p.DueDate, &paidAt,
 		&p.CreatedAt, &p.UpdatedAt,
@@ -84,6 +83,9 @@ func (r *TontinePaymentRepositoryInfrastructure) scanPayment(row *sql.Row) (*ent
 
 	if yengapayRef.Valid {
 		p.YengaPayReference = &yengapayRef.String
+	}
+	if providerIntentID.Valid {
+		p.ProviderIntentID = providerIntentID.String
 	}
 	if yengapayTxID.Valid {
 		p.YengaPayTransactionID = &yengapayTxID.String
@@ -108,15 +110,14 @@ func (r *TontinePaymentRepositoryInfrastructure) scanPayments(ctx context.Contex
 	var payments []*entity.TontinePayment
 	for rows.Next() {
 		p := &entity.TontinePayment{}
-		var yengapayRef sql.NullString
-		var yengapayTxID sql.NullString
+		var yengapayRef, providerIntentID, yengapayTxID sql.NullString
 		var paidAt sql.NullTime
 		var commissionStatus sql.NullString
 
 		err := rows.Scan(
 			&p.ID, &p.GroupID, &p.ParticipantID, &p.CustomerID,
 			&p.CycleNumber, &p.AmountCents, &p.CommissionCents,
-			&yengapayRef, &yengapayTxID,
+			&yengapayRef, &providerIntentID, &yengapayTxID,
 			&p.PaymentProvider, &p.Status,
 			&p.DueDate, &paidAt,
 			&p.CreatedAt, &p.UpdatedAt,
@@ -128,6 +129,9 @@ func (r *TontinePaymentRepositoryInfrastructure) scanPayments(ctx context.Contex
 
 		if yengapayRef.Valid {
 			p.YengaPayReference = &yengapayRef.String
+		}
+		if providerIntentID.Valid {
+			p.ProviderIntentID = providerIntentID.String
 		}
 		if yengapayTxID.Valid {
 			p.YengaPayTransactionID = &yengapayTxID.String
@@ -171,10 +175,10 @@ func (r *TontinePaymentRepositoryInfrastructure) Create(ctx context.Context, pay
 		INSERT INTO tontine_payments (
 			group_id, participant_id, customer_id,
 			cycle_number, amount_cents, commission_cents,
-			yengapay_reference, yengapay_transaction_id,
+			yengapay_reference, provider_intent_id, yengapay_transaction_id,
 			payment_provider, status, due_date,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
 		RETURNING id, created_at, updated_at
 	`
 
@@ -186,6 +190,7 @@ func (r *TontinePaymentRepositoryInfrastructure) Create(ctx context.Context, pay
 		payment.AmountCents,
 		payment.CommissionCents,
 		payment.YengaPayReference,
+		payment.ProviderIntentID, // 🆕 AJOUT
 		payment.YengaPayTransactionID,
 		payment.PaymentProvider,
 		payment.Status,
@@ -207,7 +212,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByID(ctx context.Context, i
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -219,6 +224,42 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByID(ctx context.Context, i
 	return r.scanPayment(r.queryRowContext(ctx, query, id, shopID))
 }
 
+// 🆕 FindByIDUnscoped trouve un paiement par ID SANS vérification de tenant (pour webhooks/sync)
+func (r *TontinePaymentRepositoryInfrastructure) FindByIDUnscoped(ctx context.Context, id string) (*entity.TontinePayment, error) {
+	query := `
+		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
+		       p.cycle_number, p.amount_cents, p.commission_cents,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
+		       p.payment_provider, p.status,
+		       p.due_date, p.paid_at,
+		       p.created_at, p.updated_at,
+		       COALESCE(p.commission_status, 'pending') as commission_status
+		FROM tontine_payments p
+		WHERE p.id = $1
+		LIMIT 1
+	`
+	return r.scanPayment(r.queryRowContext(ctx, query, id))
+}
+
+// 🆕 SetProviderIntentID met à jour l'ID d'intention de paiement côté provider
+func (r *TontinePaymentRepositoryInfrastructure) SetProviderIntentID(ctx context.Context, id, intentID string) error {
+	query := `
+		UPDATE tontine_payments 
+		SET provider_intent_id = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+	result, err := r.execContext(ctx, query, intentID, id)
+	if err != nil {
+		return fmt.Errorf("failed to update provider intent id: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("payment not found")
+	}
+	return nil
+}
+
 func (r *TontinePaymentRepositoryInfrastructure) FindByReference(ctx context.Context, reference string) (*entity.TontinePayment, error) {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -228,7 +269,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByReference(ctx context.Con
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -246,7 +287,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByReferenceUnscoped(ctx con
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -267,7 +308,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByReferencePrefix(ctx conte
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -288,7 +329,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByGroupAndCycle(ctx context
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -310,7 +351,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByCustomerAndGroup(ctx cont
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -332,7 +373,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindByParticipantAndCycle(ctx c
 	query := `
 		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
 		       p.cycle_number, p.amount_cents, p.commission_cents,
-		       p.yengapay_reference, p.yengapay_transaction_id,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 		       p.payment_provider, p.status,
 		       p.due_date, p.paid_at,
 		       p.created_at, p.updated_at,
@@ -424,7 +465,7 @@ func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 		SELECT
 			p.id, p.group_id, p.participant_id, p.customer_id,
 			p.cycle_number, p.amount_cents, p.commission_cents,
-			p.yengapay_reference, p.yengapay_transaction_id,
+			p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
 			p.payment_provider, p.status,
 			p.due_date, p.paid_at,
 			p.created_at, p.updated_at,
@@ -446,14 +487,14 @@ func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 	var payments []*entity.TontinePayment
 	for rows.Next() {
 		p := &entity.TontinePayment{}
-		var yengapayRef, yengapayTxID sql.NullString
+		var yengapayRef, providerIntentID, yengapayTxID sql.NullString
 		var paidAt sql.NullTime
 		var commissionStatus sql.NullString
 
 		err := rows.Scan(
 			&p.ID, &p.GroupID, &p.ParticipantID, &p.CustomerID,
 			&p.CycleNumber, &p.AmountCents, &p.CommissionCents,
-			&yengapayRef, &yengapayTxID,
+			&yengapayRef, &providerIntentID, &yengapayTxID,
 			&p.PaymentProvider, &p.Status,
 			&p.DueDate, &paidAt,
 			&p.CreatedAt, &p.UpdatedAt,
@@ -466,6 +507,9 @@ func (r *TontinePaymentRepositoryInfrastructure) FindDoneWithoutCommission(
 
 		if yengapayRef.Valid {
 			p.YengaPayReference = &yengapayRef.String
+		}
+		if providerIntentID.Valid {
+			p.ProviderIntentID = providerIntentID.String
 		}
 		if yengapayTxID.Valid {
 			p.YengaPayTransactionID = &yengapayTxID.String

@@ -3,7 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"strings" // 🆕 AJOUTÉ pour la détection de l'erreur
+	"strings"
 	"time"
 
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -16,11 +16,21 @@ import (
 )
 
 // ============================================================
-// SCHEDULER TONTINE (COMMERCIAL / CORPORATE / FAMILY)
+// SCHEDULER TONTINE
+// ============================================================
+// Phase 1.2 (held/net model) :
+// La commission plateforme est retenue UNE FOIS sur le TOTAL du cycle
+// dans process_tontine_webhook.checkAndCompleteCycle (crédit NET).
+// Ce scheduler NE DOIT PLUS débiter commission_debit par cotisation,
+// sinon double prélèvement (net déjà réduit + N × debit).
+//
+// Comportement actuel : no-op documenté (batch vide / skip global).
+// Plus tard (Phase settlement) : ce job pourra gérer uniquement les
+// retries / cas pathologiques, pas la collecte nominale.
 // ============================================================
 
-// TontineScheduler collecte automatiquement les commissions
-// sur les paiements de tontine (cotisations)
+// TontineScheduler historiquement collectait les commissions cotisation par cotisation.
+// Phase 1.2 : collecte par ligne DÉSACTIVÉE.
 type TontineScheduler struct {
 	paymentRepo repository.TontinePaymentRepository
 	groupRepo   repository.TontineGroupRepository
@@ -31,9 +41,12 @@ type TontineScheduler struct {
 	batchSize   int
 	maxRetries  int
 	logger      zerolog.Logger
+
+	// collectPerCotisation : false = Phase 1.2 (défaut). true = ancien comportement (debug only).
+	collectPerCotisation bool
 }
 
-// NewTontineScheduler crée une nouvelle instance
+// NewTontineScheduler crée une nouvelle instance (collecte par cotisation OFF).
 func NewTontineScheduler(
 	paymentRepo repository.TontinePaymentRepository,
 	groupRepo repository.TontineGroupRepository,
@@ -44,28 +57,29 @@ func NewTontineScheduler(
 	logger zerolog.Logger,
 ) *TontineScheduler {
 	return &TontineScheduler{
-		paymentRepo: paymentRepo,
-		groupRepo:   groupRepo,
-		batchRepo:   batchRepo,
-		rateRepo:    rateRepo,
-		debitUC:     debitUC,
-		freezeUC:    freezeUC,
-		batchSize:   100,
-		maxRetries:  3,
-		logger:      logger.With().Str("component", "tontine_scheduler").Logger(),
+		paymentRepo:          paymentRepo,
+		groupRepo:            groupRepo,
+		batchRepo:            batchRepo,
+		rateRepo:             rateRepo,
+		debitUC:              debitUC,
+		freezeUC:             freezeUC,
+		batchSize:            100,
+		maxRetries:           3,
+		logger:               logger.With().Str("component", "tontine_scheduler").Logger(),
+		collectPerCotisation: false, // Phase 1.2
 	}
 }
 
-// RunCollection exécute la collecte des commissions sur paiements tontine
+// RunCollection exécute le job cron tontine.
+// Phase 1.2 : ne prélève plus de commission par paiement DONE.
 func (s *TontineScheduler) RunCollection(ctx context.Context) error {
 	startTime := time.Now()
 	s.logger.Info().
 		Time("started_at", startTime).
-		Int("batch_size", s.batchSize).
+		Bool("collect_per_cotisation", s.collectPerCotisation).
 		Str("type", "tontine").
-		Msg("🎯 Starting tontine commission collection")
+		Msg("🎯 Starting tontine scheduler run")
 
-	// 1. Créer un nouveau batch
 	batch := &repository.CommissionBatch{
 		ID:          uuid.New().String(),
 		StartedAt:   startTime,
@@ -79,14 +93,23 @@ func (s *TontineScheduler) RunCollection(ctx context.Context) error {
 		return fmt.Errorf("failed to create batch: %w", err)
 	}
 
-	// 2. Récupérer les paiements DONE sans commission
+	// ── Phase 1.2 : short-circuit ──────────────────────────────────────────
+	if !s.collectPerCotisation {
+		s.logger.Info().
+			Str("batch_id", batch.ID).
+			Msg("Phase 1.2: per-cotisation commission collection DISABLED — commission already withheld via net cycle credit in process_tontine_webhook")
+		s.finalizeBatch(ctx, batch, startTime)
+		return nil
+	}
+
+	// ── Ancien chemin (uniquement si collectPerCotisation = true) ──────────
 	payments, err := s.paymentRepo.FindDoneWithoutCommission(ctx, s.batchSize)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to fetch tontine payments")
 		batch.Status = "failed"
 		errMsg := err.Error()
 		batch.ErrorMessage = &errMsg
-		s.batchRepo.UpdateBatch(ctx, batch)
+		_ = s.batchRepo.UpdateBatch(ctx, batch)
 		return fmt.Errorf("failed to fetch payments: %w", err)
 	}
 
@@ -96,23 +119,19 @@ func (s *TontineScheduler) RunCollection(ctx context.Context) error {
 		return nil
 	}
 
-	s.logger.Info().
-		Int("payment_count", len(payments)).
-		Msg("Processing tontine payments")
+	s.logger.Info().Int("payment_count", len(payments)).Msg("Processing tontine payments (legacy per-cotisation mode)")
 
-	// 3. Traiter chaque paiement
 	for _, payment := range payments {
-		s.processPayment(ctx, batch, payment)
+		s.processPaymentLegacy(ctx, batch, payment)
 	}
 
-	// 4. Finaliser le batch
 	s.finalizeBatch(ctx, batch, startTime)
-
 	return nil
 }
 
-// processPayment traite un paiement tontine individuel
-func (s *TontineScheduler) processPayment(
+// processPaymentLegacy = ancien débit par cotisation (conservé pour debug / rollback).
+// Ne pas activer en prod tant que le crédit net cycle est en place.
+func (s *TontineScheduler) processPaymentLegacy(
 	ctx context.Context,
 	batch *repository.CommissionBatch,
 	payment *entity.TontinePayment,
@@ -126,7 +145,6 @@ func (s *TontineScheduler) processPayment(
 
 	batch.TotalProofs++
 
-	// Créer l'item du batch
 	item := &repository.CommissionBatchItem{
 		ID:              uuid.New().String(),
 		BatchID:         batch.ID,
@@ -144,7 +162,7 @@ func (s *TontineScheduler) processPayment(
 		errMsg := "missing shop_id in payment"
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -155,14 +173,13 @@ func (s *TontineScheduler) processPayment(
 		errMsg := fmt.Sprintf("invalid shop UUID: %v", err)
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
 	shop := &entity.Shop{ID: shopUUID}
 	shopCtx := tenant.WithTenant(ctx, shop)
 
-	// 1. Récupérer le groupe pour connaître le type de cercle
 	group, err := s.groupRepo.FindByID(shopCtx, payment.GroupID)
 	if err != nil {
 		itemLogger.Error().Err(err).Msg("Failed to fetch group")
@@ -170,14 +187,12 @@ func (s *TontineScheduler) processPayment(
 		errMsg := fmt.Sprintf("failed to fetch group: %v", err)
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
-	// 2. Mapper le type de cercle vers le type de transaction
 	transactionType := s.mapCircleTypeToTransactionType(group.CircleType)
 
-	// 3. Récupérer le taux de commission
 	rate, err := s.rateRepo.GetDefaultRate(shopCtx, payment.ShopID, transactionType)
 	if err != nil {
 		itemLogger.Error().Err(err).Msg("Failed to get commission rate")
@@ -185,11 +200,10 @@ func (s *TontineScheduler) processPayment(
 		errMsg := fmt.Sprintf("failed to get rate: %v", err)
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
-	// 4. Calculer la commission
 	commissionCents := rate.CalculateCommission(payment.AmountCents)
 	if commissionCents <= 0 {
 		itemLogger.Warn().
@@ -198,7 +212,7 @@ func (s *TontineScheduler) processPayment(
 			Msg("Commission is zero, skipping")
 		item.Status = "skipped"
 		batch.SkippedProofs++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -211,11 +225,10 @@ func (s *TontineScheduler) processPayment(
 		Int64("amount_cents", payment.AmountCents).
 		Int64("commission_cents", commissionCents).
 		Int("rate_bps", rate.RateBps).
-		Msg("Processing tontine commission")
+		Msg("Processing tontine commission (LEGACY per-cotisation)")
 
-	// 5. Tenter de débiter le wallet avec retries
 	var lastErr error
-	skippedNoWallet := false // 🆕 Flag pour gérer le skip silencieux
+	skippedNoWallet := false
 
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		debitReq := &walletusecase.DebitWalletRequest{
@@ -227,26 +240,20 @@ func (s *TontineScheduler) processPayment(
 
 		resp, err := s.debitUC.Execute(shopCtx, debitReq)
 		if err != nil {
-			// 🆕 AMÉLIORATION : Skipper silencieusement si le wallet n'existe pas
-			if strings.Contains(err.Error(), "merchant wallet not found") {
+			if containsWalletNotFound(err.Error()) {
 				itemLogger.Info().Msg("Merchant wallet not found, skipping commission collection")
 				skippedNoWallet = true
 				break
 			}
 
 			lastErr = err
-			itemLogger.Warn().
-				Err(err).
-				Int("attempt", attempt).
-				Msg("Debit attempt failed")
-
+			itemLogger.Warn().Err(err).Int("attempt", attempt).Msg("Debit attempt failed")
 			if attempt < s.maxRetries {
 				time.Sleep(time.Duration(attempt*100) * time.Millisecond)
 			}
 			continue
 		}
 
-		// Succès !
 		item.Status = "success"
 		item.WalletBalanceBefore = &resp.PreviousBalance
 		item.WalletBalanceAfter = &resp.BalanceAfterCents
@@ -255,7 +262,6 @@ func (s *TontineScheduler) processPayment(
 		batch.SuccessfulCollections++
 		batch.CollectedCommissionCents += commissionCents
 
-		// 6. Mettre à jour le statut de commission
 		batchID := batch.ID
 		if err := s.paymentRepo.UpdateTontineCommissionStatus(
 			shopCtx,
@@ -266,7 +272,6 @@ func (s *TontineScheduler) processPayment(
 			itemLogger.Error().Err(err).Msg("Failed to update payment commission status")
 		}
 
-		// 7. Si le wallet est négatif, le geler
 		if resp.IsNowNegative && s.freezeUC != nil {
 			freezeDetails := fmt.Sprintf("Tontine commission (%s): %d FCFA", group.CircleType, commissionCents/100)
 			freezeReq := &walletusecase.FreezeAccountRequest{
@@ -275,7 +280,6 @@ func (s *TontineScheduler) processPayment(
 				AmountDueCents: -resp.BalanceAfterCents,
 				Details:        &freezeDetails,
 			}
-
 			if _, err := s.freezeUC.Execute(shopCtx, freezeReq); err != nil {
 				itemLogger.Warn().Err(err).Msg("Failed to freeze account")
 			}
@@ -286,31 +290,31 @@ func (s *TontineScheduler) processPayment(
 			Int64("balance_before", resp.PreviousBalance).
 			Int64("balance_after", resp.BalanceAfterCents).
 			Bool("account_frozen", resp.IsNowNegative).
-			Msg("✅ Tontine commission collected")
+			Msg("✅ Tontine commission collected (LEGACY)")
 
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
-	// 🆕 AMÉLIORATION : Gestion du skip si pas de wallet
 	if skippedNoWallet {
 		item.Status = "skipped"
 		batch.SkippedProofs++
-		s.batchRepo.CreateBatchItem(ctx, item)
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
-	// Échec après tous les retries
-	errMsg := lastErr.Error()
+	errMsg := "unknown error"
+	if lastErr != nil {
+		errMsg = lastErr.Error()
+	}
 	item.Status = "failed"
 	item.ErrorMessage = &errMsg
 
 	batch.FailedCollections++
 	batch.FailedCommissionCents += commissionCents
 
-	// Mettre à jour le statut comme failed
 	batchID := batch.ID
-	s.paymentRepo.UpdateTontineCommissionStatus(
+	_ = s.paymentRepo.UpdateTontineCommissionStatus(
 		shopCtx,
 		payment.ID,
 		"failed",
@@ -320,12 +324,22 @@ func (s *TontineScheduler) processPayment(
 	itemLogger.Error().
 		Err(lastErr).
 		Int("max_retries", s.maxRetries).
-		Msg("❌ Tontine commission collection failed")
+		Msg("❌ Tontine commission collection failed (LEGACY)")
 
-	s.batchRepo.CreateBatchItem(ctx, item)
+	_ = s.batchRepo.CreateBatchItem(ctx, item)
 }
 
-// mapCircleTypeToTransactionType convertit le type de cercle en type de transaction
+// containsWalletNotFound vérifie si le message d'erreur indique un wallet manquant.
+// 🆕 Phase 6 : utilise strings.Contains pour une comparaison case-insensitive propre.
+func containsWalletNotFound(msg string) bool {
+	if len(msg) == 0 {
+		return false
+	}
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "merchant wallet not found") ||
+		strings.Contains(lower, "wallet not found")
+}
+
 func (s *TontineScheduler) mapCircleTypeToTransactionType(circleType string) string {
 	switch circleType {
 	case entity.TontineCircleCommercial:
@@ -335,11 +349,10 @@ func (s *TontineScheduler) mapCircleTypeToTransactionType(circleType string) str
 	case entity.TontineCircleFamily:
 		return "tontine_family"
 	default:
-		return "tontine_commercial" // Fallback
+		return "tontine_commercial"
 	}
 }
 
-// finalizeBatch finalise le batch
 func (s *TontineScheduler) finalizeBatch(
 	ctx context.Context,
 	batch *repository.CommissionBatch,
@@ -367,5 +380,5 @@ func (s *TontineScheduler) finalizeBatch(
 		Int64("collected_cents", batch.CollectedCommissionCents).
 		Int64("failed_cents", batch.FailedCommissionCents).
 		Int("duration_ms", durationMs).
-		Msg("✅ Tontine commission collection completed")
+		Msg("✅ Tontine scheduler run completed")
 }

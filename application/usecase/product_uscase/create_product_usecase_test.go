@@ -1,4 +1,4 @@
-﻿package productuscase_test
+package productuscase_test
 
 import (
 	dto "Goshop/application/dto/product_dto"

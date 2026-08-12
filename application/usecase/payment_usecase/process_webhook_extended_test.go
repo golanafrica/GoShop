@@ -34,7 +34,7 @@ func TestProcessWebhookUsecase_ValidationFailed(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	registry.EXPECT().Get(entity.ProviderOrangeMoney).Return(provider, nil)
@@ -68,7 +68,7 @@ func TestProcessWebhookUsecase_TontineWebhookNilHandler(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	event := &payment.WebhookEvent{
@@ -112,7 +112,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	shopRepo := mockrepo.NewMockShopRepository(ctrl)
 	provider := mockusecase.NewMockProvider(ctrl)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil)
+	uc := paymentusecase.NewProcessWebhookUsecase(paymentRepo, registry, db, shopRepo, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	shop := createTestShopPayment()

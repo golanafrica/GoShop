@@ -134,6 +134,21 @@ func (mr *MockOrderRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockOrderRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByIDAdmin mocks base method.
+func (m *MockOrderRepository) FindByIDAdmin(ctx context.Context, id string) (*entity.Order, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDAdmin", ctx, id)
+	ret0, _ := ret[0].(*entity.Order)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDAdmin indicates an expected call of FindByIDAdmin.
+func (mr *MockOrderRepositoryMockRecorder) FindByIDAdmin(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDAdmin", reflect.TypeOf((*MockOrderRepository)(nil).FindByIDAdmin), ctx, id)
+}
+
 // FindCashPendingByShop mocks base method.
 func (m *MockOrderRepository) FindCashPendingByShop(ctx context.Context, shopID string) ([]*entity.Order, error) {
 	m.ctrl.T.Helper()

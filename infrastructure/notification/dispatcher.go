@@ -57,7 +57,10 @@ func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, 
 	}
 
 	go func() {
-		if err := d.wsHub.SendToUser(ctx, userID, msg); err != nil {
+		// 🚨 CORRECTION : Utiliser context.Background() pour éviter que le contexte
+		// de la requête HTTP (qui sera annulé à la fin du handler) n'annule l'envoi WS.
+		bgCtx := context.Background()
+		if err := d.wsHub.SendToUser(bgCtx, userID, msg); err != nil {
 			d.logger.Error().Err(err).Str("user_id", userID).Str("event", eventType).Msg("Failed to send WebSocket notification")
 		} else {
 			d.logger.Debug().Str("user_id", userID).Str("event", eventType).Msg("WebSocket notification sent successfully")
@@ -72,7 +75,9 @@ func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, user
 	}
 
 	go func() {
-		if err := d.emailProvider.SendClientNotification(ctx, userEmail, title, message, data); err != nil {
+		// 🚨 CORRECTION : Utiliser context.Background() pour éviter l'annulation prématurée
+		bgCtx := context.Background()
+		if err := d.emailProvider.SendClientNotification(bgCtx, userEmail, title, message, data); err != nil {
 			d.logger.Error().Err(err).Str("email", userEmail).Msg("Failed to send email notification")
 		} else {
 			d.logger.Info().Str("email", userEmail).Msg("Email notification sent successfully")
@@ -80,7 +85,7 @@ func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, user
 	}()
 }
 
-// 🆕 getUserEmailByID récupère l'email directement depuis le userID (plus efficace pour Tontine/Crédit)
+// getUserEmailByID récupère l'email directement depuis le userID (plus efficace pour Tontine/Crédit)
 func (d *NotificationDispatcher) getUserEmailByID(userID string) string {
 	if d.userRepo == nil || userID == "" {
 		return ""
@@ -302,6 +307,26 @@ func (d *NotificationDispatcher) NotifyTontineTurnSoon(ctx context.Context, user
 
 	d.sendWebSocketNotification(ctx, userID, string(service.NotificationTontineTurnSoon), title, message, data)
 	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+func (d *NotificationDispatcher) NotifyTontineVoucherReady(ctx context.Context, userID, groupName, voucherCode, amountStr string) error {
+	title := "🎉 C'est votre tour !"
+	message := fmt.Sprintf("Félicitations ! Votre tour est arrivé pour le groupe '%s'. Votre voucher (code: %s) d'un montant de %s FCFA est prêt.", groupName, voucherCode, amountStr)
+	data := map[string]interface{}{"group_name": groupName, "voucher_code": voucherCode, "amount": amountStr}
+
+	d.sendWebSocketNotification(ctx, userID, string(service.NotificationTontineVoucherReady), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	return nil
+}
+
+func (d *NotificationDispatcher) NotifyTontineMerchantCycleCompleted(ctx context.Context, ownerUserID, groupName, amountStr, voucherCode string) error {
+	title := "Cycle Tontine soldé"
+	message := fmt.Sprintf("Le cycle du groupe '%s' est terminé. Le montant de %s FCFA a été crédité sur votre wallet. Voucher généré : %s.", groupName, amountStr, voucherCode)
+	data := map[string]interface{}{"group_name": groupName, "amount": amountStr, "voucher_code": voucherCode}
+
+	d.sendWebSocketNotification(ctx, ownerUserID, string(service.NotificationTontineMerchantCycleCompleted), title, message, data)
+	d.sendEmailNotification(ctx, d.getUserEmailByID(ownerUserID), title, message, data)
 	return nil
 }
 

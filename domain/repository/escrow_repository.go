@@ -54,6 +54,12 @@ type EscrowAccountRepository interface {
 	// UpdateStatus met à jour uniquement le statut
 	UpdateStatus(ctx context.Context, id string, status entity.EscrowAccountStatus) error
 
+	// ClaimRelease tente de passer l'escrow de fromStatus vers "released" de façon atomique.
+	// Retourne (true, nil) si cette instance a gagné le claim (1 row updated).
+	// Retourne (false, nil) si une autre instance a déjà libéré / mauvais statut.
+	// Utilisé par l'auto-release pour éviter le double crédit wallet.
+	ClaimRelease(ctx context.Context, escrowID string, fromStatus entity.EscrowAccountStatus, releasedAmountCents int64) (bool, error)
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) EscrowAccountRepository
 }
@@ -100,6 +106,9 @@ type DeliveryProofRepository interface {
 	// FindAutoReleaseEligible retourne les preuves éligibles au déblocage automatique
 	FindAutoReleaseEligible(ctx context.Context) ([]*entity.DeliveryProof, error)
 
+	// 🆕 v4.8.4 : Force le delivery_date pour tests/admin (bypass tenant)
+	ForceDeliveryDate(ctx context.Context, orderID string, daysAgo int) error
+
 	// FindDisputeDeadlineExpired retourne les preuves dont le délai de litige est expiré
 	FindDisputeDeadlineExpired(ctx context.Context) ([]*entity.DeliveryProof, error)
 
@@ -109,8 +118,16 @@ type DeliveryProofRepository interface {
 	// Update met à jour une preuve
 	Update(ctx context.Context, proof *entity.DeliveryProof) error
 
+	// FindAutoReleaseEligibleForUpdate retourne les proofs éligibles avec verrouillage pessimiste
+	// Utilise FOR UPDATE SKIP LOCKED pour éviter les race conditions entre instances du scheduler
+	FindAutoReleaseEligibleForUpdate(ctx context.Context) ([]*entity.DeliveryProof, error)
+
 	// UpdateEscrowStatus met à jour uniquement le statut escrow
 	UpdateEscrowStatus(ctx context.Context, id string, status entity.EscrowStatus) error
+
+	// BeginTx démarre une nouvelle transaction SQL pour opérations atomiques
+	// Utilisé par le scheduler d'auto-release pour garantir l'atomicité des opérations
+	BeginTx(ctx context.Context) (Tx, error)
 
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) DeliveryProofRepository

@@ -30,14 +30,16 @@ type CreditUpdater interface {
 }
 
 type ProcessWebhookUsecase struct {
-	paymentRepo      repository.PaymentRepository
-	registry         PaymentRegistry
-	db               repository.DBExecutor
-	shopRepo         repository.ShopRepository
-	shopSettingsRepo ShopPaymentSettingsRepository
-	tontineWebhookUC *ProcessTontineWebhookUsecase
-	creditUpdater    CreditUpdater
-	escrowRepo       repository.EscrowAccountRepository
+	paymentRepo        repository.PaymentRepository
+	registry           PaymentRegistry
+	db                 repository.DBExecutor
+	shopRepo           repository.ShopRepository
+	shopSettingsRepo   ShopPaymentSettingsRepository
+	tontineWebhookUC   *ProcessTontineWebhookUsecase
+	creditUpdater      CreditUpdater
+	escrowRepo         repository.EscrowAccountRepository
+	orderRepo          repository.OrderRepository
+	commissionRateRepo repository.CommissionRateRepository
 }
 
 func NewProcessWebhookUsecase(
@@ -49,6 +51,7 @@ func NewProcessWebhookUsecase(
 	tontineWebhookUC *ProcessTontineWebhookUsecase,
 	creditUpdater CreditUpdater,
 	escrowRepo repository.EscrowAccountRepository,
+	orderRepo repository.OrderRepository,
 ) *ProcessWebhookUsecase {
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
@@ -59,7 +62,14 @@ func NewProcessWebhookUsecase(
 		tontineWebhookUC: tontineWebhookUC,
 		creditUpdater:    creditUpdater,
 		escrowRepo:       escrowRepo,
+		orderRepo:        orderRepo,
 	}
+}
+
+// WithCommissionRateRepo injecte les taux boutique pour online_payment (Phase 1)
+func (uc *ProcessWebhookUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *ProcessWebhookUsecase {
+	uc.commissionRateRepo = r
+	return uc
 }
 
 func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error {
@@ -188,6 +198,7 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 		if escrowAlreadyCreated {
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
+			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 			return nil
 		}
 
@@ -236,36 +247,40 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
 
 		if !isCredit && paymentEntity.OrderID != uuid.Nil {
-			commissionRate := 250
-			if uc.shopSettingsRepo != nil {
-				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
-				if err == nil && settings != nil {
-					if settings.CashCommissionRate > 0 {
-						commissionRate = settings.CashCommissionRate
-					}
-				}
-			}
+			// --------------------------------------------------------
+			// Phase 2 : settlement unique (frais Yenga + commission GoShop)
+			// --------------------------------------------------------
+			shopIDStr := paymentEntity.ShopID.String()
+			rateBps := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
 
-			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
-
+			// Frais PSP (Yenga) — metadata webhook ; 0 si absent
 			providerFeesCents := int64(0)
 			if fees, ok := event.Metadata["payment_fees"].(float64); ok {
+				// Yenga envoie souvent les frais en unités monétaires (XOF), pas en centimes
 				providerFeesCents = int64(fees * 100)
 			}
-			paymentEntity.ProviderFeesCents = providerFeesCents
 
-			netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
+			settlement := ComputeOrderSettlement(
+				paymentEntity.AmountCents,
+				providerFeesCents,
+				rateBps,
+			)
 
-			if netAmountCents > 0 && uc.escrowRepo != nil {
+			// Persister sur le payment (traçabilité audit / commission_scheduler)
+			paymentEntity.ProviderFeesCents = settlement.ProviderFeesCents
+			paymentEntity.CommissionRateBps = settlement.CommissionRateBps
+			paymentEntity.CommissionCents = settlement.CommissionCents
+
+			if settlement.MerchantNetCents > 0 && uc.escrowRepo != nil {
 				orderIDStr := paymentEntity.OrderID.String()
 				now := time.Now().UTC()
 
 				escrow := &entity.EscrowAccount{
 					OrderID:             &orderIDStr,
 					SourceType:          entity.EscrowSourceOrder,
-					TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents,
+					TotalAmountCents:    settlement.EscrowTotalCents, // brut - frais PSP
 					ReleasedAmountCents: 0,
-					CommissionCents:     commissionCents,
+					CommissionCents:     settlement.CommissionCents, // commission GoShop
 					Status:              entity.EscrowAccountFundsHeld,
 					FundsHeldAt:         now,
 					CreatedAt:           now,
@@ -286,13 +301,17 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				}
 
 				logger.Info().
-					Int64("gross_amount", paymentEntity.AmountCents).
-					Int64("provider_fees_cents", providerFeesCents).
-					Int64("commission_cents", commissionCents).
-					Int64("escrow_amount", netAmountCents).
+					Int64("gross_cents", settlement.GrossCents).
+					Int64("provider_fees_cents", settlement.ProviderFeesCents).
+					Int("commission_rate_bps", settlement.CommissionRateBps).
+					Int64("commission_cents", settlement.CommissionCents).
+					Int64("escrow_total_cents", settlement.EscrowTotalCents).
+					Int64("merchant_net_cents", settlement.MerchantNetCents).
 					Str("escrow_id", escrow.ID).
-					Msg("✅ Funds successfully locked in Escrow")
+					Msg("✅ Funds locked in Escrow (Phase 2 settlement)")
 			}
+
+			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 		}
 	}
 
@@ -302,6 +321,38 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 	logger.Info().Str("payment_id", paymentEntity.ID.String()).Str("status", string(paymentEntity.Status)).Msg("Webhook processed successfully")
 	return nil
+}
+
+// ensureOrderConfirmed passe l'order de pending → confirmed si nécessaire (idempotent).
+func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) {
+	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
+		return
+	}
+
+	orderIDStr := paymentEntity.OrderID.String()
+	order, err := uc.orderRepo.FindByID(ctx, orderIDStr)
+	if err != nil || order == nil {
+		if logger != nil {
+			logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: order not found")
+		}
+		return
+	}
+
+	if order.Status != string(entity.OrderStatusPending) {
+		return
+	}
+
+	order.MarkAccepted()
+	if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
+		if logger != nil {
+			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
+		}
+		return
+	}
+
+	if logger != nil {
+		logger.Info().Str("order_id", orderIDStr).Msg("✅ Order confirmed after payment SUCCESS (webhook)")
+	}
 }
 
 func (uc *ProcessWebhookUsecase) recordWebhook(

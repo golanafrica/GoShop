@@ -16,7 +16,6 @@ import (
 // ProductTontineSettingsRepository
 // ============================================================
 
-// ProductTontineSettingsRepository définit les opérations sur la configuration tontine des produits
 type ProductTontineSettingsRepository interface {
 	FindByProductID(ctx context.Context, productID string) (*entity.ProductTontineSettings, error)
 	FindByShopID(ctx context.Context, shopID string) ([]*entity.ProductTontineSettings, error)
@@ -28,7 +27,6 @@ type ProductTontineSettingsRepository interface {
 // TontineGroupRepository
 // ============================================================
 
-// TontineGroupRepository définit les opérations sur les groupes de tontine
 type TontineGroupRepository interface {
 	Create(ctx context.Context, group *entity.TontineGroup) error
 	FindByID(ctx context.Context, id string) (*entity.TontineGroup, error)
@@ -42,7 +40,6 @@ type TontineGroupRepository interface {
 	Complete(ctx context.Context, groupID string) error
 	WithTX(tx Tx) TontineGroupRepository
 
-	// 🆕 Pour les webhooks : trouve un groupe sans vérifier le tenant
 	FindByIDUnscoped(ctx context.Context, id string) (*entity.TontineGroup, error)
 }
 
@@ -69,6 +66,8 @@ type TontineParticipantRepository interface {
 type TontinePaymentRepository interface {
 	Create(ctx context.Context, payment *entity.TontinePayment) error
 	FindByID(ctx context.Context, id string) (*entity.TontinePayment, error)
+	FindByIDUnscoped(ctx context.Context, id string) (*entity.TontinePayment, error) // 🆕 AJOUT PHASE 2
+	SetProviderIntentID(ctx context.Context, id, intentID string) error              // 🆕 AJOUT PHASE 2
 	FindByReference(ctx context.Context, reference string) (*entity.TontinePayment, error)
 	FindByReferencePrefix(ctx context.Context, referencePrefix string) (*entity.TontinePayment, error)
 	FindByGroupAndCycle(ctx context.Context, groupID string, cycle int) ([]*entity.TontinePayment, error)
@@ -82,7 +81,6 @@ type TontinePaymentRepository interface {
 	FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error)
 	UpdateTontineCommissionStatus(ctx context.Context, paymentID string, status string, batchID *string) error
 
-	// 🆕 Pour les webhooks : trouve un paiement sans vérifier le tenant
 	FindByReferenceUnscoped(ctx context.Context, reference string) (*entity.TontinePayment, error)
 }
 
@@ -94,11 +92,13 @@ type TontineVoucherRepository interface {
 	Create(ctx context.Context, voucher *entity.TontineVoucher) error
 	FindByID(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	FindByCode(ctx context.Context, code string) (*entity.TontineVoucher, error)
+	FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error) // 🆕 Phase 5 : lister par groupe
 	FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontineVoucher, error)
 	FindByCustomerID(ctx context.Context, customerID string) ([]*entity.TontineVoucher, error)
 	FindByShopID(ctx context.Context, shopID string) ([]*entity.TontineVoucher, error)
 	FindActiveByShopID(ctx context.Context, shopID string) ([]*entity.TontineVoucher, error)
 	Redeem(ctx context.Context, voucherCode string, redeemedBy string) error
 	ExpireOldVouchers(ctx context.Context) (int, error)
+	FindByIDAdmin(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	WithTX(tx Tx) TontineVoucherRepository
 }

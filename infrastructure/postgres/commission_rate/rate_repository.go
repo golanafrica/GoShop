@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -74,12 +75,21 @@ func (r *CommissionRateRepositoryPostgres) Update(ctx context.Context, rate *ent
             updated_at = $5
         WHERE shop_id = $6 AND transaction_type = $7
     `
-	_, err := r.executor().ExecContext(ctx, query,
+	now := time.Now().UTC()
+	if rate.UpdatedAt.IsZero() {
+		rate.UpdatedAt = now
+	}
+
+	res, err := r.executor().ExecContext(ctx, query,
 		rate.RateBps, rate.MinCommissionCents, rate.MaxCommissionCents,
 		rate.IsActive, rate.UpdatedAt, rate.ShopID, rate.TransactionType,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update commission rate: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("commission rate not found for shop %s and type %s", rate.ShopID, rate.TransactionType)
 	}
 	return nil
 }

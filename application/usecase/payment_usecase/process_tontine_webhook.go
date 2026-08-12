@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	walletusecase "Goshop/application/usecase/wallet_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/service"
@@ -17,6 +18,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// TontineWalletCreditor abstrait le crédit wallet (évite import circulaire usecase→usecase)
+type TontineWalletCreditor interface {
+	CreditFromTontine(ctx context.Context, shopID string, amountCents int64, groupID string, cycleNumber int) (*walletusecase.CreditWalletResponse, error)
+}
+
 // ProcessTontineWebhookUsecase traite les webhooks YengaPay pour les paiements de tontine
 type ProcessTontineWebhookUsecase struct {
 	tontinePaymentRepo     repository.TontinePaymentRepository
@@ -25,11 +31,14 @@ type ProcessTontineWebhookUsecase struct {
 	tontineVoucherRepo     repository.TontineVoucherRepository
 	shopRepo               repository.ShopRepository
 
-	notificationSvc service.NotificationService
-	customerRepo    repository.CustomerRepositoryInterface
+	notificationSvc    service.NotificationService
+	customerRepo       repository.CustomerRepositoryInterface
+	walletCreditor     TontineWalletCreditor               // optionnel (nil-safe)
+	commissionRateRepo repository.CommissionRateRepository // Phase 4 : optionnel (nil-safe)
 }
 
 // NewProcessTontineWebhookUsecase crée une nouvelle instance
+// Signature inchangée pour ne pas casser app.go / tests.
 func NewProcessTontineWebhookUsecase(
 	tontinePaymentRepo repository.TontinePaymentRepository,
 	tontineGroupRepo repository.TontineGroupRepository,
@@ -50,12 +59,24 @@ func NewProcessTontineWebhookUsecase(
 	}
 }
 
+// WithWalletCreditor injecte le crédit wallet
+func (uc *ProcessTontineWebhookUsecase) WithWalletCreditor(c TontineWalletCreditor) *ProcessTontineWebhookUsecase {
+	uc.walletCreditor = c
+	return uc
+}
+
+// WithCommissionRateRepo injecte le repo des taux boutique (Phase 4)
+func (uc *ProcessTontineWebhookUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *ProcessTontineWebhookUsecase {
+	uc.commissionRateRepo = r
+	return uc
+}
+
 // IsTontineReference vérifie si une référence est un paiement tontine
 func IsTontineReference(reference string) bool {
 	return strings.HasPrefix(reference, "TONTINE:")
 }
 
-// ParseTontineReference parse une référence TONTINE:{groupID[:8]}:{cycle}:{participantID[:8]}
+// ParseTontineReference parse TONTINE:{groupID[:8]}:{cycle}:{participantID[:8]}
 func ParseTontineReference(reference string) (string, int, string, error) {
 	if !IsTontineReference(reference) {
 		return "", 0, "", fmt.Errorf("not a tontine reference: %s", reference)
@@ -67,15 +88,71 @@ func ParseTontineReference(reference string) (string, int, string, error) {
 	}
 
 	groupPrefix := parts[1]
-	cycleStr := parts[2]
-	participantPrefix := parts[3]
-
-	cycleNumber, err := strconv.Atoi(cycleStr)
+	cycleNumber, err := strconv.Atoi(parts[2])
 	if err != nil {
-		return "", 0, "", fmt.Errorf("invalid cycle number: %s", cycleStr)
+		return "", 0, "", fmt.Errorf("invalid cycle number: %s", parts[2])
 	}
 
-	return groupPrefix, cycleNumber, participantPrefix, nil
+	return groupPrefix, cycleNumber, parts[3], nil
+}
+
+// tontineCircleToTransactionType mappe le cercle vers le type commission_rates
+func tontineCircleToTransactionType(circleType string) string {
+	switch circleType {
+	case entity.TontineCircleCommercial:
+		return entity.TransactionTypeTontineCommercial
+	case entity.TontineCircleCorporate:
+		return entity.TransactionTypeTontineCorporate
+	case entity.TontineCircleFamily:
+		return entity.TransactionTypeTontineFamily
+	default:
+		return entity.TransactionTypeTontineGroup
+	}
+}
+
+// tontineCycleRateBps fallback plateforme si aucun taux boutique
+func tontineCycleRateBps(circleType string) int {
+	switch circleType {
+	case entity.TontineCircleCommercial:
+		return entity.DefaultRateTontineCommercial
+	case entity.TontineCircleCorporate:
+		return entity.DefaultRateTontineCorporate
+	case entity.TontineCircleFamily:
+		return entity.DefaultRateTontineFamily
+	default:
+		return entity.DefaultRateTontineGroup
+	}
+}
+
+// resolveTontineRateBps : taux boutique si présent et actif, sinon défaut plateforme
+func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
+	ctx context.Context,
+	shopID string,
+	circleType string,
+	logger *zerolog.Logger,
+) int {
+	fallback := tontineCycleRateBps(circleType)
+	if uc.commissionRateRepo == nil {
+		return fallback
+	}
+
+	txType := tontineCircleToTransactionType(circleType)
+	rate, err := uc.commissionRateRepo.FindByShopAndType(ctx, shopID, txType)
+	if err != nil || rate == nil || !rate.IsActive {
+		logger.Debug().
+			Str("shop_id", shopID).
+			Str("tx_type", txType).
+			Int("fallback_bps", fallback).
+			Msg("Phase 4: no active shop commission rate — using platform default")
+		return fallback
+	}
+
+	logger.Info().
+		Str("shop_id", shopID).
+		Str("tx_type", txType).
+		Int("rate_bps", rate.RateBps).
+		Msg("Phase 4: using shop-specific commission rate")
+	return rate.RateBps
 }
 
 // Execute traite un webhook tontine
@@ -87,35 +164,27 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 ) error {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Parser la référence
-	groupPrefix, cycleNumber, participantPrefix, err := ParseTontineReference(reference)
+	_, cycleNumber, _, err := ParseTontineReference(reference)
 	if err != nil {
 		return fmt.Errorf("parse tontine reference: %w", err)
 	}
 
 	logger.Info().
 		Str("reference", reference).
-		Str("group_prefix", groupPrefix).
 		Int("cycle", cycleNumber).
-		Str("participant_prefix", participantPrefix).
 		Str("status", string(status)).
 		Msg("Processing tontine webhook")
 
-	// 2. Lookup SANS tenant (référence globale unique)
 	payment, err := uc.tontinePaymentRepo.FindByReferenceUnscoped(ctx, reference)
 	if err != nil {
 		return fmt.Errorf("tontine payment not found for reference %s: %w", reference, err)
 	}
 
-	// 3. Déjà payé → idempotent
 	if payment.IsDone() {
-		logger.Info().
-			Str("payment_id", payment.ID).
-			Msg("Tontine payment already done, ignoring webhook")
+		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment already done, ignoring webhook")
 		return nil
 	}
 
-	// 4. Récupérer le groupe SANS tenant
 	group, err := uc.tontineGroupRepo.FindByIDUnscoped(ctx, payment.GroupID)
 	if err != nil {
 		return fmt.Errorf("tontine group not found: %w", err)
@@ -131,10 +200,8 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		return fmt.Errorf("shop not found: %w", err)
 	}
 
-	// 5. Injecter le tenant pour le reste des opérations
 	ctx = tenant.WithTenant(ctx, shop)
 
-	// 6. Transition de statut
 	switch status {
 	case entity.PaymentStatusSuccess:
 		if err := uc.tontinePaymentRepo.MarkDone(ctx, payment.ID, transactionID); err != nil {
@@ -151,21 +218,16 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		if err := uc.tontinePaymentRepo.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
 			return fmt.Errorf("mark tontine payment failed: %w", err)
 		}
-		logger.Info().
-			Str("payment_id", payment.ID).
-			Msg("Tontine payment marked as FAILED")
+		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment marked as FAILED")
 		return nil
 
 	default:
-		logger.Warn().
-			Str("status", string(status)).
-			Msg("Unknown tontine webhook status, ignoring")
+		logger.Warn().Str("status", string(status)).Msg("Unknown tontine webhook status, ignoring")
 		return nil
 	}
 
-	// 7. Si succès → vérifier complétion du cycle
 	if status == entity.PaymentStatusSuccess {
-		return uc.checkAndCompleteCycle(ctx, group.ID, cycleNumber)
+		return uc.checkAndCompleteCycle(ctx, group, cycleNumber, shop)
 	}
 
 	return nil
@@ -202,9 +264,7 @@ func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
 		if err != nil || customer == nil || customer.UserID == "" {
 			continue
 		}
-
-		err = uc.notificationSvc.NotifyTontineCyclePaid(ctx, customer.UserID, payerName, groupName, amountStr)
-		if err != nil {
+		if err := uc.notificationSvc.NotifyTontineCyclePaid(ctx, customer.UserID, payerName, groupName, amountStr); err != nil {
 			logger.Warn().Err(err).Str("user_id", customer.UserID).Msg("Failed to send tontine notification")
 		}
 	}
@@ -214,21 +274,21 @@ func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
 
 func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 	ctx context.Context,
-	groupID string,
+	group *entity.TontineGroup,
 	cycleNumber int,
+	shop *entity.Shop,
 ) error {
 	logger := zerolog.Ctx(ctx)
+	groupID := group.ID
 
-	group, err := uc.tontineGroupRepo.FindByID(ctx, groupID)
+	freshGroup, err := uc.tontineGroupRepo.FindByID(ctx, groupID)
 	if err != nil {
 		return fmt.Errorf("group not found: %w", err)
 	}
+	group = freshGroup
 
 	if !group.IsActive() {
-		logger.Warn().
-			Str("group_id", groupID).
-			Str("status", group.Status).
-			Msg("Group is not active, skipping cycle completion")
+		logger.Warn().Str("group_id", groupID).Str("status", group.Status).Msg("Group is not active, skipping cycle completion")
 		return nil
 	}
 
@@ -245,21 +305,35 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Msg("Checking cycle completion")
 
 	if doneCount < group.TotalCycles {
-		logger.Info().
-			Int("remaining", group.TotalCycles-doneCount).
-			Msg("Waiting for remaining participants to pay")
+		logger.Info().Int("remaining", group.TotalCycles-doneCount).Msg("Waiting for remaining participants to pay")
 		return nil
 	}
 
-	logger.Info().
-		Str("group_id", groupID).
-		Int("cycle", cycleNumber).
-		Msg("All participants paid, generating voucher")
+	logger.Info().Str("group_id", groupID).Int("cycle", cycleNumber).Msg("All participants paid, generating voucher")
 
 	beneficiary, err := uc.tontineParticipantRepo.FindByPosition(ctx, groupID, cycleNumber)
 	if err != nil {
 		return fmt.Errorf("beneficiary not found for cycle %d: %w", cycleNumber, err)
 	}
+
+	// ── Phase 5 : calculer net AVANT le voucher pour stocker held_amount_cents ──
+	grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
+	rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+	commissionCents := entity.CalculateCommission(grossCents, rateBps)
+	netCents := grossCents - commissionCents
+	if netCents < 0 {
+		netCents = 0
+	}
+
+	logger.Info().
+		Str("group_id", groupID).
+		Int("cycle", cycleNumber).
+		Str("circle_type", group.CircleType).
+		Int("rate_bps", rateBps).
+		Int64("gross_cents", grossCents).
+		Int64("commission_cents", commissionCents).
+		Int64("net_cents", netCents).
+		Msg("Tontine cycle settlement amounts (Phase 5: shop-aware rate + held on voucher)")
 
 	voucherCode, err := generateVoucherCode(12)
 	if err != nil {
@@ -279,6 +353,9 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("create voucher entity: %w", err)
 	}
 
+	// Phase 5 : montant exact à libérer au redeem
+	voucher.HeldAmountCents = netCents
+
 	if err := uc.tontineVoucherRepo.Create(ctx, voucher); err != nil {
 		return fmt.Errorf("save voucher: %w", err)
 	}
@@ -287,15 +364,34 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Str("voucher_code", voucherCode).
 		Str("beneficiary_customer_id", beneficiary.CustomerID).
 		Int("cycle", cycleNumber).
+		Int64("held_amount_cents", voucher.HeldAmountCents).
 		Msg("✅ Voucher generated for beneficiary")
+
+	// Crédit NET + hold sur le wallet marchand
+	if uc.walletCreditor != nil && netCents > 0 {
+		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
+			logger.Error().Err(err).
+				Str("shop_id", group.ShopID).
+				Int64("net_cents", netCents).
+				Msg("Failed to credit merchant wallet from tontine cycle (net)")
+		} else {
+			logger.Info().
+				Str("shop_id", group.ShopID).
+				Int64("gross_cents", grossCents).
+				Int64("commission_cents", commissionCents).
+				Int64("net_cents", netCents).
+				Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
+		}
+	}
+
+	uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, commissionCents, logger)
+	uc.notifyBeneficiaryAndMerchant(ctx, group, beneficiary, voucherCode, netCents, cycleNumber, shop, logger)
 
 	if group.IsLastCycle() {
 		if err := uc.tontineGroupRepo.Complete(ctx, groupID); err != nil {
 			return fmt.Errorf("complete group: %w", err)
 		}
-		logger.Info().
-			Str("group_id", groupID).
-			Msg("🎉 Tontine group completed!")
+		logger.Info().Str("group_id", groupID).Msg("🎉 Tontine group completed!")
 		return nil
 	}
 
@@ -303,12 +399,72 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("increment cycle: %w", err)
 	}
 
-	logger.Info().
-		Str("group_id", groupID).
-		Int("new_cycle", cycleNumber+1).
-		Msg("Moved to next cycle")
-
+	logger.Info().Str("group_id", groupID).Int("new_cycle", cycleNumber+1).Msg("Moved to next cycle")
 	return nil
+}
+
+func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
+	ctx context.Context,
+	groupID string,
+	cycleNumber int,
+	_ int64,
+	logger *zerolog.Logger,
+) {
+	payments, err := uc.tontinePaymentRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
+	if err != nil {
+		logger.Warn().Err(err).Msg("Phase 3: could not list cycle payments for commission mark")
+		return
+	}
+
+	for _, p := range payments {
+		if p == nil || !p.IsDone() {
+			continue
+		}
+		if err := uc.tontinePaymentRepo.UpdateTontineCommissionStatus(
+			ctx, p.ID, entity.CommissionStatusCollected, nil,
+		); err != nil {
+			logger.Warn().Err(err).Str("payment_id", p.ID).Msg("Phase 3: failed to mark payment commission collected")
+		}
+	}
+}
+
+func (uc *ProcessTontineWebhookUsecase) notifyBeneficiaryAndMerchant(
+	ctx context.Context,
+	group *entity.TontineGroup,
+	beneficiary *entity.TontineParticipant,
+	voucherCode string,
+	amountCents int64,
+	cycleNumber int,
+	shop *entity.Shop,
+	logger *zerolog.Logger,
+) {
+	if uc.notificationSvc == nil {
+		return
+	}
+
+	amountStr := fmt.Sprintf("%d", amountCents/100)
+	groupName := fmt.Sprintf("Groupe Tontine (Cycle %d/%d)", cycleNumber, group.TotalCycles)
+
+	if uc.customerRepo != nil {
+		beneficiaryCustomer, err := uc.customerRepo.FindByCustomerID(ctx, beneficiary.CustomerID)
+		if err != nil || beneficiaryCustomer == nil || beneficiaryCustomer.UserID == "" {
+			logger.Warn().Err(err).Str("customer_id", beneficiary.CustomerID).Msg("Failed to resolve beneficiary for voucher notification")
+		} else {
+			if err := uc.notificationSvc.NotifyTontineVoucherReady(ctx, beneficiaryCustomer.UserID, groupName, voucherCode, amountStr); err != nil {
+				logger.Warn().Err(err).Str("user_id", beneficiaryCustomer.UserID).Msg("Failed to send voucher-ready notification to beneficiary")
+			} else {
+				logger.Info().Str("user_id", beneficiaryCustomer.UserID).Str("voucher", voucherCode).Msg("Beneficiary notified (voucher issued)")
+			}
+		}
+	}
+
+	if shop != nil && shop.OwnerID != "" {
+		if err := uc.notificationSvc.NotifyTontineMerchantCycleCompleted(ctx, shop.OwnerID, groupName, amountStr, voucherCode); err != nil {
+			logger.Warn().Err(err).Str("owner_id", shop.OwnerID).Msg("Failed to send cycle-completed notification to merchant")
+		} else {
+			logger.Info().Str("owner_id", shop.OwnerID).Msg("Merchant notified (cycle completed + net wallet credit)")
+		}
+	}
 }
 
 func generateVoucherCode(length int) (string, error) {

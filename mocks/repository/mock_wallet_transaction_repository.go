@@ -146,6 +146,21 @@ func (mr *MockWalletTransactionRepositoryMockRecorder) FindByReferenceID(ctx, re
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferenceID", reflect.TypeOf((*MockWalletTransactionRepository)(nil).FindByReferenceID), ctx, refType, refID)
 }
 
+// FindByReferenceIDAdmin mocks base method.
+func (m *MockWalletTransactionRepository) FindByReferenceIDAdmin(ctx context.Context, refType, refID string) (*entity.WalletTransaction, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByReferenceIDAdmin", ctx, refType, refID)
+	ret0, _ := ret[0].(*entity.WalletTransaction)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByReferenceIDAdmin indicates an expected call of FindByReferenceIDAdmin.
+func (mr *MockWalletTransactionRepositoryMockRecorder) FindByReferenceIDAdmin(ctx, refType, refID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferenceIDAdmin", reflect.TypeOf((*MockWalletTransactionRepository)(nil).FindByReferenceIDAdmin), ctx, refType, refID)
+}
+
 // FindByShopID mocks base method.
 func (m *MockWalletTransactionRepository) FindByShopID(ctx context.Context, shopID string) ([]*entity.WalletTransaction, error) {
 	m.ctrl.T.Helper()

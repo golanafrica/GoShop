@@ -119,6 +119,10 @@ type WalletTransactionRepository interface {
 	// FindByReferenceID trouve une transaction par référence
 	FindByReferenceID(ctx context.Context, refType string, refID string) (*entity.WalletTransaction, error)
 
+	// FindByReferenceIDAdmin trouve une transaction par référence SANS filtre tenant
+	// Réservé scheduler / admin / system (auto-release, disputes système)
+	FindByReferenceIDAdmin(ctx context.Context, refType string, refID string) (*entity.WalletTransaction, error)
+
 	// FindCreditsByShopID retourne uniquement les crédits d'une boutique
 	FindCreditsByShopID(ctx context.Context, shopID string) ([]*entity.WalletTransaction, error)
 

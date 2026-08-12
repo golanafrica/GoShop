@@ -27,5 +27,8 @@ type OrderRepository interface {
 	// 🆕 FindCashPendingByShop retourne les commandes cash en attente de confirmation
 	FindCashPendingByShop(ctx context.Context, shopID string) ([]*entity.Order, error)
 
+	// 🆕 v4.8.3 : Trouver une order sans vérification multi-tenant (pour scheduler/admin)
+	FindByIDAdmin(ctx context.Context, id string) (*entity.Order, error)
+
 	WithTX(tx Tx) OrderRepository
 }

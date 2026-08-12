@@ -3,52 +3,55 @@ package tontineusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	paymentusecase "Goshop/application/usecase/payment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	"Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
-// PayCycleUsecase permet à un client de payer une cotisation de tontine via YengaPay
 type PayCycleUsecase struct {
 	groupRepo       repository.TontineGroupRepository
 	participantRepo repository.TontineParticipantRepository
 	paymentRepo     repository.TontinePaymentRepository
-	shopRepo        repository.ShopRepository
+	rateRepo        repository.CommissionRateRepository // 🆕 Pour le taux exact par type de cercle
 	txManager       repository.TxManager
+	paymentRegistry paymentusecase.PaymentRegistry
 }
 
-// NewPayCycleUsecase crée une nouvelle instance
 func NewPayCycleUsecase(
 	groupRepo repository.TontineGroupRepository,
 	participantRepo repository.TontineParticipantRepository,
 	paymentRepo repository.TontinePaymentRepository,
-	shopRepo repository.ShopRepository,
+	rateRepo repository.CommissionRateRepository, // 🆕 Injection du rateRepo
 	txManager repository.TxManager,
+	paymentRegistry paymentusecase.PaymentRegistry,
 ) *PayCycleUsecase {
 	return &PayCycleUsecase{
 		groupRepo:       groupRepo,
 		participantRepo: participantRepo,
 		paymentRepo:     paymentRepo,
-		shopRepo:        shopRepo,
+		rateRepo:        rateRepo,
 		txManager:       txManager,
+		paymentRegistry: paymentRegistry,
 	}
 }
 
-// PayCycleRequest représente la requête de paiement d'une cotisation
 type PayCycleRequest struct {
 	GroupID     string `json:"group_id"`
 	CustomerID  string `json:"customer_id"`
-	Operator    string `json:"operator"`     // orange_money, moov_money, telecel, etc.
-	PhoneNumber string `json:"phone_number"` // +226...
-	Flow        string `json:"flow"`         // indirect (défaut) ou direct
+	Operator    string `json:"operator"`
+	PhoneNumber string `json:"phone_number"`
+	Flow        string `json:"flow"`
+	OTP         string `json:"otp,omitempty"`
 }
 
-// Validate valide la requête
 func (r *PayCycleRequest) Validate() error {
 	if r.GroupID == "" {
 		return fmt.Errorf("group_id is required")
@@ -68,10 +71,22 @@ func (r *PayCycleRequest) Validate() error {
 	if r.Flow != "indirect" && r.Flow != "direct" {
 		return fmt.Errorf("flow must be 'indirect' or 'direct'")
 	}
+
+	op := strings.ToLower(strings.TrimSpace(r.Operator))
+	if op == "yenga_pay" || op == "yengapay" {
+		return fmt.Errorf("operator must be a mobile money channel, not yenga_pay")
+	}
+
+	if r.OTP != "" {
+		otp := strings.TrimSpace(r.OTP)
+		if len(otp) < 4 || len(otp) > 10 {
+			return fmt.Errorf("otp must be between 4 and 10 characters")
+		}
+		r.OTP = otp
+	}
 	return nil
 }
 
-// PayCycleResponse représente la réponse après initiation du paiement
 type PayCycleResponse struct {
 	TontinePaymentID string `json:"tontine_payment_id"`
 	AmountCents      int64  `json:"amount_cents"`
@@ -79,178 +94,240 @@ type PayCycleResponse struct {
 	NetAmountCents   int64  `json:"net_amount_cents"`
 	CycleNumber      int    `json:"cycle_number"`
 	Status           string `json:"status"`
-
-	// Infos YengaPay (selon le flux)
-	ProviderRef string `json:"provider_ref,omitempty"`
-	USSDCode    string `json:"ussd_code,omitempty"`
-	RedirectURL string `json:"redirect_url,omitempty"`
-	Message     string `json:"message,omitempty"`
+	ProviderRef      string `json:"provider_ref,omitempty"`
+	YengaIntentID    string `json:"yenga_intent_id,omitempty"`
+	USSDCode         string `json:"ussd_code,omitempty"`
+	RedirectURL      string `json:"redirect_url,omitempty"`
+	Message          string `json:"message,omitempty"`
+	RequiresOTP      bool   `json:"requires_otp,omitempty"`
 }
 
-// Execute initie le paiement d'une cotisation de tontine
 func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*PayCycleResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le shop du contexte (multi-tenant)
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
-
-	// 2. Valider la requête
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 3. Récupérer le groupe
 	group, err := uc.groupRepo.FindByID(ctx, req.GroupID)
 	if err != nil {
 		return nil, fmt.Errorf("group not found: %w", err)
 	}
-
-	// 4. Vérifier que le groupe appartient à la boutique
 	if group.ShopID != shop.ID.String() {
 		return nil, fmt.Errorf("group does not belong to this shop")
 	}
-
-	// 5. Vérifier que le groupe est actif
 	if !group.IsActive() {
 		return nil, fmt.Errorf("group is not active (status: %s)", group.Status)
 	}
 
-	// 6. Récupérer le participant
 	participant, err := uc.participantRepo.FindByGroupAndCustomer(ctx, group.ID, req.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("you are not a participant of this group")
 	}
-
-	// 7. Vérifier que le participant est actif
 	if !participant.IsActive() {
-		return nil, fmt.Errorf("your participant status is not active (status: %s)", participant.Status)
+		return nil, fmt.Errorf("your participant status is not active")
 	}
 
-	// 8. Vérifier que le client n'a pas déjà payé pour ce cycle
+	yengapayReference := fmt.Sprintf("TONTINE:%s:%d:%s", group.ID[:8], group.CurrentCycle, participant.ID[:8])
+
 	existingPayment, _ := uc.paymentRepo.FindByParticipantAndCycle(ctx, participant.ID, group.CurrentCycle)
 	if existingPayment != nil && existingPayment.IsDone() {
 		return nil, fmt.Errorf("you have already paid for cycle %d", group.CurrentCycle)
 	}
 
-	// 9. Récupérer la configuration de commission de la boutique
-	settings, err := uc.shopRepo.GetPaymentSettings(ctx, shop.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shop settings: %w", err)
-	}
+	var paymentEntity *entity.TontinePayment
 
-	commissionRate := settings.GetTontineCommissionRate()
-	commissionCents := entity.CalculateCommission(group.AmountPerCycleCents, commissionRate)
+	if existingPayment != nil && (existingPayment.Status == entity.TontinePaymentProcessing || existingPayment.Status == entity.TontinePaymentFailed) {
+		paymentEntity = existingPayment
 
-	// 10. Générer la référence YengaPay (format: TONTINE:{groupID_short}:{cycle}:{participantID_short})
-	yengapayReference := fmt.Sprintf("TONTINE:%s:%d:%s",
-		group.ID[:8],
-		group.CurrentCycle,
-		participant.ID[:8],
-	)
-
-	// 11. Créer le paiement tontine en statut PENDING
-	dueDate := time.Now().UTC().Add(24 * time.Hour) // 24h pour payer
-	payment, err := entity.NewTontinePayment(
-		group.ID,
-		participant.ID,
-		req.CustomerID,
-		group.CurrentCycle,
-		group.AmountPerCycleCents,
-		commissionCents,
-		dueDate,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create payment entity: %w", err)
-	}
-
-	// Marquer comme PROCESSING avec la référence
-	if err := payment.MarkProcessing(yengapayReference); err != nil {
-		return nil, fmt.Errorf("failed to mark payment processing: %w", err)
-	}
-
-	// 12. Sauvegarder dans la DB
-	tx, err := uc.txManager.BeginTx(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
+		if paymentEntity.Status == entity.TontinePaymentFailed {
+			paymentEntity.Status = entity.TontinePaymentProcessing
+			paymentEntity.YengaPayReference = &yengapayReference
+			paymentEntity.UpdatedAt = time.Now().UTC()
+			if err := uc.paymentRepo.UpdateStatus(ctx, paymentEntity.ID, entity.TontinePaymentProcessing); err != nil {
+				return nil, fmt.Errorf("failed to reset failed payment: %w", err)
+			}
 		}
-	}()
+		logger.Info().Str("payment_id", paymentEntity.ID).Msg("Reusing existing processing/failed payment (Idempotence)")
+	} else {
+		// 🆕 FIX C5 & Audit Taux : Récupérer le taux exact basé sur le type de cercle
+		transactionType := getTontineTransactionType(group.CircleType)
+		rate, err := uc.rateRepo.GetDefaultRate(ctx, shop.ID.String(), transactionType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get commission rate: %w", err) // 🆕 Retourner l'erreur au lieu de continuer
+		}
 
-	paymentRepoTx := uc.paymentRepo.WithTX(tx)
-	if err = paymentRepoTx.Create(ctx, payment); err != nil {
-		return nil, fmt.Errorf("failed to save payment: %w", err)
+		commissionCents := entity.CalculateCommission(group.AmountPerCycleCents, rate.RateBps)
+
+		dueDate := time.Now().UTC().Add(24 * time.Hour)
+		paymentEntity, err = entity.NewTontinePayment(group.ID, participant.ID, req.CustomerID, group.CurrentCycle, group.AmountPerCycleCents, commissionCents, dueDate)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create payment entity: %w", err)
+		}
+		if err := paymentEntity.MarkProcessing(yengapayReference); err != nil {
+			return nil, fmt.Errorf("failed to mark payment processing: %w", err)
+		}
+
+		tx, err := uc.txManager.BeginTx(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start transaction: %w", err)
+		}
+		paymentRepoTx := uc.paymentRepo.WithTX(tx)
+		if err = paymentRepoTx.Create(ctx, paymentEntity); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("failed to save payment: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		}
 	}
 
-	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	provider, err := uc.paymentRegistry.GetAvailable(ctx, entity.ProviderYengaPay)
+	if err != nil {
+		_ = uc.paymentRepo.UpdateStatus(ctx, paymentEntity.ID, entity.TontinePaymentFailed)
+		return nil, fmt.Errorf("payment provider not available: %w", err)
 	}
 
-	logger.Info().
-		Str("group_id", group.ID).
-		Str("customer_id", req.CustomerID).
-		Int("cycle", group.CurrentCycle).
-		Int64("amount_cents", group.AmountPerCycleCents).
-		Int64("commission_cents", commissionCents).
-		Str("yengapay_reference", yengapayReference).
-		Msg("Tontine payment initiated")
+	mmOperator := normalizeMobileOperator(req.Operator)
+	metadata := map[string]interface{}{
+		"group_id":     group.ID,
+		"cycle_number": group.CurrentCycle,
+		"flow":         req.Flow,
+		"operator":     mmOperator,
+	}
+	if req.OTP != "" {
+		metadata["otp"] = req.OTP
+	}
 
-	// 13. Retourner la réponse
-	// Note : L'initiation YengaPay réelle se fera dans le handler HTTP qui appellera le provider
-	// Ici on retourne juste les infos nécessaires pour que le handler puisse initier
+	providerReq := &payment.PaymentRequest{
+		PaymentID:   yengapayReference,
+		AmountCents: paymentEntity.AmountCents,
+		Currency:    "XOF",
+		PhoneNumber: req.PhoneNumber,
+		CustomerRef: req.CustomerID,
+		Description: fmt.Sprintf("Tontine Cycle %d - %s", group.CurrentCycle, group.ID[:8]),
+		Metadata:    metadata,
+	}
+
+	providerResp, err := provider.InitiatePayment(ctx, providerReq)
+	if err != nil {
+		_ = uc.paymentRepo.UpdateStatus(ctx, paymentEntity.ID, entity.TontinePaymentFailed)
+		return nil, fmt.Errorf("payment initiation failed: %w", err)
+	}
+
+	intentToSave := providerResp.ProviderRef
+	if intentToSave == "" && req.Flow == "direct" && req.OTP == "" {
+		intentToSave = yengapayReference
+	}
+
+	if intentToSave != "" {
+		if err := uc.paymentRepo.SetProviderIntentID(ctx, paymentEntity.ID, intentToSave); err != nil {
+			logger.Warn().Err(err).Msg("Failed to save provider intent ID")
+		}
+	}
+
+	logger.Info().Str("group_id", group.ID).Int("cycle", group.CurrentCycle).Str("provider_ref", providerResp.ProviderRef).Msg("Tontine payment initiated")
+
+	msg := fmt.Sprintf("Paiement initié pour le cycle %d. Montant: %d FCFA.", group.CurrentCycle, paymentEntity.AmountCents/100)
+	if providerResp.Metadata != nil {
+		if n, ok := providerResp.Metadata["notification"].(string); ok && n != "" {
+			msg = n
+		}
+	}
+	requiresOTP := providerResp.USSDCode != "" && req.OTP == "" && req.Flow == "direct"
+
 	return &PayCycleResponse{
-		TontinePaymentID: payment.ID,
-		AmountCents:      payment.AmountCents,
-		CommissionCents:  payment.CommissionCents,
-		NetAmountCents:   payment.NetAmountCents(),
-		CycleNumber:      payment.CycleNumber,
-		Status:           payment.Status,
+		TontinePaymentID: paymentEntity.ID,
+		AmountCents:      paymentEntity.AmountCents,
+		CommissionCents:  paymentEntity.CommissionCents,
+		NetAmountCents:   paymentEntity.NetAmountCents(),
+		CycleNumber:      paymentEntity.CycleNumber,
+		Status:           paymentEntity.Status,
 		ProviderRef:      yengapayReference,
-		Message: fmt.Sprintf(
-			"Payment initiated for cycle %d. Amount: %d FCFA, Commission: %d FCFA. Reference: %s",
-			group.CurrentCycle,
-			payment.AmountCents/100,
-			payment.CommissionCents/100,
-			yengapayReference,
-		),
+		YengaIntentID:    intentToSave,
+		USSDCode:         providerResp.USSDCode,
+		RedirectURL:      providerResp.RedirectURL,
+		Message:          msg,
+		RequiresOTP:      requiresOTP,
 	}, nil
 }
 
-// ============================================================
-// Usecase : Lister les paiements d'un client pour un groupe
-// ============================================================
+func getTontineTransactionType(circleType string) string {
+	switch circleType {
+	case entity.TontineCircleCommercial:
+		return "tontine_commercial"
+	case entity.TontineCircleCorporate:
+		return "tontine_corporate"
+	case entity.TontineCircleFamily:
+		return "tontine_family"
+	default:
+		return "tontine_group"
+	}
+}
 
-// ListCustomerPaymentsUsecase liste les paiements d'un client dans un groupe
+func normalizeMobileOperator(clientOperator string) string {
+	op := strings.ToLower(strings.TrimSpace(clientOperator))
+	switch op {
+	case "orange", "orange_money":
+		return "orange_money"
+	case "moov", "moov_money":
+		return "moov_money"
+	case "telecel":
+		return "telecel"
+	case "coris", "coris_money", "corism":
+		return "coris_money"
+	case "sank", "sank_money", "sankm":
+		return "sank_money"
+	case "mtn":
+		return "mtn"
+	default:
+		return op
+	}
+}
+
+func GenerateTontineReference(groupID string, cycleNumber int, participantID string) string {
+	groupUUID, err1 := uuid.Parse(groupID)
+	participantUUID, err2 := uuid.Parse(participantID)
+	if err1 != nil || err2 != nil {
+		if len(groupID) < 8 {
+			groupID = groupID + "00000000"
+		}
+		if len(participantID) < 8 {
+			participantID = participantID + "00000000"
+		}
+		return fmt.Sprintf("TONTINE:%s:%d:%s", groupID[:8], cycleNumber, participantID[:8])
+	}
+	return fmt.Sprintf("TONTINE:%s:%d:%s", groupUUID.String()[:8], cycleNumber, participantUUID.String()[:8])
+}
+
+func ParseTontineReference(reference string) (string, int, string, error) {
+	var groupPrefix, participantPrefix string
+	var cycleNumber int
+	n, err := fmt.Sscanf(reference, "TONTINE:%8s:%d:%8s", &groupPrefix, &cycleNumber, &participantPrefix)
+	if err != nil || n != 3 {
+		return "", 0, "", fmt.Errorf("invalid tontine reference format: %s", reference)
+	}
+	return groupPrefix, cycleNumber, participantPrefix, nil
+}
+
 type ListCustomerPaymentsUsecase struct {
 	paymentRepo repository.TontinePaymentRepository
 	groupRepo   repository.TontineGroupRepository
 }
 
-// NewListCustomerPaymentsUsecase crée une nouvelle instance
-func NewListCustomerPaymentsUsecase(
-	paymentRepo repository.TontinePaymentRepository,
-	groupRepo repository.TontineGroupRepository,
-) *ListCustomerPaymentsUsecase {
-	return &ListCustomerPaymentsUsecase{
-		paymentRepo: paymentRepo,
-		groupRepo:   groupRepo,
-	}
+func NewListCustomerPaymentsUsecase(paymentRepo repository.TontinePaymentRepository, groupRepo repository.TontineGroupRepository) *ListCustomerPaymentsUsecase {
+	return &ListCustomerPaymentsUsecase{paymentRepo: paymentRepo, groupRepo: groupRepo}
 }
 
-// Execute retourne tous les paiements d'un client dans un groupe
 func (uc *ListCustomerPaymentsUsecase) Execute(ctx context.Context, groupID, customerID string) ([]*entity.TontinePayment, error) {
-	// Vérifier le multi-tenant
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
-
-	// Vérifier que le groupe appartient à la boutique
 	group, err := uc.groupRepo.FindByID(ctx, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("group not found: %w", err)
@@ -258,59 +335,9 @@ func (uc *ListCustomerPaymentsUsecase) Execute(ctx context.Context, groupID, cus
 	if group.ShopID != shop.ID.String() {
 		return nil, fmt.Errorf("group does not belong to this shop")
 	}
-
-	// Récupérer les paiements
 	payments, err := uc.paymentRepo.FindByCustomerAndGroup(ctx, customerID, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch payments: %w", err)
+		return nil, fmt.Errorf("failed to fetch payments: %w", err) // 🆕 Wrap l'erreur pour que le test passe
 	}
-
 	return payments, nil
-}
-
-// ============================================================
-// Utilitaire : Générer la référence YengaPay pour un paiement tontine
-// ============================================================
-
-// GenerateTontineReference génère la référence YengaPay pour un paiement tontine
-// Format : "TONTINE:{groupID_short}:{cycleNumber}:{participantID_short}"
-func GenerateTontineReference(groupID string, cycleNumber int, participantID string) string {
-	// S'assurer que les IDs sont des UUIDs valides
-	groupUUID, err1 := uuid.Parse(groupID)
-	participantUUID, err2 := uuid.Parse(participantID)
-
-	if err1 != nil || err2 != nil {
-		// Fallback : utiliser les 8 premiers caractères
-		if len(groupID) < 8 {
-			groupID = groupID + "00000000"
-		}
-		if len(participantID) < 8 {
-			participantID = participantID + "00000000"
-		}
-		return fmt.Sprintf("TONTINE:%s:%d:%s",
-			groupID[:8],
-			cycleNumber,
-			participantID[:8],
-		)
-	}
-
-	return fmt.Sprintf("TONTINE:%s:%d:%s",
-		groupUUID.String()[:8],
-		cycleNumber,
-		participantUUID.String()[:8],
-	)
-}
-
-// ParseTontineReference parse une référence YengaPay tontine
-// Retourne (groupIDPrefix, cycleNumber, participantIDPrefix, error)
-func ParseTontineReference(reference string) (string, int, string, error) {
-	var groupPrefix, participantPrefix string
-	var cycleNumber int
-
-	n, err := fmt.Sscanf(reference, "TONTINE:%8s:%d:%8s", &groupPrefix, &cycleNumber, &participantPrefix)
-	if err != nil || n != 3 {
-		return "", 0, "", fmt.Errorf("invalid tontine reference format: %s", reference)
-	}
-
-	return groupPrefix, cycleNumber, participantPrefix, nil
 }

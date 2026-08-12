@@ -28,8 +28,10 @@ const (
 	NotificationMerchantDisputeResolved NotificationType = "merchant_dispute_resolved"
 
 	// 🆕 --- Tontine ---
-	NotificationTontineCyclePaid NotificationType = "tontine_cycle_paid"
-	NotificationTontineTurnSoon  NotificationType = "tontine_turn_soon"
+	NotificationTontineCyclePaid              NotificationType = "tontine_cycle_paid"
+	NotificationTontineTurnSoon               NotificationType = "tontine_turn_soon"
+	NotificationTontineVoucherReady           NotificationType = "tontine_voucher_ready"
+	NotificationTontineMerchantCycleCompleted NotificationType = "tontine_merchant_cycle_completed"
 
 	// 🆕 --- Crédit ---
 	NotificationCreditInstallmentDue  NotificationType = "credit_installment_due"
@@ -67,6 +69,10 @@ type NotificationService interface {
 	NotifyTontineCyclePaid(ctx context.Context, userID, payerName, groupName, amount string) error
 	// Notifie un membre que son tour de recevoir la cagnotte approche
 	NotifyTontineTurnSoon(ctx context.Context, userID, groupName, turnDate string) error
+	// Notifie le bénéficiaire que c'est son tour et que son voucher est généré
+	NotifyTontineVoucherReady(ctx context.Context, userID, groupName, voucherCode, amountStr string) error
+	// Notifie le marchand que le cycle est soldé et le wallet crédité
+	NotifyTontineMerchantCycleCompleted(ctx context.Context, ownerUserID, groupName, amountStr, voucherCode string) error
 
 	// 🆕 --- Crédit ---
 	// Rappel X jours avant l'échéance

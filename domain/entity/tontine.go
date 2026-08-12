@@ -2,6 +2,7 @@ package entity
 
 import (
 	"errors"
+	"fmt" // 🆕 FIX AUDIT P1 : Ajouté pour le formatage des messages d'erreur
 	"time"
 )
 
@@ -25,7 +26,6 @@ const (
 	TontineCircleFamily     = "FAMILY"
 )
 
-// IsValidCircleType vérifie si le type de cercle est valide
 func IsValidCircleType(circleType string) bool {
 	switch circleType {
 	case TontineCircleCommercial, TontineCircleCorporate, TontineCircleFamily:
@@ -43,7 +43,6 @@ const (
 	TontineCreatorCustomer = "customer"
 )
 
-// IsValidCreatorType vérifie si le type de créateur est valide
 func IsValidCreatorType(creatorType string) bool {
 	switch creatorType {
 	case TontineCreatorMerchant, TontineCreatorCustomer:
@@ -85,10 +84,9 @@ const (
 )
 
 // ============================================================
-// ProductTontineSettings — config tontine par produit
+// ProductTontineSettings
 // ============================================================
 
-// ProductTontineSettings représente la configuration tontine d'un produit
 type ProductTontineSettings struct {
 	ProductID             string    `json:"product_id" db:"product_id"`
 	ShopID                string    `json:"shop_id" db:"shop_id"`
@@ -102,7 +100,6 @@ type ProductTontineSettings struct {
 	UpdatedAt             time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// IsCircleTypeAllowed vérifie si un type de cercle est autorisé pour ce produit
 func (s *ProductTontineSettings) IsCircleTypeAllowed(circleType string) bool {
 	switch circleType {
 	case TontineCircleCommercial:
@@ -116,22 +113,21 @@ func (s *ProductTontineSettings) IsCircleTypeAllowed(circleType string) bool {
 	}
 }
 
-// ValidateParticipantCount vérifie si le nombre de participants est valide
+// 🆕 FIX AUDIT P1 : Utilisation de fmt.Sprintf au lieu de string(rune(...)) pour gérer correctement les nombres >= 10
 func (s *ProductTontineSettings) ValidateParticipantCount(count int) error {
 	if count < s.MinParticipants {
-		return errors.New("le nombre de participants doit être au minimum de " + string(rune(s.MinParticipants+'0')))
+		return fmt.Errorf("le nombre de participants doit être au minimum de %d", s.MinParticipants)
 	}
 	if count > s.MaxParticipants {
-		return errors.New("le nombre de participants ne peut pas dépasser " + string(rune(s.MaxParticipants+'0')))
+		return fmt.Errorf("le nombre de participants ne peut pas dépasser %d", s.MaxParticipants)
 	}
 	return nil
 }
 
 // ============================================================
-// TontineGroup — entité principale
+// TontineGroup
 // ============================================================
 
-// TontineGroup représente un groupe de tontine
 type TontineGroup struct {
 	ID                string  `json:"id" db:"id"`
 	ProductID         string  `json:"product_id" db:"product_id"`
@@ -155,7 +151,6 @@ type TontineGroup struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// NewTontineGroup crée un nouveau groupe de tontine
 func NewTontineGroup(
 	productID, shopID string,
 	creatorCustomerID *string,
@@ -164,7 +159,6 @@ func NewTontineGroup(
 	totalCycles int,
 	inviteCode string,
 ) (*TontineGroup, error) {
-	// Validations
 	if productID == "" {
 		return nil, errors.New("product_id is required")
 	}
@@ -207,7 +201,6 @@ func NewTontineGroup(
 	}, nil
 }
 
-// CanStart vérifie si le groupe peut démarrer
 func (g *TontineGroup) CanStart(currentMembersCount int) error {
 	if g.Status != TontineStatusPendingMembers {
 		return errors.New("le groupe n'est pas en attente de membres")
@@ -218,7 +211,6 @@ func (g *TontineGroup) CanStart(currentMembersCount int) error {
 	return nil
 }
 
-// Start démarre le groupe
 func (g *TontineGroup) Start() error {
 	if g.Status != TontineStatusPendingMembers {
 		return errors.New("le groupe ne peut pas démarrer depuis le statut " + g.Status)
@@ -230,17 +222,14 @@ func (g *TontineGroup) Start() error {
 	return nil
 }
 
-// IsLastCycle vérifie si c'est le dernier cycle
 func (g *TontineGroup) IsLastCycle() bool {
 	return g.CurrentCycle == g.TotalCycles
 }
 
-// IsActive vérifie si le groupe est actif
 func (g *TontineGroup) IsActive() bool {
 	return g.Status == TontineStatusActive
 }
 
-// Complete marque le groupe comme terminé
 func (g *TontineGroup) Complete() error {
 	if g.Status != TontineStatusActive {
 		return errors.New("seul un groupe actif peut être complété")
@@ -252,7 +241,6 @@ func (g *TontineGroup) Complete() error {
 	return nil
 }
 
-// IncrementCycle passe au cycle suivant
 func (g *TontineGroup) IncrementCycle() error {
 	if !g.IsActive() {
 		return errors.New("le groupe doit être actif")
@@ -265,7 +253,6 @@ func (g *TontineGroup) IncrementCycle() error {
 	return nil
 }
 
-// TotalAmountCents retourne le montant total que chaque participant paiera
 func (g *TontineGroup) TotalAmountCents() int64 {
 	return g.AmountPerCycleCents * int64(g.TotalCycles)
 }
@@ -274,7 +261,6 @@ func (g *TontineGroup) TotalAmountCents() int64 {
 // TontineParticipant
 // ============================================================
 
-// TontineParticipant représente un participant à un groupe de tontine
 type TontineParticipant struct {
 	ID             string    `json:"id" db:"id"`
 	GroupID        string    `json:"group_id" db:"group_id"`
@@ -284,7 +270,6 @@ type TontineParticipant struct {
 	JoinedAt       time.Time `json:"joined_at" db:"joined_at"`
 }
 
-// NewTontineParticipant crée un nouveau participant
 func NewTontineParticipant(groupID, customerID string, payoutPosition int) (*TontineParticipant, error) {
 	if groupID == "" {
 		return nil, errors.New("group_id is required")
@@ -305,12 +290,10 @@ func NewTontineParticipant(groupID, customerID string, payoutPosition int) (*Ton
 	}, nil
 }
 
-// IsBeneficiaryForCycle vérifie si ce participant reçoit le bien à ce cycle
 func (p *TontineParticipant) IsBeneficiaryForCycle(cycleNumber int) bool {
 	return p.PayoutPosition == cycleNumber
 }
 
-// IsActive vérifie si le participant est actif
 func (p *TontineParticipant) IsActive() bool {
 	return p.Status == ParticipantStatusActive
 }
@@ -319,7 +302,6 @@ func (p *TontineParticipant) IsActive() bool {
 // TontinePayment
 // ============================================================
 
-// TontinePayment représente un paiement de cotisation
 type TontinePayment struct {
 	ID                    string     `json:"id" db:"id"`
 	GroupID               string     `json:"group_id" db:"group_id"`
@@ -329,6 +311,7 @@ type TontinePayment struct {
 	AmountCents           int64      `json:"amount_cents" db:"amount_cents"`
 	CommissionCents       int64      `json:"commission_cents" db:"commission_cents"`
 	YengaPayReference     *string    `json:"yengapay_reference,omitempty" db:"yengapay_reference"`
+	ProviderIntentID      string     `json:"provider_intent_id,omitempty" db:"provider_intent_id"`
 	YengaPayTransactionID *string    `json:"yengapay_transaction_id,omitempty" db:"yengapay_transaction_id"`
 	PaymentProvider       string     `json:"payment_provider" db:"payment_provider"`
 	Status                string     `json:"status" db:"status"`
@@ -336,13 +319,12 @@ type TontinePayment struct {
 	PaidAt                *time.Time `json:"paid_at,omitempty" db:"paid_at"`
 	CreatedAt             time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at" db:"updated_at"`
-	CommissionStatus      string     `json:"commission_status" db:"commission_status"` // pending, collected, failed
+	CommissionStatus      string     `json:"commission_status" db:"commission_status"`
 
 	// 🆕 v3.3.0 : Pour le scheduler (non persisté en DB)
-	ShopID string `json:"shop_id,omitempty" db:"-"` // Shop ID du groupe (pour le multi-tenant)
+	ShopID string `json:"shop_id,omitempty" db:"-"`
 }
 
-// NewTontinePayment crée un nouveau paiement de cotisation
 func NewTontinePayment(
 	groupID, participantID, customerID string,
 	cycleNumber int,
@@ -378,7 +360,6 @@ func NewTontinePayment(
 	}, nil
 }
 
-// MarkProcessing marque le paiement comme en cours de traitement
 func (p *TontinePayment) MarkProcessing(reference string) error {
 	if p.Status != TontinePaymentPending {
 		return errors.New("le paiement doit être en pending")
@@ -389,7 +370,6 @@ func (p *TontinePayment) MarkProcessing(reference string) error {
 	return nil
 }
 
-// MarkDone marque le paiement comme effectué
 func (p *TontinePayment) MarkDone(transactionID string) error {
 	if p.Status != TontinePaymentPending && p.Status != TontinePaymentProcessing {
 		return errors.New("le paiement doit être en pending ou processing")
@@ -402,7 +382,6 @@ func (p *TontinePayment) MarkDone(transactionID string) error {
 	return nil
 }
 
-// MarkFailed marque le paiement comme échoué
 func (p *TontinePayment) MarkFailed() error {
 	if p.Status != TontinePaymentPending && p.Status != TontinePaymentProcessing {
 		return errors.New("le paiement doit être en pending ou processing")
@@ -412,12 +391,10 @@ func (p *TontinePayment) MarkFailed() error {
 	return nil
 }
 
-// IsDone vérifie si le paiement est effectué
 func (p *TontinePayment) IsDone() bool {
 	return p.Status == TontinePaymentDone
 }
 
-// NetAmountCents retourne le montant net (après commission)
 func (p *TontinePayment) NetAmountCents() int64 {
 	return p.AmountCents - p.CommissionCents
 }
@@ -426,24 +403,23 @@ func (p *TontinePayment) NetAmountCents() int64 {
 // TontineVoucher
 // ============================================================
 
-// TontineVoucher représente un voucher de livraison
 type TontineVoucher struct {
-	ID            string     `json:"id" db:"id"`
-	GroupID       string     `json:"group_id" db:"group_id"`
-	ParticipantID string     `json:"participant_id" db:"participant_id"`
-	CustomerID    string     `json:"customer_id" db:"customer_id"`
-	ProductID     string     `json:"product_id" db:"product_id"`
-	ShopID        string     `json:"shop_id" db:"shop_id"`
-	VoucherCode   string     `json:"voucher_code" db:"voucher_code"`
-	CycleNumber   int        `json:"cycle_number" db:"cycle_number"`
-	Status        string     `json:"status" db:"status"`
-	ExpiresAt     time.Time  `json:"expires_at" db:"expires_at"`
-	RedeemedAt    *time.Time `json:"redeemed_at,omitempty" db:"redeemed_at"`
-	RedeemedBy    *string    `json:"redeemed_by,omitempty" db:"redeemed_by"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+	ID              string     `json:"id" db:"id"`
+	GroupID         string     `json:"group_id" db:"group_id"`
+	ParticipantID   string     `json:"participant_id" db:"participant_id"`
+	CustomerID      string     `json:"customer_id" db:"customer_id"`
+	ProductID       string     `json:"product_id" db:"product_id"`
+	ShopID          string     `json:"shop_id" db:"shop_id"`
+	VoucherCode     string     `json:"voucher_code" db:"voucher_code"`
+	CycleNumber     int        `json:"cycle_number" db:"cycle_number"`
+	Status          string     `json:"status" db:"status"`
+	HeldAmountCents int64      `json:"held_amount_cents" db:"held_amount_cents"`
+	ExpiresAt       time.Time  `json:"expires_at" db:"expires_at"`
+	RedeemedAt      *time.Time `json:"redeemed_at,omitempty" db:"redeemed_at"`
+	RedeemedBy      *string    `json:"redeemed_by,omitempty" db:"redeemed_by"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 }
 
-// NewTontineVoucher crée un nouveau voucher avec 6 mois de validité
 func NewTontineVoucher(
 	groupID, participantID, customerID, productID, shopID, voucherCode string,
 	cycleNumber int,
@@ -471,29 +447,23 @@ func NewTontineVoucher(
 		VoucherCode:   voucherCode,
 		CycleNumber:   cycleNumber,
 		Status:        VoucherStatusGenerated,
-		ExpiresAt:     now.AddDate(0, 6, 0), // 6 mois de validité
+		ExpiresAt:     now.AddDate(0, 6, 0),
 		CreatedAt:     now,
 	}, nil
 }
 
-// IsValid vérifie si le voucher peut être utilisé
 func (v *TontineVoucher) IsValid() bool {
-	return v.Status == VoucherStatusGenerated &&
-		time.Now().UTC().Before(v.ExpiresAt)
+	return v.Status == VoucherStatusGenerated && time.Now().UTC().Before(v.ExpiresAt)
 }
 
-// IsExpired vérifie si le voucher a expiré
 func (v *TontineVoucher) IsExpired() bool {
-	return v.Status == VoucherStatusGenerated &&
-		time.Now().UTC().After(v.ExpiresAt)
+	return v.Status == VoucherStatusGenerated && time.Now().UTC().After(v.ExpiresAt)
 }
 
-// IsRedeemableInShop vérifie que le voucher est utilisable dans cette boutique
 func (v *TontineVoucher) IsRedeemableInShop(shopID string) bool {
 	return v.ShopID == shopID
 }
 
-// Redeem marque le voucher comme utilisé
 func (v *TontineVoucher) Redeem(redeemerID string) error {
 	if !v.IsValid() {
 		return errors.New("le voucher n'est pas valide")
@@ -512,8 +482,6 @@ func (v *TontineVoucher) Redeem(redeemerID string) error {
 // Fonctions utilitaires
 // ============================================================
 
-// CalculateAmountPerCycle calcule le montant par cycle en centimes
-// Retourne (amountPerCycle, remainder) pour gérer les divisions non exactes
 func CalculateAmountPerCycle(totalPriceCents int64, totalCycles int) (int64, int64) {
 	if totalCycles <= 0 {
 		return 0, totalPriceCents
@@ -523,8 +491,6 @@ func CalculateAmountPerCycle(totalPriceCents int64, totalCycles int) (int64, int
 	return amountPerCycle, remainder
 }
 
-// CalculateCommission calcule la commission GoShop en centimes
-// commissionRateBp est en basis points (250 = 2.50%, max 1500 = 15%)
 func CalculateCommission(amountCents int64, commissionRateBp int) int64 {
 	if commissionRateBp < 0 || commissionRateBp > 1500 {
 		return 0

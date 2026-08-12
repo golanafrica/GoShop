@@ -92,6 +92,16 @@ func (s *NoopNotificationService) NotifyTontineTurnSoon(ctx context.Context, use
 	return nil
 }
 
+func (s *NoopNotificationService) NotifyTontineVoucherReady(ctx context.Context, userID, groupName, voucherCode, amountStr string) error {
+	s.logger.Info().Str("notification_type", "tontine_voucher_ready").Str("user_id", userID).Str("group", groupName).Str("voucher", voucherCode).Msg("📱 [NO-OP] Notification Tontine : voucher prêt pour le bénéficiaire")
+	return nil
+}
+
+func (s *NoopNotificationService) NotifyTontineMerchantCycleCompleted(ctx context.Context, ownerUserID, groupName, amountStr, voucherCode string) error {
+	s.logger.Info().Str("notification_type", "tontine_merchant_cycle_completed").Str("owner_id", ownerUserID).Str("group", groupName).Str("voucher", voucherCode).Msg("📱 [NO-OP] Notification Tontine : cycle soldé pour le marchand")
+	return nil
+}
+
 // ============================================================
 // 🆕 NOUVELLES MÉTHODES POUR LE CRÉDIT (NO-OP)
 // ============================================================

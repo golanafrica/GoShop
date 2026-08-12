@@ -137,13 +137,20 @@ const (
 // ============================================================
 
 // MerchantWallet représente le portefeuille virtuel d'un marchand
+//
+// balance_cents = solde ledger total (peut être négatif)
+// held_cents    = montant gelé (tontine cycle, litige, etc.) — migration 045
+// available     = balance_cents - held_cents (retraits / payout uniquement sur available)
 type MerchantWallet struct {
 	ShopID string `json:"shop_id" db:"shop_id"`
 
-	// Solde (peut être NÉGATIF = dette)
+	// Solde ledger (peut être NÉGATIF = dette)
 	BalanceCents int64 `json:"balance_cents" db:"balance_cents"`
 
-	// Gel du compte
+	// Phase 2 : montant gelé (non retirable tant que non libéré)
+	HeldCents int64 `json:"held_cents" db:"held_cents"`
+
+	// Gel du compte (freeze admin / dette)
 	IsFrozen     bool       `json:"is_frozen" db:"is_frozen"`
 	FrozenAt     *time.Time `json:"frozen_at,omitempty" db:"frozen_at"`
 	FrozenReason *string    `json:"frozen_reason,omitempty" db:"frozen_reason"`
@@ -167,6 +174,7 @@ func NewMerchantWallet(shopID string) *MerchantWallet {
 	return &MerchantWallet{
 		ShopID:                  shopID,
 		BalanceCents:            0,
+		HeldCents:               0,
 		MaxNegativeBalanceCents: DefaultMaxNegativeBalanceCents,
 		CreatedAt:               now,
 		UpdatedAt:               now,
@@ -174,10 +182,69 @@ func NewMerchantWallet(shopID string) *MerchantWallet {
 }
 
 // ============================================================
+// AVAILABLE / HELD (Phase 2)
+// ============================================================
+
+// AvailableCents retourne le solde réellement retirable.
+// Si balance < held (cas pathologique / dette), retourne 0 (jamais négatif pour un retrait).
+func (w *MerchantWallet) AvailableCents() int64 {
+	avail := w.BalanceCents - w.HeldCents
+	if avail < 0 {
+		return 0
+	}
+	return avail
+}
+
+// Hold gèle un montant déjà crédité sur balance (ex. net cycle tontine en attente de preuve).
+// N'augmente PAS balance_cents : le crédit ledger a déjà eu lieu.
+func (w *MerchantWallet) Hold(amountCents int64) error {
+	if amountCents <= 0 {
+		return errors.New("hold amount must be positive")
+	}
+	if w.AvailableCents() < amountCents {
+		return fmt.Errorf("insufficient available balance to hold: available=%d requested=%d",
+			w.AvailableCents(), amountCents)
+	}
+	w.HeldCents += amountCents
+	w.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// ReleaseHeld libère un montant gelé (preuve / redeem / admin) → redevient retirable.
+func (w *MerchantWallet) ReleaseHeld(amountCents int64) error {
+	if amountCents <= 0 {
+		return errors.New("release amount must be positive")
+	}
+	if amountCents > w.HeldCents {
+		return fmt.Errorf("cannot release more than held: held=%d requested=%d",
+			w.HeldCents, amountCents)
+	}
+	w.HeldCents -= amountCents
+	w.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// CreditAndHold crédite le ledger puis gèle immédiatement le même montant (cycle tontine net).
+// Utilisé quand le marchand ne doit pas retirer avant preuve de bien.
+func (w *MerchantWallet) CreditAndHold(amountCents int64) error {
+	if w.IsFrozen {
+		return errors.New("wallet is frozen, cannot credit")
+	}
+	if amountCents <= 0 {
+		return errors.New("amount must be positive")
+	}
+	w.BalanceCents += amountCents
+	w.HeldCents += amountCents
+	w.TotalSalesCents += amountCents
+	w.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// ============================================================
 // MÉTHODES DE TRANSACTION
 // ============================================================
 
-// Credit crédite le wallet (argent qui rentre)
+// Credit crédite le wallet (argent qui rentre, immédiatement disponible)
 func (w *MerchantWallet) Credit(amountCents int64) error {
 	if w.IsFrozen {
 		return errors.New("wallet is frozen, cannot credit")
@@ -192,7 +259,7 @@ func (w *MerchantWallet) Credit(amountCents int64) error {
 	return nil
 }
 
-// Debit débite le wallet (argent qui sort)
+// Debit débite le wallet (argent qui sort) — sur le ledger total
 func (w *MerchantWallet) Debit(amountCents int64) error {
 	if w.IsFrozen {
 		return errors.New("wallet is frozen, cannot debit")
@@ -203,7 +270,6 @@ func (w *MerchantWallet) Debit(amountCents int64) error {
 
 	newBalance := w.BalanceCents - amountCents
 
-	// Vérifier qu'on ne dépasse pas la limite négative
 	if newBalance < w.MaxNegativeBalanceCents {
 		return fmt.Errorf("debit would exceed max negative balance: %d < %d",
 			newBalance, w.MaxNegativeBalanceCents)
@@ -215,7 +281,6 @@ func (w *MerchantWallet) Debit(amountCents int64) error {
 }
 
 // DebitCommission prélève la commission GoShop
-// Retourne une erreur si le wallet ne peut pas couvrir la commission
 func (w *MerchantWallet) DebitCommission(commissionCents int64) (bool, error) {
 	if commissionCents <= 0 {
 		return false, errors.New("commission must be positive")
@@ -223,19 +288,17 @@ func (w *MerchantWallet) DebitCommission(commissionCents int64) (bool, error) {
 
 	newBalance := w.BalanceCents - commissionCents
 
-	// Si le wallet peut couvrir la commission
 	if newBalance >= w.MaxNegativeBalanceCents {
 		w.BalanceCents = newBalance
 		w.TotalCommissionsCents += commissionCents
 		w.UpdatedAt = time.Now().UTC()
-		return true, nil // Commission prélevée
+		return true, nil
 	}
 
-	// Sinon → GEL du compte
-	return false, nil // Commission NON prélevée, doit geler
+	return false, nil
 }
 
-// RequestPayout demande un virement vers le compte bancaire
+// RequestPayout demande un virement — UNIQUEMENT sur le solde disponible (Phase 2)
 func (w *MerchantWallet) RequestPayout(amountCents int64) error {
 	if w.IsFrozen {
 		return errors.New("wallet is frozen, cannot request payout")
@@ -243,8 +306,9 @@ func (w *MerchantWallet) RequestPayout(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("amount must be positive")
 	}
-	if amountCents > w.BalanceCents {
-		return fmt.Errorf("insufficient balance: %d > %d", amountCents, w.BalanceCents)
+	if amountCents > w.AvailableCents() {
+		return fmt.Errorf("insufficient available balance: requested=%d available=%d (held=%d)",
+			amountCents, w.AvailableCents(), w.HeldCents)
 	}
 
 	w.BalanceCents -= amountCents
@@ -275,7 +339,7 @@ func (w *MerchantWallet) Freeze(reason FreezeReason, details string) error {
 	w.FrozenReason = &reasonStr
 	w.FrozenUntil = &gracePeriodEnds
 	w.UpdatedAt = now
-	_ = details // Pour logging éventuel
+	_ = details
 	return nil
 }
 
@@ -285,13 +349,11 @@ func (w *MerchantWallet) Unfreeze(depositAmountCents int64) error {
 		return errors.New("wallet is not frozen")
 	}
 
-	// Vérifier que le dépôt couvre la dette
 	if w.BalanceCents < 0 && depositAmountCents < -w.BalanceCents {
 		return fmt.Errorf("deposit must cover debt: %d < %d",
 			depositAmountCents, -w.BalanceCents)
 	}
 
-	// Créditer le dépôt
 	if depositAmountCents > 0 {
 		w.BalanceCents += depositAmountCents
 	}
@@ -322,17 +384,17 @@ func (w *MerchantWallet) ForceUnfreeze() error {
 // MÉTHODES DE REQUÊTE
 // ============================================================
 
-// IsPositive vérifie si le solde est positif
+// IsPositive vérifie si le solde ledger est positif
 func (w *MerchantWallet) IsPositive() bool {
 	return w.BalanceCents > 0
 }
 
-// IsZero vérifie si le solde est zéro
+// IsZero vérifie si le solde ledger est zéro
 func (w *MerchantWallet) IsZero() bool {
 	return w.BalanceCents == 0
 }
 
-// IsNegative vérifie si le solde est négatif
+// IsNegative vérifie si le solde ledger est négatif
 func (w *MerchantWallet) IsNegative() bool {
 	return w.BalanceCents < 0
 }
@@ -406,6 +468,9 @@ func (w *MerchantWallet) Validate() error {
 	if w.ShopID == "" {
 		return errors.New("shop_id is required")
 	}
+	if w.HeldCents < 0 {
+		return errors.New("held_cents cannot be negative")
+	}
 	if w.MaxNegativeBalanceCents > 0 {
 		return errors.New("max_negative_balance_cents must be negative or zero")
 	}
@@ -466,7 +531,6 @@ func NewWalletTransaction(
 		return nil, errors.New("amount cannot be zero")
 	}
 
-	// Vérifier cohérence signe montant / type
 	if transactionType.IsCredit() && amountCents < 0 {
 		return nil, errors.New("credit transaction must have positive amount")
 	}

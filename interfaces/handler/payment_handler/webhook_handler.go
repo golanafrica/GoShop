@@ -104,8 +104,15 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		signature = r.URL.Query().Get("signature") // Fallback query param
 	}
 
+	// ✅ AJOUT : Logger le type d'événement YengaPay pour le débogage (payment.success, payout.success, etc.)
+	eventType := r.Header.Get("x-yengapay-event")
+	if eventType == "" {
+		eventType = r.Header.Get("X-Yengapay-Event")
+	}
+
 	logger.Info().
 		Str("provider", providerCode).
+		Str("event_type", eventType).
 		Int("payload_size", len(payload)).
 		Bool("has_signature", signature != "").
 		Msg("Processing webhook")

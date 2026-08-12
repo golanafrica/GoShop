@@ -969,3 +969,72 @@ func (r *DeliveryProofEventRepositoryInfrastructure) CountByProofID(ctx context.
 
 	return count, nil
 }
+
+// ============================================================
+// 🆕 v4.8.4 : MÉTHODES ADMIN/TEST
+// ============================================================
+
+// ForceDeliveryDate force le delivery_date pour tests (bypass tenant)
+// Utilisé par l'endpoint admin pour simuler l'écoulement du temps
+func (r *DeliveryProofRepositoryInfrastructure) ForceDeliveryDate(ctx context.Context, orderID string, daysAgo int) error {
+	query := `
+		UPDATE delivery_proofs 
+		SET delivery_date = NOW() - INTERVAL '1 day' * $2,
+		    updated_at = NOW()
+		WHERE order_id = $1
+	`
+	result, err := r.execContext(ctx, query, orderID, daysAgo)
+	if err != nil {
+		return fmt.Errorf("failed to force delivery date: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no delivery proof found for order %s", orderID)
+	}
+	return nil
+}
+
+// FindAutoReleaseEligibleForUpdate retourne les preuves éligibles avec verrouillage pessimiste
+// Utilise FOR UPDATE SKIP LOCKED pour éviter les race conditions entre instances du scheduler
+func (r *DeliveryProofRepositoryInfrastructure) FindAutoReleaseEligibleForUpdate(ctx context.Context) ([]*entity.DeliveryProof, error) {
+	query := `
+		SELECT 
+			dp.id, dp.order_id, dp.tontine_voucher_id, dp.credit_contract_id,
+			dp.reference_type, dp.reference_id,
+			dp.proof_type, dp.proof_url, dp.tracking_number, dp.carrier,
+			dp.escrow_status, dp.shipping_date, dp.delivery_date,
+			dp.submitted_by, dp.created_at, dp.updated_at
+		FROM delivery_proofs dp
+		JOIN escrow_accounts ea ON (
+			(dp.order_id IS NOT NULL AND ea.order_id = dp.order_id) OR
+			(dp.tontine_voucher_id IS NOT NULL AND ea.tontine_group_id = (
+				SELECT tg.id FROM tontine_groups tg 
+				JOIN tontine_vouchers tv ON tv.group_id = tg.id 
+				WHERE tv.id = dp.tontine_voucher_id
+			))
+		)
+		WHERE dp.escrow_status = 'delivered'
+		  AND dp.delivery_date <= NOW() - INTERVAL '3 days'
+		  AND ea.status = 'funds_held'
+		  AND NOT EXISTS (
+			  SELECT 1 FROM disputes d 
+			  WHERE d.order_id = dp.order_id 
+			  AND d.status NOT IN ('resolved_customer', 'resolved_merchant', 'closed')
+		  )
+		FOR UPDATE SKIP LOCKED
+		LIMIT 100
+	`
+	return r.scanProofs(ctx, query)
+}
+
+// BeginTx démarre une nouvelle transaction SQL
+func (r *DeliveryProofRepositoryInfrastructure) BeginTx(ctx context.Context) (repository.Tx, error) {
+	if r.db == nil {
+		return nil, fmt.Errorf("database connection not available")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	return tx, nil
+}

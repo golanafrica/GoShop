@@ -38,20 +38,13 @@ CREATE TABLE IF NOT EXISTS disputes (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. CRÉATION DES INDEX POUR OPTIMISER LES RECHERCHES
--- Accélère la récupération des litiges liés à une commande spécifique
+-- 3. CRÉATION DES INDEX POUR OPTIMISER LES RECHERCHES (Idempotents)
 CREATE INDEX IF NOT EXISTS idx_disputes_order_id ON disputes(order_id);
-
--- Accélère le filtrage des litiges par statut (ex: liste des litiges en attente pour l'admin)
 CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes(status);
-
--- Accélère le tri chronologique des litiges (dashboard admin)
 CREATE INDEX IF NOT EXISTS idx_disputes_created_at ON disputes(created_at DESC);
-
--- Accélère la recherche des litiges ouverts par un utilisateur spécifique
 CREATE INDEX IF NOT EXISTS idx_disputes_initiator ON disputes(initiator_id, initiator_role);
 
--- 4. TRIGGER POUR LA MISE À JOUR AUTOMATIQUE DE updated_at
+-- 4. TRIGGER POUR LA MISE À JOUR AUTOMATIQUE DE updated_at (Rendu 100% Idempotent)
 CREATE OR REPLACE FUNCTION trigger_set_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -59,6 +52,9 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+-- On supprime le trigger s'il existe déjà avant de le recréer
+DROP TRIGGER IF EXISTS set_timestamp_disputes ON disputes;
 
 CREATE TRIGGER set_timestamp_disputes
     BEFORE UPDATE ON disputes
