@@ -444,18 +444,29 @@ func (s *SMTPService) sendWithTLS(addr string, auth smtp.Auth, from, to string, 
 }
 
 // buildEmailBytes construit les bytes de l'email
+// sanitizeHeaderValue retire CR/LF pour empêcher l'injection de headers SMTP
+func sanitizeHeaderValue(v string) string {
+	v = strings.ReplaceAll(v, "\r", "")
+	v = strings.ReplaceAll(v, "\n", "")
+	return strings.TrimSpace(v)
+}
+
+// buildEmailBytes construit les bytes de l'email
 func (s *SMTPService) buildEmailBytes(message *service.EmailMessage) ([]byte, error) {
 	var buf bytes.Buffer
 
-	// Headers
-	from := s.config.From
-	fromName := s.config.FromName
+	from := sanitizeHeaderValue(s.config.From)
+	fromName := sanitizeHeaderValue(s.config.FromName)
 	if message.From != "" {
-		from = message.From
+		from = sanitizeHeaderValue(message.From)
 	}
 	if message.FromName != "" {
-		fromName = message.FromName
+		fromName = sanitizeHeaderValue(message.FromName)
 	}
+
+	to := sanitizeHeaderValue(message.To)
+	toName := sanitizeHeaderValue(message.ToName)
+	subject := sanitizeHeaderValue(message.Subject)
 
 	if fromName != "" {
 		buf.WriteString(fmt.Sprintf("From: %s <%s>\r\n", fromName, from))
@@ -463,21 +474,19 @@ func (s *SMTPService) buildEmailBytes(message *service.EmailMessage) ([]byte, er
 		buf.WriteString(fmt.Sprintf("From: %s\r\n", from))
 	}
 
-	if message.ToName != "" {
-		buf.WriteString(fmt.Sprintf("To: %s <%s>\r\n", message.ToName, message.To))
+	if toName != "" {
+		buf.WriteString(fmt.Sprintf("To: %s <%s>\r\n", toName, to))
 	} else {
-		buf.WriteString(fmt.Sprintf("To: %s\r\n", message.To))
+		buf.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	}
 
-	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", message.Subject))
+	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
 	buf.WriteString("MIME-Version: 1.0\r\n")
 
-	// Content-Type
 	if message.HTMLBody != "" {
 		boundary := fmt.Sprintf("boundary-%s", uuid.New().String()[:8])
 		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%s\r\n\r\n", boundary))
 
-		// Text version
 		if message.TextBody != "" {
 			buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 			buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
@@ -485,7 +494,6 @@ func (s *SMTPService) buildEmailBytes(message *service.EmailMessage) ([]byte, er
 			buf.WriteString("\r\n\r\n")
 		}
 
-		// HTML version
 		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n\r\n")
 		buf.WriteString(message.HTMLBody)
