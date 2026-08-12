@@ -3,55 +3,117 @@ package utils
 import (
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 )
 
 // ============================================================
-// 🆕 v4.5.1 : EXTRACTION D'IP COMPATIBLE PROXY
+// EXTRACTION D'IP COMPATIBLE PROXY (hardened)
 // ============================================================
 //
-// PROBLÈME RÉSOLU :
-// Lorsque l'API est derrière un reverse proxy (Nginx, AWS ALB, Traefik, etc.),
-// r.RemoteAddr renvoie toujours l'IP du proxy (ex: 10.0.0.5).
-// Cela casse le Rate Limiting car TOUS les clients partagent le même quota.
+// PROBLÈME :
+// Derrière un reverse proxy, RemoteAddr = IP du proxy.
+// Sans garde-fou, un client peut spoof X-Forwarded-For / X-Real-IP
+// et contourner rate-limit / audit.
 //
-// SOLUTION :
-// Lire les headers HTTP standards (X-Forwarded-For, X-Real-IP) pour extraire
-// la véritable IP du client.
+// RÈGLE :
+// On ne lit X-Forwarded-For / X-Real-IP QUE si RemoteAddr
+// appartient à TRUSTED_PROXIES (CIDR ou IP, séparés par des virgules).
+//
+// Exemple .env :
+//   TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16,127.0.0.1,::1
+//
+// Si TRUSTED_PROXIES est vide → on ignore les headers (sécurisé par défaut).
 // ============================================================
 
-// GetClientIP extrait la véritable adresse IP du client.
-// Ordre de priorité :
-//  1. X-Forwarded-For (première IP de la liste)
-//  2. X-Real-IP
-//  3. RemoteAddr (fallback direct)
-func GetClientIP(r *http.Request) string {
-	// 1. Vérifier X-Forwarded-For (standard pour les load balancers)
-	// Exemple de valeur : "203.0.113.195, 70.41.3.18, 150.172.238.178"
-	// La première IP est toujours le client original
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		clientIP := strings.TrimSpace(ips[0])
-		if net.ParseIP(clientIP) != nil {
-			return clientIP
+var (
+	trustedOnce  sync.Once
+	trustedNets  []*net.IPNet
+	trustedExact map[string]struct{}
+)
+
+func loadTrustedProxies() {
+	trustedOnce.Do(func() {
+		trustedExact = make(map[string]struct{})
+		raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
+		if raw == "" {
+			return
 		}
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if strings.Contains(part, "/") {
+				_, network, err := net.ParseCIDR(part)
+				if err == nil && network != nil {
+					trustedNets = append(trustedNets, network)
+				}
+				continue
+			}
+			ip := net.ParseIP(part)
+			if ip != nil {
+				trustedExact[ip.String()] = struct{}{}
+			}
+		}
+	})
+}
+
+func isTrustedProxy(remoteAddr string) bool {
+	loadTrustedProxies()
+	if len(trustedNets) == 0 && len(trustedExact) == 0 {
+		return false
 	}
 
-	// 2. Vérifier X-Real-IP (souvent utilisé par Nginx)
-	xri := r.Header.Get("X-Real-IP")
-	if xri != "" {
-		if net.ParseIP(xri) != nil {
-			return xri
-		}
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
 	}
 
-	// 3. Fallback sur RemoteAddr (en retirant le port si présent)
-	// Exemple : "192.168.1.1:54321" → "192.168.1.1"
+	if _, ok := trustedExact[ip.String()]; ok {
+		return true
+	}
+	for _, n := range trustedNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteIP(r *http.Request) string {
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr // Si pas de port, retourner tel quel
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// GetClientIP extrait l'IP client.
+// Headers X-Forwarded-For / X-Real-IP uniquement si le hop immédiat est un proxy de confiance.
+func GetClientIP(r *http.Request) string {
+	if isTrustedProxy(r.RemoteAddr) {
+		// 1. X-Forwarded-For : première IP = client d'origine (chaîne proxy)
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			clientIP := strings.TrimSpace(parts[0])
+			if net.ParseIP(clientIP) != nil {
+				return clientIP
+			}
+		}
+		// 2. X-Real-IP (Nginx)
+		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+			if net.ParseIP(xri) != nil {
+				return xri
+			}
+		}
 	}
 
-	return ip
+	// 3. Fallback : connexion directe
+	return remoteIP(r)
 }

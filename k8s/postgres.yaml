@@ -33,7 +33,10 @@ spec:
         - name: POSTGRES_USER
           value: "postgres"
         - name: POSTGRES_PASSWORD
-          value: "root"
+          valueFrom:
+            secretKeyRef:
+              name: goshop-db
+              key: POSTGRES_PASSWORD
         - name: POSTGRES_DB
           value: "goshop"
         ports:

@@ -4,8 +4,7 @@ metadata:
   name: goshop-migrations
   namespace: goshop
 data:
-  # Le contenu des fichiers SQL sera injecté par kubectl
-  # Utilise: kubectl create configmap goshop-migrations -n goshop --from-file=migrations/
+  # kubectl create configmap goshop-migrations -n goshop --from-file=migrations/
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -24,14 +23,16 @@ spec:
       labels:
         app: goshop
     spec:
-      # InitContainer pour appliquer les migrations AVANT le démarrage de l'API
       initContainers:
       - name: migrate
         image: postgres:16-alpine
         command: ["psql", "-h", "postgres", "-U", "postgres", "-d", "goshop", "-f", "/migrations/001_init.sql"]
         env:
         - name: PGPASSWORD
-          value: "root"
+          valueFrom:
+            secretKeyRef:
+              name: goshop-db
+              key: PGPASSWORD
         volumeMounts:
         - name: migrations
           mountPath: /migrations
@@ -52,7 +53,10 @@ spec:
         - name: DB_USER
           value: "postgres"
         - name: DB_PASSWORD
-          value: "root"
+          valueFrom:
+            secretKeyRef:
+              name: goshop-db
+              key: DB_PASSWORD
         - name: DB_NAME
           value: "goshop"
         - name: DB_PORT
@@ -61,8 +65,7 @@ spec:
           value: "6379"
         - name: BCRYPT_COST
           value: "10"
-        
-        # 🔒 Sécurité renforcée
+
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -70,8 +73,7 @@ spec:
           runAsUser: 10001
           capabilities:
             drop: ["ALL"]
-        
-        # 📊 Ressources
+
         resources:
           requests:
             memory: "64Mi"
@@ -79,13 +81,12 @@ spec:
           limits:
             memory: "128Mi"
             cpu: "200m"
-        
-        # 🩺 Probes de santé optimisées
+
         startupProbe:
           httpGet:
             path: /health/ready
             port: 8080
-          failureThreshold: 60  # jusqu'à 5 minutes (60 * 5s)
+          failureThreshold: 60
           periodSeconds: 5
         livenessProbe:
           httpGet:

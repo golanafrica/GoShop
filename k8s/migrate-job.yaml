@@ -20,7 +20,10 @@ spec:
         - name: DB_USER
           value: "postgres"
         - name: DB_PASSWORD
-          value: "root"
+          valueFrom:
+            secretKeyRef:
+              name: goshop-db
+              key: DB_PASSWORD
         - name: DB_NAME
           value: "goshop"
         - name: DB_PORT
