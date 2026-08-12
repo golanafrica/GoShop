@@ -2,6 +2,7 @@ package disputehandler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,21 +21,33 @@ import (
 type DisputeHandler struct {
 	openDisputeUC    *disputeusecase.OpenDisputeUsecase
 	resolveDisputeUC *disputeusecase.ResolveDisputeUsecase
-	adminDisputeUC   *disputeusecase.AdminDisputeUsecase // 🆕 AJOUTÉ
+	adminDisputeUC   *disputeusecase.AdminDisputeUsecase
 	disputeRepo      repository.DisputeRepository
 }
 
 func NewDisputeHandler(
 	openDisputeUC *disputeusecase.OpenDisputeUsecase,
 	resolveDisputeUC *disputeusecase.ResolveDisputeUsecase,
-	adminDisputeUC *disputeusecase.AdminDisputeUsecase, // 🆕 AJOUTÉ
+	adminDisputeUC *disputeusecase.AdminDisputeUsecase,
 	disputeRepo repository.DisputeRepository,
 ) *DisputeHandler {
 	return &DisputeHandler{
 		openDisputeUC:    openDisputeUC,
 		resolveDisputeUC: resolveDisputeUC,
-		adminDisputeUC:   adminDisputeUC, // 🆕 AJOUTÉ
+		adminDisputeUC:   adminDisputeUC,
 		disputeRepo:      disputeRepo,
+	}
+}
+
+// mapResolveErr mappe les conflits concurrent → HTTP 409
+func mapResolveErr(err error) error {
+	switch {
+	case errors.Is(err, disputeusecase.ErrDisputeAlreadyResolved),
+		errors.Is(err, disputeusecase.ErrEscrowClaimConflict),
+		errors.Is(err, disputeusecase.ErrEscrowNotDisputed):
+		return utils.NewAppError("DISPUTE_CONFLICT", err.Error(), http.StatusConflict)
+	default:
+		return err
 	}
 }
 
@@ -42,7 +55,6 @@ func NewDisputeHandler(
 // ROUTES UTILISATEUR / MARCHAND
 // ============================================================
 
-// OpenDispute permet à un client ou un marchand d'ouvrir un litige sur une commande
 func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -99,8 +111,6 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 // ROUTES ADMIN
 // ============================================================
 
-// GetAllDisputes retourne la liste paginée des litiges (Admin)
-// ✅ CORRECTION : La méthode retourne maintenant une 'error' pour être compatible avec middl.ErrorHandler
 func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) error {
 	status := r.URL.Query().Get("status")
 	limitStr := r.URL.Query().Get("limit")
@@ -137,8 +147,6 @@ func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-// GetDisputeByID retourne les détails d'un litige spécifique (Admin)
-// ✅ CORRECTION : La méthode retourne maintenant une 'error' pour être compatible avec middl.ErrorHandler
 func (h *DisputeHandler) GetDisputeByID(w http.ResponseWriter, r *http.Request) error {
 	id := chi.URLParam(r, "id")
 
@@ -154,7 +162,7 @@ func (h *DisputeHandler) GetDisputeByID(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-// ResolveDispute permet à un administrateur de trancher un litige via l'ID du litige
+// ResolveDispute — admin tranche un litige par dispute ID
 func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	disputeIDStr := chi.URLParam(r, "id")
@@ -194,6 +202,9 @@ func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) 
 
 	dispute, err := h.resolveDisputeUC.Execute(ctx, disputeReq)
 	if err != nil {
+		if mapped := mapResolveErr(err); mapped != err {
+			return mapped // 409 DISPUTE_CONFLICT
+		}
 		return fmt.Errorf("failed to resolve dispute: %w", err)
 	}
 
@@ -204,7 +215,7 @@ func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-// ResolveOrderByDispute permet à un admin de trancher un litige via l'ID de la commande
+// ResolveOrderByDispute — admin tranche via order ID
 func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
@@ -237,7 +248,11 @@ func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Re
 	}
 
 	if dispute.Status != entity.DisputeStatusPending && dispute.Status != entity.DisputeStatusUnderReview {
-		return utils.NewAppError("DISPUTE_ALREADY_RESOLVED", "dispute is already resolved or cancelled", http.StatusBadRequest)
+		return utils.NewAppError(
+			"DISPUTE_CONFLICT",
+			"dispute is already resolved or cancelled",
+			http.StatusConflict,
+		)
 	}
 
 	userIDStr, ok := utils.UserIDFromContext(ctx)
@@ -259,6 +274,9 @@ func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Re
 	updatedDispute, err := h.resolveDisputeUC.Execute(ctx, resolveReq)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to resolve dispute by order")
+		if mapped := mapResolveErr(err); mapped != err {
+			return mapped // 409
+		}
 		return fmt.Errorf("failed to resolve dispute by order: %w", err)
 	}
 

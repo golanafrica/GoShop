@@ -339,9 +339,11 @@ else {
 
     $escrowAfterE = Invoke-Psql "SELECT status FROM escrow_accounts WHERE id = '$EscrowIdE'::uuid;"
     Write-Host "escrow after = $escrowAfterE"
-    if ($escrowAfterE -ne "fully_released") {
-        Write-Host "WARN  E escrow status expected 'fully_released', got '$escrowAfterE'" -ForegroundColor Yellow
-    }
+    if ($escrowAfterE -ne "released") {
+    Write-Host "FAIL  E escrow expected 'released', got '$escrowAfterE'" -ForegroundColor Red
+    exit 1
+}
+Write-Host "OK    E escrow status = released" -ForegroundColor Green
 }
 
 # ---------- global guards ----------

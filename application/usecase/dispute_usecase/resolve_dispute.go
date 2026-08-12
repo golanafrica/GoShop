@@ -2,6 +2,7 @@ package disputeusecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,13 @@ import (
 type PaymentRegistry interface {
 	Get(providerCode entity.PaymentProvider) (payment.Provider, error)
 }
+
+// Erreurs métier concurrentes → mappées en HTTP 409 par le handler.
+var (
+	ErrDisputeAlreadyResolved = errors.New("dispute is already resolved or cancelled")
+	ErrEscrowClaimConflict    = errors.New("escrow already claimed/released by concurrent resolve")
+	ErrEscrowNotDisputed      = errors.New("cannot resolve dispute: escrow is not in disputed status")
+)
 
 // ============================================================
 // RESOLVE DISPUTE USECASE
@@ -81,7 +89,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	}
 
 	if dispute.Status != entity.DisputeStatusPending && dispute.Status != entity.DisputeStatusUnderReview {
-		return nil, fmt.Errorf("dispute is already resolved or cancelled")
+		return nil, ErrDisputeAlreadyResolved
 	}
 
 	orderIDStr := dispute.OrderID.String()
@@ -91,7 +99,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	}
 
 	if escrow.Status != entity.EscrowAccountDisputed {
-		return nil, fmt.Errorf("cannot resolve dispute: escrow status is %s (expected disputed)", escrow.Status)
+		return nil, fmt.Errorf("%w: status is %s", ErrEscrowNotDisputed, escrow.Status)
 	}
 
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -120,7 +128,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("claim release failed: %w", claimErr)
 		}
 		if !claimed {
-			return nil, fmt.Errorf("escrow already claimed/released by concurrent resolve — abort")
+			return nil, ErrEscrowClaimConflict
 		}
 
 		shopIDStr := dispute.ShopID.String()
