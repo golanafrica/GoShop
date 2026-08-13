@@ -35,6 +35,10 @@ import (
 //   - Webhooks entrants
 //   - Intégrations tierces
 //
+// 🛡️ SÉCURITÉ (v4.5.1) :
+//   - Le query param ?api_key= n'est PAS supporté (fuites dans logs/proxies)
+//   - Seuls les headers sont acceptés (X-API-Key ou Authorization: Bearer)
+//
 // ============================================================
 
 // Context keys pour API Key
@@ -60,13 +64,32 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 			logger := zerolog.Ctx(r.Context())
 			start := time.Now()
 
-			// 1. Extraire la clé API du header
-			apiKey := extractAPIKey(r)
+			// 1. Extraire la clé API du header (jamais du query string)
+			apiKey, usedInsecureMethod := extractAPIKey(r)
+
+			// 🛡️ Cas spécial : client utilise encore ?api_key= (déprécié)
+			if usedInsecureMethod {
+				logger.Warn().
+					Str("client_ip", extractIPWithoutPort(r.RemoteAddr)).
+					Str("user_agent", r.UserAgent()).
+					Str("path", r.URL.Path).
+					Msg("🛡️ Tentative d'utilisation de ?api_key= en query string (non supporté pour raisons de sécurité)")
+
+				utils.WriteAppError(w, utils.NewAppError(
+					"API_KEY_INSECURE_TRANSPORT",
+					"API keys must be sent via HTTP headers, not query parameters. "+
+						"Use 'Authorization: Bearer gsk_live_...' or 'X-API-Key: gsk_live_...' header instead. "+
+						"Query parameters are logged by servers, proxies, and browsers, exposing your key.",
+					http.StatusUnauthorized,
+				))
+				return
+			}
+
 			if apiKey == "" {
 				logger.Debug().Msg("❌ API Key manquante")
 				utils.WriteAppError(w, utils.NewAppError(
 					"API_KEY_MISSING",
-					"API key is required. Use 'Authorization: Bearer gsk_live_...' or 'X-API-Key: gsk_live_...'",
+					"API key is required. Use 'Authorization: Bearer gsk_live_...' or 'X-API-Key: gsk_live_...' header.",
 					http.StatusUnauthorized,
 				))
 				return
@@ -202,28 +225,39 @@ func mapAPIKeyError(err error) (int, string) {
 // ============================================================
 
 // extractAPIKey extrait la clé API du header
-// Supporte deux formats :
+// Supporte UNIQUEMENT les formats sécurisés :
 // - Authorization: Bearer gsk_live_...
 // - X-API-Key: gsk_live_...
-func extractAPIKey(r *http.Request) string {
-	// 1. Essayer le header X-API-Key (priorité)
-	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
-		return strings.TrimSpace(apiKey)
+//
+// 🛡️ SÉCURITÉ : Le query param ?api_key= n'est PAS supporté car il expose
+// la clé dans les logs serveur, l'historique navigateur, les headers Referer,
+// et les caches CDN/proxy.
+//
+// Retourne (apiKey, usedInsecureMethod) :
+// - apiKey : la clé extraite (vide si aucune ou insecure)
+// - usedInsecureMethod : true si ?api_key= a été détecté (pour message d'erreur)
+func extractAPIKey(r *http.Request) (apiKey string, usedInsecureMethod bool) {
+	// 1. Essayer le header X-API-Key (priorité, standard industrie)
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		return strings.TrimSpace(key), false
 	}
 
 	// 2. Essayer le header Authorization (format Bearer)
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		if strings.HasPrefix(auth, "Bearer ") {
-			return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+			return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")), false
 		}
 	}
 
-	// 3. Essayer le query param (pour webhooks, pas recommandé)
-	if apiKey := r.URL.Query().Get("api_key"); apiKey != "" {
-		return strings.TrimSpace(apiKey)
+	// 3. DÉTECTER (sans utiliser) le query param pour alerter le client
+	// Ceci permet d'identifier les clients qui doivent migrer vers les headers
+	if key := r.URL.Query().Get("api_key"); key != "" {
+		// Retourner vide + flag "insecure" pour que le middleware
+		// puisse renvoyer un message d'erreur pédagogique
+		return "", true
 	}
 
-	return ""
+	return "", false
 }
 
 // extractIPWithoutPort extrait l'IP sans le port
