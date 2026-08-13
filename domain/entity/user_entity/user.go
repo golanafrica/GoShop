@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -355,23 +356,85 @@ func (u *UserEntity) SetPassword(newPassword string) error {
 // ============================================================
 
 // getBcryptCost retourne le coût bcrypt selon l'environnement
+// getBcryptCost retourne le coût bcrypt selon l'environnement
+// 🛡️ FAIL-SAFE : Coût élevé par défaut, faible uniquement en dev/test explicite
 func getBcryptCost() int {
-	if costStr := os.Getenv("BCRYPT_COST"); costStr != "" {
-		if cost, err := strconv.Atoi(costStr); err == nil && cost >= 4 && cost <= 12 {
-			return cost
+	// Constantes de sécurité
+	const (
+		minSecureCost = 10 // Minimum acceptable hors dev/test
+		devCost       = 4  // Rapide uniquement pour tests
+		stagingCost   = 10
+		prodCost      = 12
+	)
+
+	env := os.Getenv("APP_ENV")
+
+	// 1. Log si APP_ENV n'est pas défini (potentiel problème de config)
+	if env == "" {
+		log.Warn().
+			Int("default_cost", prodCost).
+			Msg("APP_ENV non défini, utilisation du coût bcrypt sécurisé par défaut")
+	}
+
+	// 2. Déterminer le coût selon l'environnement
+	var cost int
+	switch env {
+	case "development", "test":
+		cost = devCost
+	case "staging":
+		cost = stagingCost
+	case "production":
+		cost = prodCost
+	default:
+		// FAIL-SAFE : Environnement inconnu = production (sécurité maximale)
+		cost = prodCost
+		if env != "" {
+			log.Warn().
+				Str("APP_ENV", env).
+				Int("fallback_cost", prodCost).
+				Msg("APP_ENV non reconnu, utilisation du coût production par sécurité")
 		}
 	}
 
-	// Défaut selon l'environnement
-	env := os.Getenv("APP_ENV")
-	switch env {
-	case "production":
-		return 12
-	case "staging":
-		return 10
-	default: // development, test
-		return 4 // ⚡ Ultra rapide en dev
+	// 3. Override par BCRYPT_COST si explicitement défini
+	if costStr := os.Getenv("BCRYPT_COST"); costStr != "" {
+		if customCost, err := strconv.Atoi(costStr); err == nil {
+			// Validation stricte
+			if customCost < 4 || customCost > 14 {
+				log.Error().
+					Int("invalid_bcrypt_cost", customCost).
+					Int("fallback_cost", cost).
+					Msg("BCRYPT_COST invalide (doit être entre 4 et 14), utilisation de la valeur par défaut")
+			} else {
+				cost = customCost
+				// Warning si coût faible en environnement non-dev
+				if cost < minSecureCost && env != "development" && env != "test" {
+					log.Warn().
+						Int("bcrypt_cost", cost).
+						Str("APP_ENV", env).
+						Int("min_recommended", minSecureCost).
+						Msg("BCRYPT_COST faible pour cet environnement, risque de sécurité")
+				}
+			}
+		} else {
+			log.Error().
+				Str("bcrypt_cost_raw", costStr).
+				Int("fallback_cost", cost).
+				Msg("BCRYPT_COST n'est pas un entier valide, utilisation de la valeur par défaut")
+		}
 	}
+
+	// 4. Enforce minimum de 10 hors dev/test (conformité README v4.5.0)
+	if cost < minSecureCost && env != "development" && env != "test" {
+		log.Warn().
+			Int("original_cost", cost).
+			Int("enforced_cost", minSecureCost).
+			Str("APP_ENV", env).
+			Msg("Coût bcrypt inférieur au minimum sécurisé, ajustement automatique")
+		cost = minSecureCost
+	}
+
+	return cost
 }
 
 // HashPassword hashe un mot de passe avec bcrypt
