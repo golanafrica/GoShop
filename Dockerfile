@@ -7,7 +7,7 @@
 # Source : https://hub.docker.com/layers/library/golang/1.25.5-alpine
 # Digest vérifié le : 13 août 2026
 # ⚠️ MAINTENANCE : Dependabot ouvre une PR automatique quand le digest change
-FROM golang:1.25.5-alpine@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS builder
+FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 # Installer les dépendances de build
 RUN apk add --no-cache git ca-certificates tzdata
 # Définir le répertoire de travail
