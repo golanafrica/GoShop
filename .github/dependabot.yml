@@ -1,0 +1,73 @@
+# .github/dependabot.yml
+# Configuration Dependabot pour mise à jour automatique des digests Docker
+# 🛡️ Résout le risque d'image figée soulevé dans la revue sécurité
+#
+# ⚠️ NOTE : la clé "reviewers" a été retirée par GitHub le 8 août 2025
+# au profit du fichier .github/CODEOWNERS (voir ce fichier à côté).
+# Elle est donc volontairement absente ici — la conserver n'aurait
+# aucun effet (GitHub l'ignore silencieusement).
+version: 2
+updates:
+  # ============================================================
+  # DOCKER : Mise à jour des digests des images de base
+  # ============================================================
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"  # Vérification hebdomadaire (lundi)
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Ouagadougou"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    labels:
+      - "security"
+      - "docker"
+      - "dependencies"
+    assignees:
+      - "golanafrica"  # Remplacez par votre username GitHub
+    # Regrouper les mises à jour mineures (Alpine patch)
+    groups:
+      docker-minor:
+        patterns:
+          - "alpine*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Ignorer les mises à jour majeures (nécessitent review manuelle)
+    ignore:
+      - dependency-name: "golang"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "alpine"
+        update-types:
+          - "version-update:semver-major"
+
+  # ============================================================
+  # GO MODULES : Mise à jour des dépendances Go
+  # ============================================================
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Africa/Ouagadougou"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "go"
+    assignees:
+      - "golanafrica"  # Remplacez par votre username GitHub
+    # Regrouper les patchs de sécurité
+    groups:
+      go-security-patches:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"

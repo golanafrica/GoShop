@@ -1,0 +1,45 @@
+# .github/CODEOWNERS
+# Ce fichier définit les reviewers automatiques pour les PRs
+# Documentation : https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ============================================================
+# REVIEWERS PAR DÉFAUT
+# ============================================================
+# Tous les fichiers sans règle spécifique sont assignés à @golanafrica
+* @golanafrica
+
+# ============================================================
+# SÉCURITÉ (Review obligatoire)
+# ============================================================
+# Tout changement sécurité nécessite review de l'équipe sécurité
+/security/ @golanafrica
+**/crypto/ @golanafrica
+**/auth*.go @golanafrica
+**/apikey*.go @golanafrica
+**/jwt*.go @golanafrica
+Dockerfile @golanafrica
+.github/dependabot.yml @golanafrica
+
+# ============================================================
+# INFRASTRUCTURE (DevOps)
+# ============================================================
+# Configuration K8s, Docker, CI/CD
+/k8s/ @golanafrica
+Dockerfile @golanafrica
+docker-compose*.yml @golanafrica
+.github/workflows/ @golanafrica
+
+# ============================================================
+# BASE DE DONNÉES
+# ============================================================
+# Migrations SQL nécessitent review DBA
+/migrations/ @golanafrica
+
+# ============================================================
+# DOCUMENTATION
+# ============================================================
+# Documentation technique et API
+/docs/ @golanafrica
+README.md @golanafrica
+CHANGELOG.md @golanafrica
+SECURITY.md @golanafrica
