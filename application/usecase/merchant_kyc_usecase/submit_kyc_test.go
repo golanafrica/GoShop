@@ -61,18 +61,63 @@ func createValidDocuments() []merchantkycusecase.DocumentInput {
 	}
 }
 
+// testContext contient tous les mocks nécessaires pour les tests
+type testContext struct {
+	ctrl      *gomock.Controller
+	shopRepo  *mockrepo.MockShopRepository
+	kycRepo   *mockrepo.MockShopKYCDocumentRepository
+	txManager *mockrepo.MockTxManager
+	tx        *mockrepo.MockTx
+	uc        *merchantkycusecase.SubmitMerchantKYCUsecase
+}
+
+// setupTest initialise tous les mocks et le usecase
+// transactional=true : configure BeginTx (pour tests qui atteignent la transaction)
+func setupTest(t *testing.T, transactional bool) *testContext {
+	ctrl := gomock.NewController(t)
+
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
+	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	mockTx := mockrepo.NewMockTx(ctrl)
+
+	// Si le test atteint la transaction, configurer BeginTx
+	if transactional {
+		mockTxManager.EXPECT().
+			BeginTx(gomock.Any()).
+			Return(mockTx, nil).
+			AnyTimes()
+
+		// Rollback par défaut (peut être surchargé)
+		mockTx.EXPECT().
+			Rollback().
+			Return(nil).
+			AnyTimes()
+	}
+
+	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(
+		mockShopRepo,
+		mockKycRepo,
+		mockTxManager, // 🛡️ Nouveau paramètre
+	)
+
+	return &testContext{
+		ctrl:      ctrl,
+		shopRepo:  mockShopRepo,
+		kycRepo:   mockKycRepo,
+		txManager: mockTxManager,
+		tx:        mockTx,
+		uc:        uc,
+	}
+}
+
 // ============================================================
 // TESTS : SubmitMerchantKYCUsecase - Multi-tenant
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false) // Pas de transaction (échoue avant)
+	defer tc.ctrl.Finish()
 
 	// Contexte SANS tenant
 	ctx := context.Background()
@@ -80,7 +125,7 @@ func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -92,13 +137,8 @@ func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false) // Pas de transaction
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	shop.IsActive = false // ❌ Inactif
@@ -108,7 +148,7 @@ func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -116,13 +156,8 @@ func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false) // Pas de transaction
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	shop.KYCStatus = entity.ShopKYCStatusVerified // ❌ Déjà vérifié
@@ -132,7 +167,7 @@ func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -144,13 +179,8 @@ func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_NoDocuments(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false) // Pas de transaction
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -159,7 +189,7 @@ func TestSubmitMerchantKYCUsecase_NoDocuments(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{}, // ❌ Vide
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -167,13 +197,8 @@ func TestSubmitMerchantKYCUsecase_NoDocuments(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_TooManyDocuments(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -194,7 +219,7 @@ func TestSubmitMerchantKYCUsecase_TooManyDocuments(t *testing.T) {
 		Documents: docs,
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -202,13 +227,8 @@ func TestSubmitMerchantKYCUsecase_TooManyDocuments(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_InvalidDocumentType(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -222,10 +242,17 @@ func TestSubmitMerchantKYCUsecase_InvalidDocumentType(t *testing.T) {
 				FileSizeBytes: 1024,
 				MimeType:      "image/jpeg",
 			},
+			{
+				DocumentType:  "business_registry",
+				FilePath:      "/uploads/registry.pdf",
+				FileName:      "registry.pdf",
+				FileSizeBytes: 1024,
+				MimeType:      "application/pdf",
+			},
 		},
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -233,13 +260,8 @@ func TestSubmitMerchantKYCUsecase_InvalidDocumentType(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -263,7 +285,7 @@ func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
 		},
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -271,13 +293,8 @@ func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -301,7 +318,7 @@ func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
 		},
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -309,13 +326,8 @@ func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_MissingIdentityDocument(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -333,7 +345,7 @@ func TestSubmitMerchantKYCUsecase_MissingIdentityDocument(t *testing.T) {
 		},
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -341,13 +353,8 @@ func TestSubmitMerchantKYCUsecase_MissingIdentityDocument(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
@@ -365,7 +372,7 @@ func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
 		},
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -373,40 +380,35 @@ func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : SubmitMerchantKYCUsecase - Repository errors
+// TESTS : SubmitMerchantKYCUsecase - Repository errors (avec transaction)
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, true) // Transaction nécessaire
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Mock : WithTX retourne les mêmes mocks
-	mockShopRepo.EXPECT().
+	// Mock : WithTX retourne les mêmes mocks (attachés à la transaction)
+	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockShopRepo).
+		Return(tc.shopRepo).
 		AnyTimes()
 
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockKycRepo).
+		Return(tc.kycRepo).
 		AnyTimes()
 
 	// Mock : Create des documents réussit
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
-	// Mock : UpdateKYCStatus échoue
-	mockShopRepo.EXPECT().
+	// Mock : UpdateKYCStatus échoue (provoque rollback via defer)
+	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(errors.New("database error"))
 
@@ -414,49 +416,50 @@ func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
 	assert.Contains(t, err.Error(), "update kyc status")
+	// Le rollback est appelé automatiquement via defer (déjà configuré dans setupTest)
 }
 
 // ============================================================
-// TESTS : SubmitMerchantKYCUsecase - Happy paths
+// TESTS : SubmitMerchantKYCUsecase - Happy paths (avec transaction)
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, true)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	shop.KYCSubmissionsCount = 0 // Première soumission
 	ctx := tenant.WithTenant(context.Background(), shop)
 
+	// Override Rollback : on ne veut PAS qu'il soit appelé en cas de succès
+	// (seulement Commit doit être appelé)
+	tc.tx.EXPECT().Rollback().Return(nil).Times(0)
+	tc.tx.EXPECT().Commit().Return(nil).Times(1)
+
 	// Mock : WithTX retourne les mêmes mocks
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockShopRepo).
+		Return(tc.shopRepo).
 		AnyTimes()
 
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockKycRepo).
+		Return(tc.kycRepo).
 		AnyTimes()
 
 	// Mock : Create des documents réussit (2 documents)
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
 	// Mock : UpdateKYCStatus réussit
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(nil)
 
@@ -468,12 +471,12 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 	updatedShop.KYCSubmittedAt = &now
 	updatedShop.KYCSubmissionsCount = 1
 
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		FindByID(gomock.Any(), shop.ID).
 		Return(updatedShop, nil)
 
-	// Mock : CountByShopID pour compter les documents
-	mockKycRepo.EXPECT().
+	// Mock : CountByShopID pour compter les documents (hors transaction)
+	tc.kycRepo.EXPECT().
 		CountByShopID(gomock.Any(), shop.ID).
 		Return(2, nil)
 
@@ -481,7 +484,7 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
@@ -495,43 +498,42 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockKycRepo := mockrepo.NewMockShopKYCDocumentRepository(ctrl)
-
-	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(mockShopRepo, mockKycRepo)
+	tc := setupTest(t, true)
+	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	shop.KYCStatus = entity.ShopKYCStatusRejected // Rejeté précédemment
 	shop.KYCSubmissionsCount = 1                  // Re-soumission
 	ctx := tenant.WithTenant(context.Background(), shop)
 
+	// Override Rollback : pas appelé en cas de succès
+	tc.tx.EXPECT().Rollback().Return(nil).Times(0)
+	tc.tx.EXPECT().Commit().Return(nil).Times(1)
+
 	// Mock : WithTX retourne les mêmes mocks
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockShopRepo).
+		Return(tc.shopRepo).
 		AnyTimes()
 
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		WithTX(gomock.Any()).
-		Return(mockKycRepo).
+		Return(tc.kycRepo).
 		AnyTimes()
 
 	// Mock : DeleteByShopID pour supprimer les anciens documents
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		DeleteByShopID(gomock.Any(), shop.ID).
 		Return(nil)
 
 	// Mock : Create des nouveaux documents (2 documents)
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
 	// Mock : UpdateKYCStatus réussit
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(nil)
 
@@ -543,12 +545,12 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 	updatedShop.KYCSubmittedAt = &now
 	updatedShop.KYCSubmissionsCount = 2
 
-	mockShopRepo.EXPECT().
+	tc.shopRepo.EXPECT().
 		FindByID(gomock.Any(), shop.ID).
 		Return(updatedShop, nil)
 
 	// Mock : CountByShopID pour compter les documents
-	mockKycRepo.EXPECT().
+	tc.kycRepo.EXPECT().
 		CountByShopID(gomock.Any(), shop.ID).
 		Return(2, nil)
 
@@ -556,7 +558,7 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 		Documents: createValidDocuments(),
 	}
 
-	response, err := uc.Execute(ctx, req)
+	response, err := tc.uc.Execute(ctx, req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, response)

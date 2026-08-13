@@ -709,6 +709,7 @@ func (a *App) setupRouter() {
 	submitMerchantKYCUC := merchantkycusecase.NewSubmitMerchantKYCUsecase(
 		shopRepo,
 		shopKYCDocRepo,
+		txmanagerRepo,
 	)
 
 	reviewMerchantKYCUC := merchantkycusecase.NewReviewMerchantKYCUsecase(

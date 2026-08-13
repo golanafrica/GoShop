@@ -33,27 +33,36 @@ import (
 // 🔄 Workflow :
 //   1. Vérifier que le shop existe et est actif
 //   2. Valider les documents soumis
-//   3. Supprimer les anciens documents (si re-soumission)
-//   4. Créer les nouveaux documents
-//   5. Mettre à jour le statut KYC du shop à "pending"
-//   6. Retourner le statut mis à jour
+//   3. BEGIN TRANSACTION
+//   4. Supprimer les anciens documents (si re-soumission)
+//   5. Créer les nouveaux documents
+//   6. Mettre à jour le statut KYC du shop à "pending"
+//   7. COMMIT TRANSACTION
+//   8. Retourner le statut mis à jour
+//
+// 🛡️ ATOMICITÉ :
+//   Toutes les opérations DB (4, 5, 6) sont encapsulées dans une
+//   transaction. Si une étape échoue, ROLLBACK automatique.
 //
 // ============================================================
 
 // SubmitMerchantKYCUsecase gère la soumission KYC par un marchand
 type SubmitMerchantKYCUsecase struct {
-	shopRepo repository.ShopRepository
-	kycRepo  repository.ShopKYCDocumentRepository
+	shopRepo  repository.ShopRepository
+	kycRepo   repository.ShopKYCDocumentRepository
+	txManager repository.TxManager // 🛡️ Gestionnaire de transactions
 }
 
 // NewSubmitMerchantKYCUsecase crée une nouvelle instance
 func NewSubmitMerchantKYCUsecase(
 	shopRepo repository.ShopRepository,
 	kycRepo repository.ShopKYCDocumentRepository,
+	txManager repository.TxManager, // 🛡️ Nouveau paramètre
 ) *SubmitMerchantKYCUsecase {
 	return &SubmitMerchantKYCUsecase{
-		shopRepo: shopRepo,
-		kycRepo:  kycRepo,
+		shopRepo:  shopRepo,
+		kycRepo:   kycRepo,
+		txManager: txManager,
 	}
 }
 
@@ -82,7 +91,7 @@ type SubmitMerchantKYCResponse struct {
 	Message             string    `json:"message"`
 }
 
-// Execute soumet les documents KYC
+// Execute soumet les documents KYC avec transaction atomique
 func (uc *SubmitMerchantKYCUsecase) Execute(
 	ctx context.Context,
 	req *SubmitMerchantKYCRequest,
@@ -99,7 +108,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		Str("shop_id", shop.ID.String()).
 		Str("shop_name", shop.Name).
 		Int("documents_count", len(req.Documents)).
-		Msg("📝 Début soumission KYC marchand")
+		Msg("📄 Début soumission KYC marchand")
 
 	// 2. Vérifier que le shop est actif
 	if !shop.IsActive {
@@ -118,7 +127,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		return nil, entity.ErrShopKYCAlreadyVerified
 	}
 
-	// 4. Valider les documents soumis
+	// 4. Valider les documents soumis (AVANT la transaction)
 	if err := uc.validateDocuments(req.Documents); err != nil {
 		logger.Warn().
 			Str("shop_id", shop.ID.String()).
@@ -127,9 +136,20 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		return nil, err
 	}
 
-	// 5. Transaction : supprimer anciens docs + créer nouveaux + update statut
-	txRepo := uc.shopRepo.WithTX(nil) // TODO: Implémenter transaction réelle
-	kycTxRepo := uc.kycRepo.WithTX(nil)
+	// ============================================================
+	// 🛡️ DÉBUT TRANSACTION ATOMIQUE
+	// ============================================================
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("❌ Impossible de démarrer la transaction")
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	// Rollback automatique si erreur non gérée ou panic
+	defer tx.Rollback()
+
+	// Créer les repositories attachés à la transaction
+	txShopRepo := uc.shopRepo.WithTX(tx)
+	txKYCRepo := uc.kycRepo.WithTX(tx)
 
 	// 5.1 Supprimer les anciens documents (si re-soumission)
 	if shop.KYCSubmissionsCount > 0 {
@@ -138,16 +158,15 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 			Int("previous_submissions", shop.KYCSubmissionsCount).
 			Msg("🗑️ Suppression des anciens documents KYC")
 
-		if err := kycTxRepo.DeleteByShopID(ctx, shop.ID); err != nil {
-			logger.Error().
-				Err(err).
-				Msg("❌ Erreur suppression anciens documents")
+		if err := txKYCRepo.DeleteByShopID(ctx, shop.ID); err != nil {
+			logger.Error().Err(err).Msg("❌ Erreur suppression anciens documents")
 			return nil, fmt.Errorf("delete old documents: %w", err)
+			// Rollback automatique via defer
 		}
 	}
 
 	// 5.2 Créer les nouveaux documents
-	for _, docInput := range req.Documents {
+	for i, docInput := range req.Documents {
 		doc, err := entity.NewShopKYCDocument(
 			shop.ID,
 			entity.ShopKYCDocumentType(docInput.DocumentType),
@@ -159,49 +178,63 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		if err != nil {
 			logger.Error().
 				Err(err).
+				Int("document_index", i+1).
 				Str("document_type", docInput.DocumentType).
 				Msg("❌ Erreur création document")
-			return nil, fmt.Errorf("create document: %w", err)
+			return nil, fmt.Errorf("create document %d: %w", i+1, err)
+			// Rollback automatique via defer
 		}
 
-		if err := kycTxRepo.Create(ctx, doc); err != nil {
+		if err := txKYCRepo.Create(ctx, doc); err != nil {
 			logger.Error().
 				Err(err).
 				Str("document_id", doc.ID.String()).
+				Str("document_type", docInput.DocumentType).
 				Msg("❌ Erreur sauvegarde document")
-			return nil, fmt.Errorf("save document: %w", err)
+			return nil, fmt.Errorf("save document %d: %w", i+1, err)
+			// Rollback automatique via defer
 		}
 
 		logger.Debug().
 			Str("document_id", doc.ID.String()).
 			Str("document_type", docInput.DocumentType).
-			Msg("✅ Document KYC créé")
+			Msg("✅ Document KYC créé (dans transaction)")
 	}
 
 	// 5.3 Mettre à jour le statut KYC du shop
-	if err := txRepo.UpdateKYCStatus(
+	if err := txShopRepo.UpdateKYCStatus(
 		ctx,
 		shop.ID,
 		entity.ShopKYCStatusPending,
 		"", // Pas d'admin, c'est le marchand qui soumet
 		nil,
 	); err != nil {
-		logger.Error().
-			Err(err).
-			Msg("❌ Erreur mise à jour statut KYC")
+		logger.Error().Err(err).Msg("❌ Erreur mise à jour statut KYC")
 		return nil, fmt.Errorf("update kyc status: %w", err)
+		// Rollback automatique via defer
 	}
 
-	// 6. Récupérer le shop mis à jour
-	updatedShop, err := txRepo.FindByID(ctx, shop.ID)
+	// 5.4 Récupérer le shop mis à jour (dans la transaction)
+	updatedShop, err := txShopRepo.FindByID(ctx, shop.ID)
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Msg("❌ Erreur récupération shop mis à jour")
+		logger.Error().Err(err).Msg("❌ Erreur récupération shop mis à jour")
 		return nil, fmt.Errorf("find updated shop: %w", err)
+		// Rollback automatique via defer
 	}
 
-	// 7. Compter les documents créés
+	// ============================================================
+	// 🛡️ COMMIT TRANSACTION (tout a réussi)
+	// ============================================================
+	if err := tx.Commit(); err != nil {
+		logger.Error().Err(err).Msg("❌ Erreur commit transaction")
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	logger.Info().
+		Str("shop_id", shop.ID.String()).
+		Msg("✅ Transaction KYC commitée avec succès")
+
+	// 6. Compter les documents créés (après commit, hors transaction)
 	documentsCount, err := uc.kycRepo.CountByShopID(ctx, shop.ID)
 	if err != nil {
 		logger.Warn().
@@ -215,7 +248,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		Str("kyc_status", string(updatedShop.KYCStatus)).
 		Int("documents_count", documentsCount).
 		Int("submissions_count", updatedShop.KYCSubmissionsCount).
-		Msg("✅ Soumission KYC réussie")
+		Msg("✅ Soumission KYC réussie (transactionnelle)")
 
 	return &SubmitMerchantKYCResponse{
 		ShopID:              updatedShop.ID.String(),
