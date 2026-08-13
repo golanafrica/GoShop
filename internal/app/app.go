@@ -69,6 +69,9 @@ import (
 	"Goshop/infrastructure/postgres/product"
 	"Goshop/infrastructure/postgres/shop"
 	"Goshop/infrastructure/postgres/tontine"
+
+	// 🆕 Idempotency
+	"Goshop/infrastructure/idempotency"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
@@ -330,6 +333,9 @@ func (a *App) setupRouter() {
 
 	// 🆕 v4.6.0 : Repository Dispute
 	disputeRepo := disputeinfra.NewDisputeRepositoryPostgres(a.DB)
+
+	// ============ 🆕 IDEMPOTENCY REPOSITORY ============
+	idempotencyRepo := idempotency.NewPostgresIdempotencyRepository(a.DB)
 
 	a.Logger.Info().Msg("✅ v4.7.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute + delivery_proof)")
 
@@ -1303,6 +1309,15 @@ func (a *App) setupRouter() {
 	// ============ 5. ROUTES API PROTÉGÉES + MULTI-TENANT ============
 	r.Route("/api", func(r chi.Router) {
 		r.Use(authMiddlewareWithSession)
+
+		// 🛡️ IDEMPOTENCY MIDDLEWARE (v4.9.0)
+		// Appliqué globalement sur toutes les routes /api
+		// Si pas de header Idempotency-Key → passe transparent
+		// Si header présent → protège contre les requêtes dupliquées
+		r.Use(middl.IdempotencyMiddleware(middl.IdempotencyConfig{
+			IdempotencyRepo: idempotencyRepo,
+			TTL:             24 * time.Hour,
+		}))
 
 		// Routes de gestion des shops (SANS TenantResolver)
 		r.Route("/shops", func(r chi.Router) {
