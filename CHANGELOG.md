@@ -149,3 +149,49 @@ Nouvelles routes disponibles : Voir docs/11-tontine-system.md et docs/KYC.md.
 docs/11-tontine-system.md : Guide complet du système tontine
 docs/KYC.md : Guide du système KYC
 docs/payment-system.md : Mis à jour avec intégration tontine
+
+
+## 🔒 Breaking Changes - Security
+
+### API Key Transport (v4.5.1)
+
+**⚠️ BREAKING:** API keys passed via query parameter `?api_key=...` are no longer accepted.
+
+**Why:** Query parameters are logged by servers, proxies, CDNs, and browsers, exposing your API key to unauthorized parties.
+
+**Migration Required:**
+
+❌ **Before (insecure):**
+
+GET https://api.goshop.com/api/products?api_key=gsk_live_xxx
+
+
+✅ **After (secure - Option 1):**
+
+GET https://api.goshop.com/api/products
+X-API-Key: gsk_live_xxx
+
+
+✅ **After (secure - Option 2):**
+
+GET https://api.goshop.com/api/products
+Authorization: Bearer gsk_live_xxx
+
+
+**Error Code:** `API_KEY_INSECURE_TRANSPORT` (HTTP 401)
+
+**Action Required:** Update your API client code to use HTTP headers instead of query parameters.
+
+
+
+# JWT Secret (64 caractères hex)
+openssl rand -hex 32
+
+# Refresh Secret (76 caractères base64)
+openssl rand -base64 48
+
+# Encryption Key (32 caractères)
+openssl rand -base64 32 | Select-Object -First 1 | ForEach-Object { $_.Substring(0, [Math]::Min(32, $_.Length)) }
+
+# Database Password
+-join ((65..90) + (97..122) + (48..57) + (33..47) | Get-Random -Count 24 | ForEach-Object {[char]$_})
