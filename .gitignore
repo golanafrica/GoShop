@@ -21,7 +21,7 @@ coverage
 .env.test
 .env.development
 .env.production
-.env.example
+#.env.example
 
 # ==========================================
 # DOCUMENTATION OPENAPI GÉNÉRÉE (Dédoublons)
