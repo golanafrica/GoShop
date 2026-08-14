@@ -9,6 +9,7 @@ import (
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
+	"Goshop/interfaces/utils"
 	mockrepo "Goshop/mocks/repository"
 	mockservice "Goshop/mocks/service"
 
@@ -53,6 +54,12 @@ func createTestKYCDocument(id, customerID string, status entity.KYCDocumentStatu
 		Status:       status,
 		CreatedAt:    time.Now(),
 	}
+}
+
+// createValidUploadToken crée un token valide pour les tests
+func createValidUploadToken(userID, filePath string) *entity.UploadToken {
+	token, _ := entity.NewUploadToken(userID, filePath, "test.jpg", 1024, "image/jpeg")
+	return token
 }
 
 // ============================================================
@@ -190,7 +197,6 @@ func TestReviewKYCUsecase_CustomerNotFound(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// ✅ AJOUTER : Les 2 repositories sont attachés à la transaction
 	customerRepo.EXPECT().WithTX(mockTx).Return(customerRepo).AnyTimes()
 	kycDocRepo.EXPECT().WithTX(mockTx).Return(kycDocRepo).AnyTimes()
 
@@ -409,6 +415,7 @@ func TestUploadKYCRequest_Validate_Success(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token-123",
 	}
 	err := req.Validate()
 	assert.NoError(t, err)
@@ -420,6 +427,7 @@ func TestUploadKYCRequest_Validate_EmptyCustomerID(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 	err := req.Validate()
 	assert.Error(t, err)
@@ -433,6 +441,7 @@ func TestUploadKYCRequest_Validate_InvalidDocumentType(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 	err := req.Validate()
 	assert.Error(t, err)
@@ -446,6 +455,7 @@ func TestUploadKYCRequest_Validate_EmptyFilePath(t *testing.T) {
 		FilePath:      "",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 	err := req.Validate()
 	assert.Error(t, err)
@@ -459,6 +469,7 @@ func TestUploadKYCRequest_Validate_FileTooLarge(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 10 * 1024 * 1024, // 10 MB
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 	err := req.Validate()
 	assert.Error(t, err)
@@ -472,10 +483,25 @@ func TestUploadKYCRequest_Validate_InvalidMimeType(t *testing.T) {
 		FilePath:      "/uploads/test.exe",
 		FileSizeBytes: 1024,
 		MimeType:      "application/exe",
+		Token:         "test-token",
 	}
 	err := req.Validate()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "mime type not allowed")
+}
+
+func TestUploadKYCRequest_Validate_EmptyToken(t *testing.T) {
+	req := &customerusecase.UploadKYCRequest{
+		CustomerID:    "cust-1",
+		DocumentType:  entity.KYCDocumentCNI,
+		FilePath:      "/uploads/test.jpg",
+		FileSizeBytes: 1024,
+		MimeType:      "image/jpeg",
+		Token:         "", // ❌ Token manquant
+	}
+	err := req.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upload token is required")
 }
 
 // ============================================================
@@ -486,7 +512,8 @@ func TestUploadKYCDocumentUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil)
+	// Le test échoue au multi-tenant, donc nil pour tous les repos
+	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil, nil)
 
 	req := &customerusecase.UploadKYCRequest{
 		CustomerID:    "cust-1",
@@ -494,6 +521,7 @@ func TestUploadKYCDocumentUsecase_MultiTenantError(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 
 	result, err := uc.Execute(context.Background(), req)
@@ -507,12 +535,22 @@ func TestUploadKYCDocumentUsecase_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	shop := createTestShopForKYC()
+	authUserID := "auth-user-1"
 	ctx := tenant.WithTenant(context.Background(), shop)
+	// Ajouter le userID dans le contexte (comme fait le middleware auth)
+	ctx = utils.WithUserID(ctx, authUserID)
+
 	mockTx := mockrepo.NewMockTx(ctrl)
 
 	kycDocRepo := mockrepo.NewMockCustomerKYCRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	// Token valide
+	validToken := createValidUploadToken(authUserID, "/uploads/test.jpg")
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "test-token-123").Return(validToken, nil)
+	tokenRepo.EXPECT().MarkUsed(gomock.Any(), "test-token-123").Return(nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -524,14 +562,13 @@ func TestUploadKYCDocumentUsecase_Success(t *testing.T) {
 	customer := createTestCustomerKYC("cust-1")
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "cust-1").Return(customer, nil)
 
-	// Pas de documents existants
 	kycDocRepo.EXPECT().CountByCustomer(gomock.Any(), "cust-1").Return(0, nil)
 	kycDocRepo.EXPECT().FindPendingByCustomer(gomock.Any(), "cust-1").Return([]*entity.CustomerKYCDocument{}, nil)
 
 	kycDocRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	customerRepo.EXPECT().UpdateCustomer(gomock.Any(), gomock.Any()).Return(customer, nil)
 
-	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager)
+	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager, tokenRepo)
 
 	req := &customerusecase.UploadKYCRequest{
 		CustomerID:    "cust-1",
@@ -539,6 +576,7 @@ func TestUploadKYCDocumentUsecase_Success(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token-123",
 	}
 
 	result, err := uc.Execute(ctx, req)
@@ -546,17 +584,147 @@ func TestUploadKYCDocumentUsecase_Success(t *testing.T) {
 	assert.NotNil(t, result)
 }
 
-func TestUploadKYCDocumentUsecase_MaxDocumentsReached(t *testing.T) {
+func TestUploadKYCDocumentUsecase_InvalidToken(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	shop := createTestShopForKYC()
 	ctx := tenant.WithTenant(context.Background(), shop)
+
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	// Token introuvable
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "invalid-token").Return(nil, errors.New("not found"))
+
+	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil, tokenRepo)
+
+	req := &customerusecase.UploadKYCRequest{
+		CustomerID:    "cust-1",
+		DocumentType:  entity.KYCDocumentCNI,
+		FilePath:      "/uploads/test.jpg",
+		FileSizeBytes: 1024,
+		MimeType:      "image/jpeg",
+		Token:         "invalid-token",
+	}
+
+	result, err := uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "invalid upload token")
+}
+
+func TestUploadKYCDocumentUsecase_TokenExpired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	shop := createTestShopForKYC()
+	ctx := tenant.WithTenant(context.Background(), shop)
+
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	// Token expiré
+	expiredToken := createValidUploadToken("user-1", "/uploads/test.jpg")
+	expiredToken.Used = true // Marqué comme utilisé
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "expired-token").Return(expiredToken, nil)
+
+	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil, tokenRepo)
+
+	req := &customerusecase.UploadKYCRequest{
+		CustomerID:    "cust-1",
+		DocumentType:  entity.KYCDocumentCNI,
+		FilePath:      "/uploads/test.jpg",
+		FileSizeBytes: 1024,
+		MimeType:      "image/jpeg",
+		Token:         "expired-token",
+	}
+
+	result, err := uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "expired or already used")
+}
+
+func TestUploadKYCDocumentUsecase_TokenWrongUser(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	shop := createTestShopForKYC()
+	authUserID := "auth-user-1"
+	ctx := tenant.WithTenant(context.Background(), shop)
+	ctx = utils.WithUserID(ctx, authUserID)
+
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	// Token appartient à un autre utilisateur
+	wrongUserToken := createValidUploadToken("different-user", "/uploads/test.jpg")
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "wrong-token").Return(wrongUserToken, nil)
+
+	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil, tokenRepo)
+
+	req := &customerusecase.UploadKYCRequest{
+		CustomerID:    "cust-1",
+		DocumentType:  entity.KYCDocumentCNI,
+		FilePath:      "/uploads/test.jpg",
+		FileSizeBytes: 1024,
+		MimeType:      "image/jpeg",
+		Token:         "wrong-token",
+	}
+
+	result, err := uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "does not belong to authenticated user")
+}
+
+func TestUploadKYCDocumentUsecase_TokenFilePathMismatch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	shop := createTestShopForKYC()
+	authUserID := "auth-user-1"
+	ctx := tenant.WithTenant(context.Background(), shop)
+	ctx = utils.WithUserID(ctx, authUserID)
+
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	// Token avec un FilePath différent
+	wrongPathToken := createValidUploadToken(authUserID, "/uploads/different.jpg")
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "mismatch-token").Return(wrongPathToken, nil)
+
+	uc := customerusecase.NewUploadKYCDocumentUsecase(nil, nil, nil, tokenRepo)
+
+	req := &customerusecase.UploadKYCRequest{
+		CustomerID:    "cust-1",
+		DocumentType:  entity.KYCDocumentCNI,
+		FilePath:      "/uploads/test.jpg", // Différent du token
+		FileSizeBytes: 1024,
+		MimeType:      "image/jpeg",
+		Token:         "mismatch-token",
+	}
+
+	result, err := uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "file path does not match")
+}
+
+func TestUploadKYCDocumentUsecase_MaxDocumentsReached(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	shop := createTestShopForKYC()
+	authUserID := "auth-user-1"
+	ctx := tenant.WithTenant(context.Background(), shop)
+	ctx = utils.WithUserID(ctx, authUserID)
 	mockTx := mockrepo.NewMockTx(ctrl)
 
 	kycDocRepo := mockrepo.NewMockCustomerKYCRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	validToken := createValidUploadToken(authUserID, "/uploads/test.jpg")
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "test-token").Return(validToken, nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -570,7 +738,7 @@ func TestUploadKYCDocumentUsecase_MaxDocumentsReached(t *testing.T) {
 	// 3 documents déjà (maximum atteint)
 	kycDocRepo.EXPECT().CountByCustomer(gomock.Any(), "cust-1").Return(3, nil)
 
-	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager)
+	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager, tokenRepo)
 
 	req := &customerusecase.UploadKYCRequest{
 		CustomerID:    "cust-1",
@@ -578,6 +746,7 @@ func TestUploadKYCDocumentUsecase_MaxDocumentsReached(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 
 	result, err := uc.Execute(ctx, req)
@@ -591,12 +760,18 @@ func TestUploadKYCDocumentUsecase_DuplicatePendingDocument(t *testing.T) {
 	defer ctrl.Finish()
 
 	shop := createTestShopForKYC()
+	authUserID := "auth-user-1"
 	ctx := tenant.WithTenant(context.Background(), shop)
+	ctx = utils.WithUserID(ctx, authUserID)
 	mockTx := mockrepo.NewMockTx(ctrl)
 
 	kycDocRepo := mockrepo.NewMockCustomerKYCRepository(ctrl)
 	customerRepo := mockrepo.NewMockCustomerRepositoryInterface(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
+	tokenRepo := mockrepo.NewMockUploadTokenRepository(ctrl)
+
+	validToken := createValidUploadToken(authUserID, "/uploads/test.jpg")
+	tokenRepo.EXPECT().FindByID(gomock.Any(), "test-token").Return(validToken, nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
@@ -613,7 +788,7 @@ func TestUploadKYCDocumentUsecase_DuplicatePendingDocument(t *testing.T) {
 	existingDoc := createTestKYCDocument("doc-1", "cust-1", entity.KYCDocumentStatusPending)
 	kycDocRepo.EXPECT().FindPendingByCustomer(gomock.Any(), "cust-1").Return([]*entity.CustomerKYCDocument{existingDoc}, nil)
 
-	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager)
+	uc := customerusecase.NewUploadKYCDocumentUsecase(kycDocRepo, customerRepo, txManager, tokenRepo)
 
 	req := &customerusecase.UploadKYCRequest{
 		CustomerID:    "cust-1",
@@ -621,6 +796,7 @@ func TestUploadKYCDocumentUsecase_DuplicatePendingDocument(t *testing.T) {
 		FilePath:      "/uploads/test.jpg",
 		FileSizeBytes: 1024,
 		MimeType:      "image/jpeg",
+		Token:         "test-token",
 	}
 
 	result, err := uc.Execute(ctx, req)

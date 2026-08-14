@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	redis "Goshop/infrastructure/redis"
+
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
 	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
@@ -449,6 +451,10 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ v4.5.0 Notification Dispatcher using Noop")
 	}
 
+	// ============ 🆕 v4.9.1 : UPLOAD TOKEN REPOSITORY (Redis) ============
+	uploadTokenRepo := redis.NewRedisUploadTokenRepository()
+	a.Logger.Info().Msg("✅ v4.9.1 Upload token repository initialized (Redis)")
+
 	// -- Usecases (existants)
 	refreshUsecase := authusecase.NewRefreshUsecase(
 		refreshSessionRepo,
@@ -692,6 +698,7 @@ func (a *App) setupRouter() {
 		kycDocRepo,
 		postgresCustomerRepo,
 		txmanagerRepo,
+		uploadTokenRepo,
 	)
 
 	getKYCStatusUC := customerusecase.NewGetKYCStatusUsecase(
@@ -1247,7 +1254,7 @@ func (a *App) setupRouter() {
 	}
 
 	// Usecase d'upload (orchestration)
-	uploadFileUC := uploadusecase.NewUploadFileUsecase(uploadStorage)
+	uploadFileUC := uploadusecase.NewUploadFileUsecase(uploadStorage, uploadTokenRepo)
 
 	// Handler d'upload (réception HTTP)
 	uploadHandler := uploadhandler.NewUploadHandler(uploadFileUC)

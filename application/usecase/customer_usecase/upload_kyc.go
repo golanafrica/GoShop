@@ -2,12 +2,16 @@ package customerusecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	"Goshop/interfaces/utils"
+
+	"github.com/rs/zerolog"
 )
 
 // ============================================================
@@ -30,6 +34,7 @@ type UploadKYCDocumentUsecase struct {
 	kycDocRepo   repository.CustomerKYCRepository
 	customerRepo repository.CustomerRepositoryInterface
 	txManager    repository.TxManager
+	tokenRepo    repository.UploadTokenRepository // 🛡️ Token repository
 }
 
 // NewUploadKYCDocumentUsecase crée une nouvelle instance
@@ -37,11 +42,13 @@ func NewUploadKYCDocumentUsecase(
 	kycDocRepo repository.CustomerKYCRepository,
 	customerRepo repository.CustomerRepositoryInterface,
 	txManager repository.TxManager,
+	tokenRepo repository.UploadTokenRepository,
 ) *UploadKYCDocumentUsecase {
 	return &UploadKYCDocumentUsecase{
 		kycDocRepo:   kycDocRepo,
 		customerRepo: customerRepo,
 		txManager:    txManager,
+		tokenRepo:    tokenRepo,
 	}
 }
 
@@ -52,27 +59,28 @@ type UploadKYCRequest struct {
 	FilePath      string                 `json:"file_path"`
 	FileSizeBytes int64                  `json:"file_size_bytes"`
 	MimeType      string                 `json:"mime_type"`
+	Token         string                 `json:"token"` // 🛡️ Token de validation
 }
 
 // Validate valide la requête
 func (r *UploadKYCRequest) Validate() error {
 	if r.CustomerID == "" {
-		return fmt.Errorf("customer_id is required")
+		return errors.New("customer_id is required")
 	}
 	if !r.DocumentType.IsValid() {
 		return fmt.Errorf("invalid document type: %s (must be cni, passport or other)", r.DocumentType)
 	}
 	if r.FilePath == "" {
-		return fmt.Errorf("file_path is required")
+		return errors.New("file_path is required")
 	}
 	if r.FileSizeBytes <= 0 {
-		return fmt.Errorf("file_size_bytes must be positive")
+		return errors.New("file_size_bytes must be positive")
 	}
 	if r.FileSizeBytes > MaxFileSizeBytes {
 		return fmt.Errorf("file size exceeds maximum (%d MB)", MaxFileSizeBytes/(1024*1024))
 	}
 	if r.MimeType == "" {
-		return fmt.Errorf("mime_type is required")
+		return errors.New("mime_type is required")
 	}
 	// Vérifier les types MIME autorisés
 	allowedMimeTypes := map[string]bool{
@@ -84,11 +92,17 @@ func (r *UploadKYCRequest) Validate() error {
 	if !allowedMimeTypes[r.MimeType] {
 		return fmt.Errorf("mime type not allowed: %s (must be image/jpeg, image/png or application/pdf)", r.MimeType)
 	}
+	// 🛡️ Validation du token
+	if r.Token == "" {
+		return errors.New("upload token is required")
+	}
 	return nil
 }
 
 // Execute uploade un document KYC pour un client
 func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCRequest) (*entity.CustomerKYCDocument, error) {
+	logger := zerolog.Ctx(ctx)
+
 	// 1. Récupérer le shop du contexte (multi-tenant)
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
@@ -100,7 +114,48 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
 
-	// 3. Démarrer une transaction
+	// 3. 🛡️ Valider le token d'upload (AVANT la transaction)
+	token, err := uc.tokenRepo.FindByID(ctx, req.Token)
+	if err != nil {
+		logger.Warn().Err(err).Str("token", req.Token).Msg("❌ Token introuvable")
+		return nil, fmt.Errorf("invalid upload token: %w", err)
+	}
+
+	if !token.IsValid() {
+		logger.Warn().
+			Str("token", req.Token).
+			Bool("used", token.Used).
+			Bool("expired", token.IsExpired()).
+			Msg("❌ Token invalide (expiré ou déjà utilisé)")
+		return nil, errors.New("upload token is expired or already used")
+	}
+
+	// Vérifier que le token appartient à l'utilisateur authentifié (anti-IDOR)
+	authUserID, ok := utils.UserIDFromContext(ctx)
+	if !ok || !token.MatchesUserID(authUserID) {
+		logger.Warn().
+			Str("token_user", token.UserID).
+			Str("auth_user", authUserID).
+			Msg("❌ Token n'appartient pas à l'utilisateur authentifié")
+		return nil, errors.New("upload token does not belong to authenticated user")
+	}
+
+	// Vérifier que le FilePath correspond au token (anti-path traversal)
+	if !token.MatchesFilePath(req.FilePath) {
+		logger.Warn().
+			Str("token_path", token.FilePath).
+			Str("request_path", req.FilePath).
+			Msg("❌ FilePath ne correspond pas au token")
+		return nil, errors.New("file path does not match upload token")
+	}
+
+	logger.Info().
+		Str("token", req.Token).
+		Str("user_id", authUserID).
+		Str("file_path", req.FilePath).
+		Msg("✅ Token validé avec succès")
+
+	// 4. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
@@ -111,17 +166,17 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		}
 	}()
 
-	// 4. Attacher les repositories à la transaction
+	// 5. Attacher les repositories à la transaction
 	kycDocRepoTx := uc.kycDocRepo.WithTX(tx)
 	customerRepoTx := uc.customerRepo.WithTX(tx)
 
-	// 5. Vérifier que le client existe et appartient à la boutique
+	// 6. Vérifier que le client existe et appartient à la boutique
 	customer, err := customerRepoTx.FindByCustomerID(ctx, req.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("customer not found: %w", err)
 	}
 
-	// 6. Vérifier que le client n'a pas déjà atteint la limite de documents
+	// 7. Vérifier que le client n'a pas déjà atteint la limite de documents
 	count, err := kycDocRepoTx.CountByCustomer(ctx, req.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count documents: %w", err)
@@ -130,7 +185,7 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		return nil, fmt.Errorf("maximum number of documents reached (%d)", MaxDocumentsPerCustomer)
 	}
 
-	// 7. Vérifier qu'il n'y a pas déjà un document en attente pour ce type
+	// 8. Vérifier qu'il n'y a pas déjà un document en attente pour ce type
 	pendingDocs, err := kycDocRepoTx.FindPendingByCustomer(ctx, req.CustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check pending documents: %w", err)
@@ -141,7 +196,7 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		}
 	}
 
-	// 8. Créer le document KYC
+	// 9. Créer le document KYC
 	doc, err := entity.NewCustomerKYCDocument(
 		req.CustomerID,
 		shop.ID.String(),
@@ -158,16 +213,30 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		return nil, fmt.Errorf("failed to save document: %w", err)
 	}
 
-	// 9. Mettre à jour le statut KYC du client à "pending"
+	// 10. Mettre à jour le statut KYC du client à "pending"
 	customer.MarkKYCPending()
 	if _, err := customerRepoTx.UpdateCustomer(ctx, customer); err != nil {
 		return nil, fmt.Errorf("failed to update customer KYC status: %w", err)
 	}
 
-	// 10. Commit
+	// 11. Commit
 	if err = tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
+
+	// 12. 🛡️ Marquer le token comme utilisé (APRÈS le commit, non bloquant)
+	if err := uc.tokenRepo.MarkUsed(ctx, req.Token); err != nil {
+		logger.Warn().
+			Err(err).
+			Str("token", req.Token).
+			Msg("⚠️ Impossible de marquer le token comme utilisé (non bloquant)")
+	}
+
+	logger.Info().
+		Str("customer_id", req.CustomerID).
+		Str("document_type", string(req.DocumentType)).
+		Str("file_path", req.FilePath).
+		Msg("✅ Document KYC soumis avec succès (token consommé)")
 
 	return doc, nil
 }

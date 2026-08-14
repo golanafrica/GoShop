@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	storageinfra "Goshop/infrastructure/storage"
 	"Goshop/interfaces/utils"
 
@@ -19,25 +21,31 @@ import (
 //
 // 🎯 Objectif :
 //   Orchestrer l'upload sécurisé d'un fichier avec validation.
-//   Sépare la logique métier de l'infrastructure.
+//   Générer un token pour lier l'upload à la soumission KYC.
 //
 // 🔐 Sécurité :
 //   - Validation magic number (contenu réel)
 //   - Validation extension
 //   - Validation cohérence extension/contenu
 //   - Limites de taille par type
+//   - Token cryptographique pour scope serveur
 //
 // ============================================================
 
 // UploadFileUsecase orchestre l'upload de fichiers
 type UploadFileUsecase struct {
-	storage *storageinfra.FileStorage
+	storage   *storageinfra.FileStorage
+	tokenRepo repository.UploadTokenRepository
 }
 
 // NewUploadFileUsecase crée une nouvelle instance
-func NewUploadFileUsecase(storage *storageinfra.FileStorage) *UploadFileUsecase {
+func NewUploadFileUsecase(
+	storage *storageinfra.FileStorage,
+	tokenRepo repository.UploadTokenRepository,
+) *UploadFileUsecase {
 	return &UploadFileUsecase{
-		storage: storage,
+		storage:   storage,
+		tokenRepo: tokenRepo,
 	}
 }
 
@@ -48,6 +56,7 @@ type UploadFileRequest struct {
 	DeclaredMIME string
 	DocumentType string // identity_card, passport, business_registry, etc.
 	MaxSizeBytes int64  // Taille max globale (optionnel, défaut 10MB)
+	UserID       string // User ID pour lier le token (anti-IDOR)
 }
 
 // UploadFileResponse représente la réponse
@@ -57,6 +66,7 @@ type UploadFileResponse struct {
 	FileSize int64  `json:"file_size"`
 	MimeType string `json:"mime_type"`
 	FileType string `json:"file_type"`
+	Token    string `json:"token"` // Token pour valider la soumission KYC
 }
 
 // Execute uploade un fichier avec validation complète
@@ -69,6 +79,7 @@ func (uc *UploadFileUsecase) Execute(
 	logger.Info().
 		Str("filename", req.Filename).
 		Str("document_type", req.DocumentType).
+		Str("user_id", req.UserID).
 		Msg("📤 Début upload fichier")
 
 	// 1. Déterminer les types autorisés selon le document
@@ -127,19 +138,42 @@ func (uc *UploadFileUsecase) Execute(
 		return nil, fmt.Errorf("save error: %w", err)
 	}
 
+	// 8. Créer le token d'upload (DDD : entité métier)
+	fullPath := "/uploads/" + filePath
+	token, err := entity.NewUploadToken(
+		req.UserID,
+		fullPath,
+		req.Filename,
+		validation.Size,
+		validation.MimeType,
+	)
+	if err != nil {
+		logger.Error().Err(err).Msg("❌ Erreur création token")
+		return nil, fmt.Errorf("failed to create upload token: %w", err)
+	}
+
+	// 9. Stocker le token dans Redis (via repository)
+	if err := uc.tokenRepo.Create(ctx, token); err != nil {
+		logger.Error().Err(err).Msg("❌ Erreur stockage token")
+		// Ne pas bloquer l'upload, mais logger l'erreur
+		// Le fichier est sauvegardé mais ne pourra pas être utilisé
+	}
+
 	logger.Info().
 		Str("file_path", filePath).
+		Str("token", token.ID).
 		Str("file_type", string(validation.FileType)).
 		Int64("size", validation.Size).
-		Msg("✅ Fichier uploadé avec succès")
+		Msg("✅ Fichier uploadé avec token")
 
-	// 8. Retourner la réponse
+	// 10. Retourner la réponse avec token
 	return &UploadFileResponse{
-		FilePath: "/uploads/" + filePath,
+		FilePath: fullPath,
 		FileName: req.Filename,
 		FileSize: validation.Size,
 		MimeType: validation.MimeType,
 		FileType: string(validation.FileType),
+		Token:    token.ID,
 	}, nil
 }
 

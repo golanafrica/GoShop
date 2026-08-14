@@ -29,11 +29,12 @@ type UploadResponse struct {
 	FileSize int64  `json:"file_size"`
 	MimeType string `json:"mime_type"`
 	FileType string `json:"file_type"`
+	Token    string `json:"token"` // 🛡️ Token pour valider la soumission KYC
 	Message  string `json:"message"`
 }
 
 // @Summary Upload un fichier KYC
-// @Description Upload sécurisé d'un fichier KYC avec validation magic number
+// @Description Upload sécurisé d'un fichier KYC avec validation magic number et génération de token
 // @Tags Upload
 // @Accept multipart/form-data
 // @Produce json
@@ -48,6 +49,13 @@ type UploadResponse struct {
 func (h *UploadHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
+
+	// 0. 🛡️ Extraire le UserID du contexte (anti-IDOR)
+	userID, ok := utils.UserIDFromContext(ctx)
+	if !ok || userID == "" {
+		logger.Warn().Msg("User ID not found in context")
+		return utils.ErrUnauthorized
+	}
 
 	// 1. Parser le multipart form (max 10 MB)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
@@ -76,6 +84,7 @@ func (h *UploadHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error 
 		DeclaredMIME: header.Header.Get("Content-Type"),
 		DocumentType: docType,
 		MaxSizeBytes: 10 * 1024 * 1024, // 10 MB
+		UserID:       userID,           // 🛡️ Passer le UserID pour lier le token
 	}
 
 	// 5. Exécuter le usecase
@@ -87,11 +96,13 @@ func (h *UploadHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error 
 
 	logger.Info().
 		Str("file_path", response.FilePath).
+		Str("token", response.Token).
 		Str("file_type", response.FileType).
 		Int64("size", response.FileSize).
-		Msg("✅ Upload réussi via usecase")
+		Str("user_id", userID).
+		Msg("✅ Upload réussi avec token")
 
-	// 6. Retourner la réponse HTTP
+	// 6. Retourner la réponse HTTP avec le token
 	httpResponse := UploadResponse{
 		Success:  true,
 		FilePath: response.FilePath,
@@ -99,7 +110,8 @@ func (h *UploadHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error 
 		FileSize: response.FileSize,
 		MimeType: response.MimeType,
 		FileType: response.FileType,
-		Message:  "File uploaded successfully",
+		Token:    response.Token, // 🛡️ Retourner le token au client
+		Message:  "File uploaded successfully. Use this token in the KYC submission request.",
 	}
 
 	utils.WriteJSON(w, http.StatusCreated, httpResponse)
