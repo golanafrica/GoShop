@@ -48,6 +48,8 @@ import (
 	// 🆕 v4.6.0 : Dispute Usecases
 	disputeusecase "Goshop/application/usecase/dispute_usecase"
 
+	uploadusecase "Goshop/application/usecase/upload_usecase"
+
 	// 🆕 v4.7.0 : Delivery Proof Usecases
 	deliveryproofusecase "Goshop/application/usecase/delivery_proof_usecase"
 
@@ -75,6 +77,9 @@ import (
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
 	userpostgres "Goshop/infrastructure/postgres/user_postgres"
 	withdrawalpostgres "Goshop/infrastructure/withdrawal"
+
+	// 🆕 v4.9.0 : Upload Handler + Storage
+	storageinfra "Goshop/infrastructure/storage"
 
 	// 🆕 v4.5.0 : WebSocket Infrastructure
 	wsinfra "Goshop/infrastructure/websocket"
@@ -141,6 +146,9 @@ import (
 
 	// 🆕 v4.1.0 : Merchant KYC Handler
 	merchantkyhandler "Goshop/interfaces/handler/merchant_kyc_handler"
+
+	// 🆕 v4.9.0 : Upload Handler + Storage
+	uploadhandler "Goshop/interfaces/handler/upload"
 
 	// 🆕 v4.4.0 : 2FA Handler
 	twofahandler "Goshop/interfaces/handler/twofa_handler"
@@ -1230,6 +1238,19 @@ func (a *App) setupRouter() {
 	if wsHub != nil {
 		wsHandler = handlers.NewWSHandler(wsHub)
 	}
+	// ============ 🆕 v4.9.0 : FILE STORAGE + UPLOAD USECASE + HANDLER ============
+	uploadStorage, err := storageinfra.NewFileStorage("./uploads")
+	if err != nil {
+		a.Logger.Error().Err(err).Msg("❌ Failed to initialize file storage")
+	} else {
+		a.Logger.Info().Str("base_path", "./uploads").Msg("✅ v4.9.0 File storage initialized")
+	}
+
+	// Usecase d'upload (orchestration)
+	uploadFileUC := uploadusecase.NewUploadFileUsecase(uploadStorage)
+
+	// Handler d'upload (réception HTTP)
+	uploadHandler := uploadhandler.NewUploadHandler(uploadFileUC)
 
 	a.Logger.Info().Msg("✅ v4.8.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order)")
 
@@ -1448,6 +1469,8 @@ func (a *App) setupRouter() {
 
 			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
+			// 🆕 v4.9.0 : Upload KYC endpoint (multipart)
+			r.Post("/upload/kyc", middl.ErrorHandler(uploadHandler.UploadKYC))
 
 			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
