@@ -1490,6 +1490,7 @@ func (a *App) setupRouter() {
 		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
 			r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
+			r.Use(middl.RequireShopAccess(shopCollabRepo)) // 🆕 AJOUTÉ
 
 			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
