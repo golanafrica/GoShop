@@ -3,6 +3,8 @@ package merchantkycusecase_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,6 +27,39 @@ import (
 // HELPERS
 // ============================================================
 
+// setupTempUploads crée un répertoire uploads temporaire
+func setupTempUploads(t *testing.T) string {
+	t.Helper()
+	tempDir := t.TempDir()
+	uploadsDir := filepath.Join(tempDir, "uploads")
+	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		t.Fatalf("failed to create uploads dir: %v", err)
+	}
+
+	originalWd, _ := os.Getwd()
+
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to change working directory: %v", err)
+	}
+
+	t.Cleanup(func() {
+		os.Chdir(originalWd)
+	})
+
+	return uploadsDir
+}
+
+// createTestFile crée un fichier de test dans le répertoire uploads
+func createTestFile(t *testing.T, filename string) string {
+	t.Helper()
+	diskPath := filepath.Join("uploads", filename)
+	content := []byte("test file content for KYC testing")
+	if err := os.WriteFile(diskPath, content, 0644); err != nil {
+		t.Fatalf("failed to create test file %s: %v", diskPath, err)
+	}
+	return "uploads/" + filename
+}
+
 // createActiveShopForSubmit crée un shop actif pour les tests submit
 func createActiveShopForSubmit() *entity.Shop {
 	return &entity.Shop{
@@ -41,21 +76,23 @@ func createActiveShopForSubmit() *entity.Shop {
 	}
 }
 
-// createValidDocuments crée des documents valides pour les tests
-func createValidDocuments() []merchantkycusecase.DocumentInput {
+// createValidDocuments crée des documents valides avec fichiers réels
+// IMPORTANT: setupTempUploads(t) doit être appelé AVANT cette fonction
+func createValidDocuments(t *testing.T) []merchantkycusecase.DocumentInput {
+	t.Helper()
 	return []merchantkycusecase.DocumentInput{
 		{
 			DocumentType:  "identity_card",
-			FilePath:      "/uploads/id_card.jpg",
+			FilePath:      createTestFile(t, "id_card.jpg"),
 			FileName:      "id_card.jpg",
-			FileSizeBytes: 1024 * 1024, // 1 MB
+			FileSizeBytes: 1024 * 1024,
 			MimeType:      "image/jpeg",
 		},
 		{
 			DocumentType:  "business_registry",
-			FilePath:      "/uploads/registry.pdf",
+			FilePath:      createTestFile(t, "registry.pdf"),
 			FileName:      "registry.pdf",
-			FileSizeBytes: 2 * 1024 * 1024, // 2 MB
+			FileSizeBytes: 2 * 1024 * 1024,
 			MimeType:      "application/pdf",
 		},
 	}
@@ -72,7 +109,6 @@ type testContext struct {
 }
 
 // setupTest initialise tous les mocks et le usecase
-// transactional=true : configure BeginTx (pour tests qui atteignent la transaction)
 func setupTest(t *testing.T, transactional bool) *testContext {
 	ctrl := gomock.NewController(t)
 
@@ -81,14 +117,12 @@ func setupTest(t *testing.T, transactional bool) *testContext {
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// Si le test atteint la transaction, configurer BeginTx
 	if transactional {
 		mockTxManager.EXPECT().
 			BeginTx(gomock.Any()).
 			Return(mockTx, nil).
 			AnyTimes()
 
-		// Rollback par défaut (peut être surchargé)
 		mockTx.EXPECT().
 			Rollback().
 			Return(nil).
@@ -98,7 +132,7 @@ func setupTest(t *testing.T, transactional bool) *testContext {
 	uc := merchantkycusecase.NewSubmitMerchantKYCUsecase(
 		mockShopRepo,
 		mockKycRepo,
-		mockTxManager, // 🛡️ Nouveau paramètre
+		mockTxManager,
 	)
 
 	return &testContext{
@@ -116,13 +150,13 @@ func setupTest(t *testing.T, transactional bool) *testContext {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
-	tc := setupTest(t, false) // Pas de transaction (échoue avant)
+	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
-	// Contexte SANS tenant
+	setupTempUploads(t)
 	ctx := context.Background()
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -137,15 +171,16 @@ func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
-	tc := setupTest(t, false) // Pas de transaction
+	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
-	shop.IsActive = false // ❌ Inactif
+	shop.IsActive = false
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -156,15 +191,16 @@ func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
 }
 
 func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
-	tc := setupTest(t, false) // Pas de transaction
+	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
-	shop.KYCStatus = entity.ShopKYCStatusVerified // ❌ Déjà vérifié
+	shop.KYCStatus = entity.ShopKYCStatusVerified
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -179,14 +215,14 @@ func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_NoDocuments(t *testing.T) {
-	tc := setupTest(t, false) // Pas de transaction
+	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: []merchantkycusecase.DocumentInput{}, // ❌ Vide
+		Documents: []merchantkycusecase.DocumentInput{},
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -200,15 +236,15 @@ func TestSubmitMerchantKYCUsecase_TooManyDocuments(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// 11 documents (> max 10)
 	docs := make([]merchantkycusecase.DocumentInput, 11)
 	for i := 0; i < 11; i++ {
 		docs[i] = merchantkycusecase.DocumentInput{
 			DocumentType:  "identity_card",
-			FilePath:      "/uploads/doc.jpg",
+			FilePath:      createTestFile(t, "doc.jpg"),
 			FileName:      "doc.jpg",
 			FileSizeBytes: 1024,
 			MimeType:      "image/jpeg",
@@ -230,21 +266,22 @@ func TestSubmitMerchantKYCUsecase_InvalidDocumentType(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
 		Documents: []merchantkycusecase.DocumentInput{
 			{
-				DocumentType:  "invalid_type", // ❌ Invalide
-				FilePath:      "/uploads/doc.jpg",
+				DocumentType:  "invalid_type",
+				FilePath:      createTestFile(t, "doc.jpg"),
 				FileName:      "doc.jpg",
 				FileSizeBytes: 1024,
 				MimeType:      "image/jpeg",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      "/uploads/registry.pdf",
+				FilePath:      createTestFile(t, "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -263,6 +300,7 @@ func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
@@ -270,14 +308,14 @@ func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      "/uploads/large.jpg",
+				FilePath:      createTestFile(t, "large.jpg"),
 				FileName:      "large.jpg",
-				FileSizeBytes: 6 * 1024 * 1024, // ❌ 6 MB (> max 5 MB)
+				FileSizeBytes: 6 * 1024 * 1024,
 				MimeType:      "image/jpeg",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      "/uploads/registry.pdf",
+				FilePath:      createTestFile(t, "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -296,6 +334,7 @@ func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
@@ -303,14 +342,14 @@ func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      "/uploads/doc.exe",
+				FilePath:      createTestFile(t, "doc.exe"),
 				FileName:      "doc.exe",
 				FileSizeBytes: 1024,
-				MimeType:      "application/exe", // ❌ Invalide
+				MimeType:      "application/exe",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      "/uploads/registry.pdf",
+				FilePath:      createTestFile(t, "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -329,15 +368,15 @@ func TestSubmitMerchantKYCUsecase_MissingIdentityDocument(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Seulement business_registry, pas d'identity
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "business_registry",
-				FilePath:      "/uploads/registry.pdf",
+				FilePath:      createTestFile(t, "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -356,15 +395,15 @@ func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
 	tc := setupTest(t, false)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Seulement identity_card, pas de business_registry
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      "/uploads/id_card.jpg",
+				FilePath:      createTestFile(t, "id_card.jpg"),
 				FileName:      "id_card.jpg",
 				FileSizeBytes: 1024,
 				MimeType:      "image/jpeg",
@@ -384,13 +423,13 @@ func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
 // ============================================================
 
 func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
-	tc := setupTest(t, true) // Transaction nécessaire
+	tc := setupTest(t, true)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Mock : WithTX retourne les mêmes mocks (attachés à la transaction)
 	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
 		Return(tc.shopRepo).
@@ -401,19 +440,17 @@ func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
 		Return(tc.kycRepo).
 		AnyTimes()
 
-	// Mock : Create des documents réussit
 	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
-	// Mock : UpdateKYCStatus échoue (provoque rollback via defer)
 	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(errors.New("database error"))
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -421,7 +458,6 @@ func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, response)
 	assert.Contains(t, err.Error(), "update kyc status")
-	// Le rollback est appelé automatiquement via defer (déjà configuré dans setupTest)
 }
 
 // ============================================================
@@ -432,16 +468,14 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 	tc := setupTest(t, true)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
-	shop.KYCSubmissionsCount = 0 // Première soumission
+	shop.KYCSubmissionsCount = 0
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Override Rollback : on ne veut PAS qu'il soit appelé en cas de succès
-	// (seulement Commit doit être appelé)
 	tc.tx.EXPECT().Rollback().Return(nil).Times(0)
 	tc.tx.EXPECT().Commit().Return(nil).Times(1)
 
-	// Mock : WithTX retourne les mêmes mocks
 	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
 		Return(tc.shopRepo).
@@ -452,18 +486,15 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 		Return(tc.kycRepo).
 		AnyTimes()
 
-	// Mock : Create des documents réussit (2 documents)
 	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
-	// Mock : UpdateKYCStatus réussit
 	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(nil)
 
-	// Mock : FindByID pour récupérer le shop mis à jour
 	now := time.Now()
 	updatedShop := createActiveShopForSubmit()
 	updatedShop.ID = shop.ID
@@ -475,13 +506,12 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 		FindByID(gomock.Any(), shop.ID).
 		Return(updatedShop, nil)
 
-	// Mock : CountByShopID pour compter les documents (hors transaction)
 	tc.kycRepo.EXPECT().
 		CountByShopID(gomock.Any(), shop.ID).
 		Return(2, nil)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -501,16 +531,15 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 	tc := setupTest(t, true)
 	defer tc.ctrl.Finish()
 
+	setupTempUploads(t)
 	shop := createActiveShopForSubmit()
-	shop.KYCStatus = entity.ShopKYCStatusRejected // Rejeté précédemment
-	shop.KYCSubmissionsCount = 1                  // Re-soumission
+	shop.KYCStatus = entity.ShopKYCStatusRejected
+	shop.KYCSubmissionsCount = 1
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Override Rollback : pas appelé en cas de succès
 	tc.tx.EXPECT().Rollback().Return(nil).Times(0)
 	tc.tx.EXPECT().Commit().Return(nil).Times(1)
 
-	// Mock : WithTX retourne les mêmes mocks
 	tc.shopRepo.EXPECT().
 		WithTX(gomock.Any()).
 		Return(tc.shopRepo).
@@ -521,23 +550,19 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 		Return(tc.kycRepo).
 		AnyTimes()
 
-	// Mock : DeleteByShopID pour supprimer les anciens documents
 	tc.kycRepo.EXPECT().
 		DeleteByShopID(gomock.Any(), shop.ID).
 		Return(nil)
 
-	// Mock : Create des nouveaux documents (2 documents)
 	tc.kycRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
 		Return(nil).
 		Times(2)
 
-	// Mock : UpdateKYCStatus réussit
 	tc.shopRepo.EXPECT().
 		UpdateKYCStatus(gomock.Any(), shop.ID, entity.ShopKYCStatusPending, "", nil).
 		Return(nil)
 
-	// Mock : FindByID pour récupérer le shop mis à jour
 	now := time.Now()
 	updatedShop := createActiveShopForSubmit()
 	updatedShop.ID = shop.ID
@@ -549,13 +574,12 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 		FindByID(gomock.Any(), shop.ID).
 		Return(updatedShop, nil)
 
-	// Mock : CountByShopID pour compter les documents
 	tc.kycRepo.EXPECT().
 		CountByShopID(gomock.Any(), shop.ID).
 		Return(2, nil)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(),
+		Documents: createValidDocuments(t),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -567,19 +591,10 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 	assert.Equal(t, 2, response.DocumentsCount)
 }
 
-// ============================================================
-// TEST : Helper strPtr (si pas déjà défini)
-// ============================================================
-
 func strPtrSubmit(s string) *string {
 	return &s
 }
 
-// ============================================================
-// TEST : Vérification interface ShopRepository
-// ============================================================
-
 func TestShopRepositoryInterface_WithTX(t *testing.T) {
-	// Vérifie que ShopRepository implémente l'interface WithTX
 	var _ repository.ShopRepository = (*mockrepo.MockShopRepository)(nil)
 }

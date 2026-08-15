@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"Goshop/domain/entity"
@@ -33,15 +36,16 @@ import (
 // 🔄 Workflow :
 //   1. Vérifier que le shop existe et est actif
 //   2. Valider les documents soumis
-//   3. BEGIN TRANSACTION
-//   4. Supprimer les anciens documents (si re-soumission)
-//   5. Créer les nouveaux documents
-//   6. Mettre à jour le statut KYC du shop à "pending"
-//   7. COMMIT TRANSACTION
-//   8. Retourner le statut mis à jour
+//   3. 🛡️ Vérifier l'existence physique des fichiers (anti-path traversal)
+//   4. BEGIN TRANSACTION
+//   5. Supprimer les anciens documents (si re-soumission)
+//   6. Créer les nouveaux documents
+//   7. Mettre à jour le statut KYC du shop à "pending"
+//   8. COMMIT TRANSACTION
+//   9. Retourner le statut mis à jour
 //
 // 🛡️ ATOMICITÉ :
-//   Toutes les opérations DB (4, 5, 6) sont encapsulées dans une
+//   Toutes les opérations DB (5, 6, 7) sont encapsulées dans une
 //   transaction. Si une étape échoue, ROLLBACK automatique.
 //
 // ============================================================
@@ -50,14 +54,14 @@ import (
 type SubmitMerchantKYCUsecase struct {
 	shopRepo  repository.ShopRepository
 	kycRepo   repository.ShopKYCDocumentRepository
-	txManager repository.TxManager // 🛡️ Gestionnaire de transactions
+	txManager repository.TxManager
 }
 
 // NewSubmitMerchantKYCUsecase crée une nouvelle instance
 func NewSubmitMerchantKYCUsecase(
 	shopRepo repository.ShopRepository,
 	kycRepo repository.ShopKYCDocumentRepository,
-	txManager repository.TxManager, // 🛡️ Nouveau paramètre
+	txManager repository.TxManager,
 ) *SubmitMerchantKYCUsecase {
 	return &SubmitMerchantKYCUsecase{
 		shopRepo:  shopRepo,
@@ -137,6 +141,47 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 	}
 
 	// ============================================================
+	// 🛡️ 4.5 VÉRIFIER L'EXISTENCE PHYSIQUE DES FICHIERS
+	// ============================================================
+	for i, docInput := range req.Documents {
+		// Nettoyer le chemin pour éviter les path traversal
+		cleanPath := filepath.Clean(docInput.FilePath)
+
+		// 🛡️ Normalisation cross-platform (Windows utilise \, Linux utilise /)
+		cleanPath = strings.ReplaceAll(cleanPath, "\\", "/")
+
+		// Vérifier que le chemin commence par /uploads/ ou uploads/ (anti-accès système)
+		if !strings.HasPrefix(cleanPath, "/uploads/") && !strings.HasPrefix(cleanPath, "uploads/") {
+
+			logger.Error().
+				Str("file_path", docInput.FilePath).
+				Int("document_index", i+1).
+				Msg("❌ Chemin non autorisé (doit être dans /uploads/)")
+			return nil, fmt.Errorf("document %d: file path must be in /uploads/ directory", i+1)
+		}
+
+		// Vérifier que le fichier existe physiquement sur disque
+		if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+			logger.Error().
+				Str("file_path", cleanPath).
+				Int("document_index", i+1).
+				Msg("❌ Fichier introuvable sur disque")
+			return nil, fmt.Errorf("document %d: file not found at %s", i+1, cleanPath)
+		}
+
+		// Vérifier que c'est bien un fichier (pas un dossier)
+		if fileInfo, err := os.Stat(cleanPath); err == nil {
+			if fileInfo.IsDir() {
+				logger.Error().
+					Str("file_path", cleanPath).
+					Int("document_index", i+1).
+					Msg("❌ Le chemin pointe vers un dossier, pas un fichier")
+				return nil, fmt.Errorf("document %d: path is a directory, not a file", i+1)
+			}
+		}
+	}
+
+	// ============================================================
 	// 🛡️ DÉBUT TRANSACTION ATOMIQUE
 	// ============================================================
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -161,7 +206,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		if err := txKYCRepo.DeleteByShopID(ctx, shop.ID); err != nil {
 			logger.Error().Err(err).Msg("❌ Erreur suppression anciens documents")
 			return nil, fmt.Errorf("delete old documents: %w", err)
-			// Rollback automatique via defer
 		}
 	}
 
@@ -182,7 +226,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 				Str("document_type", docInput.DocumentType).
 				Msg("❌ Erreur création document")
 			return nil, fmt.Errorf("create document %d: %w", i+1, err)
-			// Rollback automatique via defer
 		}
 
 		if err := txKYCRepo.Create(ctx, doc); err != nil {
@@ -192,7 +235,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 				Str("document_type", docInput.DocumentType).
 				Msg("❌ Erreur sauvegarde document")
 			return nil, fmt.Errorf("save document %d: %w", i+1, err)
-			// Rollback automatique via defer
 		}
 
 		logger.Debug().
@@ -211,7 +253,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 	); err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur mise à jour statut KYC")
 		return nil, fmt.Errorf("update kyc status: %w", err)
-		// Rollback automatique via defer
 	}
 
 	// 5.4 Récupérer le shop mis à jour (dans la transaction)
@@ -219,7 +260,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur récupération shop mis à jour")
 		return nil, fmt.Errorf("find updated shop: %w", err)
-		// Rollback automatique via defer
 	}
 
 	// ============================================================

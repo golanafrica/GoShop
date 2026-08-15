@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"Goshop/domain/entity"
@@ -34,7 +37,7 @@ type UploadKYCDocumentUsecase struct {
 	kycDocRepo   repository.CustomerKYCRepository
 	customerRepo repository.CustomerRepositoryInterface
 	txManager    repository.TxManager
-	tokenRepo    repository.UploadTokenRepository // 🛡️ Token repository
+	tokenRepo    repository.UploadTokenRepository
 }
 
 // NewUploadKYCDocumentUsecase crée une nouvelle instance
@@ -59,7 +62,7 @@ type UploadKYCRequest struct {
 	FilePath      string                 `json:"file_path"`
 	FileSizeBytes int64                  `json:"file_size_bytes"`
 	MimeType      string                 `json:"mime_type"`
-	Token         string                 `json:"token"` // 🛡️ Token de validation
+	Token         string                 `json:"token"`
 }
 
 // Validate valide la requête
@@ -149,11 +152,46 @@ func (uc *UploadKYCDocumentUsecase) Execute(ctx context.Context, req *UploadKYCR
 		return nil, errors.New("file path does not match upload token")
 	}
 
+	// ============================================================
+	// 🛡️ 3.5 VÉRIFIER L'EXISTENCE PHYSIQUE DU FICHIER
+	// ============================================================
+	cleanPath := filepath.Clean(req.FilePath)
+
+	// 🛡️ Normalisation cross-platform (Windows utilise \, Linux utilise /)
+	cleanPath = strings.ReplaceAll(cleanPath, "\\", "/")
+
+	// Vérifier que le chemin commence par /uploads/ ou uploads/ (anti-accès système)
+	if !strings.HasPrefix(cleanPath, "/uploads/") && !strings.HasPrefix(cleanPath, "uploads/") {
+
+		logger.Error().
+			Str("file_path", req.FilePath).
+			Msg("❌ Chemin non autorisé (doit être dans /uploads/)")
+		return nil, errors.New("file path must be in /uploads/ directory")
+	}
+
+	// Vérifier que le fichier existe physiquement sur disque
+	if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+		logger.Error().
+			Str("file_path", cleanPath).
+			Msg("❌ Fichier introuvable sur disque")
+		return nil, errors.New("file not found on disk")
+	}
+
+	// Vérifier que c'est bien un fichier (pas un dossier)
+	if fileInfo, err := os.Stat(cleanPath); err == nil {
+		if fileInfo.IsDir() {
+			logger.Error().
+				Str("file_path", cleanPath).
+				Msg("❌ Le chemin pointe vers un dossier, pas un fichier")
+			return nil, errors.New("path is a directory, not a file")
+		}
+	}
+
 	logger.Info().
 		Str("token", req.Token).
 		Str("user_id", authUserID).
 		Str("file_path", req.FilePath).
-		Msg("✅ Token validé avec succès")
+		Msg("✅ Token validé et fichier vérifié")
 
 	// 4. Démarrer une transaction
 	tx, err := uc.txManager.BeginTx(ctx)
