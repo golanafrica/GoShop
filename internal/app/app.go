@@ -19,6 +19,7 @@ import (
 	authusecase "Goshop/application/usecase/auth_usecase"
 	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
 	customerusecase "Goshop/application/usecase/customer_usecase"
+	fileusecase "Goshop/application/usecase/file_usecase"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	productuscase "Goshop/application/usecase/product_uscase"
@@ -118,6 +119,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	handlers "Goshop/interfaces/handler"
+
+	// 🆕 v4.10.0 : File Download Handler
+	filehandler "Goshop/interfaces/handler/file"
 
 	// 🆕 v4.2.0 : Admin Shop Handler
 	adminshophandler "Goshop/interfaces/handler/admin_shop_handler"
@@ -1259,7 +1263,20 @@ func (a *App) setupRouter() {
 	// Handler d'upload (réception HTTP)
 	uploadHandler := uploadhandler.NewUploadHandler(uploadFileUC)
 
-	a.Logger.Info().Msg("✅ v4.8.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order)")
+	// ============ 🆕 v4.10.0 : FILE DOWNLOAD USECASE + HANDLER (Pré-signées) ============
+	fileSecretKey := os.Getenv("FILE_SIGNING_SECRET")
+	if fileSecretKey == "" {
+		fileSecretKey = "dev-secret-key-change-in-production-32chars"
+		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY)")
+	} else {
+		a.Logger.Info().Msg("✅ v4.10.0 File signing secret initialized")
+	}
+
+	downloadFileUC := fileusecase.NewDownloadFileUsecase(uploadStorage, fileSecretKey)
+	fileHandler := filehandler.NewFileHandler(downloadFileUC, uploadStorage, fileSecretKey)
+	a.Logger.Info().Msg("✅ v4.10.0 File download handler initialized")
+
+	a.Logger.Info().Msg("✅ v4.8.0 handlers initialized (websocket, wallet, cod, credit, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1478,6 +1495,10 @@ func (a *App) setupRouter() {
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))
 			// 🆕 v4.9.0 : Upload KYC endpoint (multipart)
 			r.Post("/upload/kyc", middl.ErrorHandler(uploadHandler.UploadKYC))
+			// 🆕 v4.10.0 : File routes (presigned URLs + download sécurisé)
+			r.Route("/files", func(r chi.Router) {
+				fileHandler.RegisterRoutes(r)
+			})
 
 			r.Post("/tontine/groups", middl.ErrorHandler(tontineHandler.CreateGroup))
 			r.Post("/tontine/groups/join", middl.ErrorHandler(tontineHandler.JoinGroup))
