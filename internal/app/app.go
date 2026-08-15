@@ -1382,7 +1382,7 @@ func (a *App) setupRouter() {
 		// ✅ FIX AUDIT #2 : GROUPE A - Routes Marchand (Nécessite RequireShopAccess)
 		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
-			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
+			r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
 			r.Use(middl.RequireShopAccess(shopCollabRepo))
 
 			// Products
@@ -1489,7 +1489,7 @@ func (a *App) setupRouter() {
 		// ✅ FIX AUDIT #2 : GROUPE B - Routes Client "Self-Service"
 		// ---------------------------------------------------------
 		r.Group(func(r chi.Router) {
-			r.Use(middl.TenantResolver(shopRepo, a.Logger.Logger))
+			r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
 
 			r.Get("/client/dashboard", middl.ErrorHandler(clientDashboardHandler.GetDashboard))
 			r.Post("/customers/kyc/upload", middl.ErrorHandler(kycHandler.UploadKYC))

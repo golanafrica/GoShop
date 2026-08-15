@@ -7,16 +7,23 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	"Goshop/interfaces/utils"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
 // TenantResolver résout le tenant (boutique) depuis le host HTTP
+// 🛡️ v4.11.0 : Vérifie que l'utilisateur a accès au shop (owner ou collaborateur)
 // Ordre de résolution :
 // 1. Header X-Shop-Slug (pour tests/dev)
 // 2. Custom domain (ex: mamadou-boutique.com)
 // 3. Sous-domaine (ex: demo.golanafrica.com)
-func TenantResolver(shopRepo repository.ShopRepository, logger zerolog.Logger) func(http.Handler) http.Handler {
+func TenantResolver(
+	shopRepo repository.ShopRepository,
+	shopCollabRepo repository.ShopCollaboratorRepository,
+	logger zerolog.Logger,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var shop *entity.Shop
@@ -75,14 +82,70 @@ func TenantResolver(shopRepo repository.ShopRepository, logger zerolog.Logger) f
 				return
 			}
 
-			// 4. Ajouter le tenant au contexte
+			// ============================================================
+			// 🛡️ 4. VÉRIFIER L'ACCÈS DE L'UTILISATEUR AU SHOP
+			// ============================================================
+			userID, ok := utils.UserIDFromContext(r.Context())
+			if !ok || userID == "" {
+				logger.Warn().Msg("User ID not found in context")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// 4a. Parser le userID en UUID
+			userUUID, err := uuid.Parse(userID)
+			if err != nil {
+				logger.Error().Err(err).
+					Str("user_id", userID).
+					Msg("Invalid user ID format")
+				http.Error(w, "Invalid user ID", http.StatusBadRequest)
+				return
+			}
+
+			// 4b. Vérifier si l'utilisateur est le propriétaire
+			isOwner, err := shopRepo.IsOwner(r.Context(), shop.ID, userUUID)
+			if err != nil {
+				logger.Error().Err(err).
+					Str("shop_id", shop.ID.String()).
+					Str("user_id", userID).
+					Msg("Error checking ownership")
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
+			// 4c. Si pas owner, vérifier si collaborateur
+			if !isOwner {
+				isCollaborator, err := shopCollabRepo.IsShopCollaborator(r.Context(), userID, shop.ID)
+				if err != nil {
+					logger.Error().Err(err).
+						Str("shop_id", shop.ID.String()).
+						Str("user_id", userID).
+						Msg("Error checking collaboration")
+					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+					return
+				}
+
+				if !isCollaborator {
+					logger.Warn().
+						Str("shop_id", shop.ID.String()).
+						Str("shop_slug", shop.Slug).
+						Str("user_id", userID).
+						Msg("🚨 Tentative d'accès non autorisé (tenant spoofing)")
+					http.Error(w, "Access denied: you are not authorized to access this shop", http.StatusForbidden)
+					return
+				}
+			}
+
+			// 5. Ajouter le tenant au contexte
 			ctx := tenant.WithTenant(r.Context(), shop)
 
-			// 5. Log enrichi avec le shop_id
+			// 6. Log enrichi avec le shop_id
 			logger.Debug().
 				Str("shop_id", shop.ID.String()).
 				Str("shop_slug", shop.Slug).
-				Msg("Tenant resolved")
+				Str("user_id", userID).
+				Bool("is_owner", isOwner).
+				Msg("✅ Tenant resolved and access verified")
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
