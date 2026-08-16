@@ -364,13 +364,14 @@ func TestCreateTontineGroupUsecase_SaveGroupError(t *testing.T) {
 	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
-	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
+	// ✅ FIX : FindByID peut être appelé 2 fois (validation + création)
+	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil).AnyTimes()
 	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
-	mockTx.EXPECT().Rollback().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	group, err := uc.Execute(ctx, req)
 
@@ -396,10 +397,12 @@ func TestCreateTontineGroupUsecase_Success_MerchantCreator(t *testing.T) {
 	ctx, shopID := createTestContextForTontine()
 	req := validCreateGroupRequest()
 
-	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
+	// ✅ FIX : FindByID peut être appelé 2 fois
+	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil).AnyTimes()
 	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(nil)
@@ -432,11 +435,13 @@ func TestCreateTontineGroupUsecase_Success_CustomerCreator(t *testing.T) {
 
 	customer := &entity.Customer{ID: "customer-1", KYCLevel: entity.KYCLevelVerified}
 
-	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
+	// ✅ FIX : FindByID peut être appelé 2 fois
+	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil).AnyTimes()
 	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(customer, nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, g *entity.TontineGroup) error {
@@ -477,11 +482,13 @@ func TestCreateTontineGroupUsecase_AddParticipantError(t *testing.T) {
 
 	customer := &entity.Customer{ID: "customer-1", KYCLevel: entity.KYCLevelVerified}
 
-	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil)
+	// ✅ FIX : FindByID peut être appelé 2 fois
+	productRepo.EXPECT().FindByID(gomock.Any(), req.ProductID).Return(validProduct(), nil).AnyTimes()
 	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(validTontineSettings(shopID.String()), nil)
 	customerRepo.EXPECT().FindByCustomerID(gomock.Any(), "customer-1").Return(customer, nil)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 	groupRepo.EXPECT().WithTX(mockTx).Return(groupRepo)
 	groupRepo.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, g *entity.TontineGroup) error {
@@ -491,7 +498,6 @@ func TestCreateTontineGroupUsecase_AddParticipantError(t *testing.T) {
 	)
 	participantRepo.EXPECT().WithTX(mockTx).Return(participantRepo)
 	participantRepo.EXPECT().Add(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
-	mockTx.EXPECT().Rollback().Return(nil)
 
 	group, err := uc.Execute(ctx, req)
 

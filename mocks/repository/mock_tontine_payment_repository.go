@@ -131,6 +131,21 @@ func (mr *MockTontinePaymentRepositoryMockRecorder) FindByIDUnscoped(ctx, id any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDUnscoped", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByIDUnscoped), ctx, id)
 }
 
+// FindByIDUnscopedForUpdate mocks base method.
+func (m *MockTontinePaymentRepository) FindByIDUnscopedForUpdate(ctx context.Context, id string) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDUnscopedForUpdate", ctx, id)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDUnscopedForUpdate indicates an expected call of FindByIDUnscopedForUpdate.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByIDUnscopedForUpdate(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDUnscopedForUpdate", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByIDUnscopedForUpdate), ctx, id)
+}
+
 // FindByParticipantAndCycle mocks base method.
 func (m *MockTontinePaymentRepository) FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error) {
 	m.ctrl.T.Helper()
@@ -144,6 +159,21 @@ func (m *MockTontinePaymentRepository) FindByParticipantAndCycle(ctx context.Con
 func (mr *MockTontinePaymentRepositoryMockRecorder) FindByParticipantAndCycle(ctx, participantID, cycle any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByParticipantAndCycle", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByParticipantAndCycle), ctx, participantID, cycle)
+}
+
+// FindByParticipantAndCycleForUpdate mocks base method.
+func (m *MockTontinePaymentRepository) FindByParticipantAndCycleForUpdate(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByParticipantAndCycleForUpdate", ctx, participantID, cycle)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByParticipantAndCycleForUpdate indicates an expected call of FindByParticipantAndCycleForUpdate.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByParticipantAndCycleForUpdate(ctx, participantID, cycle any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByParticipantAndCycleForUpdate", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByParticipantAndCycleForUpdate), ctx, participantID, cycle)
 }
 
 // FindByReference mocks base method.
@@ -189,6 +219,21 @@ func (m *MockTontinePaymentRepository) FindByReferenceUnscoped(ctx context.Conte
 func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferenceUnscoped(ctx, reference any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferenceUnscoped", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferenceUnscoped), ctx, reference)
+}
+
+// FindByReferenceUnscopedForUpdate mocks base method.
+func (m *MockTontinePaymentRepository) FindByReferenceUnscopedForUpdate(ctx context.Context, reference string) (*entity.TontinePayment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByReferenceUnscopedForUpdate", ctx, reference)
+	ret0, _ := ret[0].(*entity.TontinePayment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByReferenceUnscopedForUpdate indicates an expected call of FindByReferenceUnscopedForUpdate.
+func (mr *MockTontinePaymentRepositoryMockRecorder) FindByReferenceUnscopedForUpdate(ctx, reference any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByReferenceUnscopedForUpdate", reflect.TypeOf((*MockTontinePaymentRepository)(nil).FindByReferenceUnscopedForUpdate), ctx, reference)
 }
 
 // FindDoneWithoutCommission mocks base method.

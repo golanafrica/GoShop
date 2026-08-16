@@ -555,3 +555,69 @@ func (r *TontinePaymentRepositoryInfrastructure) UpdateTontineCommissionStatus(
 	}
 	return nil
 }
+
+// ============================================================
+// 🛡️ v4.11.0 : MÉTHODES AVEC VERROU PESSIMISTE (FOR UPDATE)
+// ============================================================
+
+// FindByParticipantAndCycleForUpdate trouve un paiement avec verrou pessimiste
+// Utilisé dans pay_cycle.go pour éviter les doubles paiements
+func (r *TontinePaymentRepositoryInfrastructure) FindByParticipantAndCycleForUpdate(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error) {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
+		       p.cycle_number, p.amount_cents, p.commission_cents,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
+		       p.payment_provider, p.status,
+		       p.due_date, p.paid_at,
+		       p.created_at, p.updated_at,
+		       COALESCE(p.commission_status, 'pending') as commission_status
+		FROM tontine_payments p
+		JOIN tontine_groups g ON g.id = p.group_id
+		WHERE p.participant_id = $1 AND p.cycle_number = $2 AND g.shop_id = $3
+		FOR UPDATE
+	`
+	return r.scanPayment(r.queryRowContext(ctx, query, participantID, cycle, shopID))
+}
+
+// FindByReferenceUnscopedForUpdate trouve un paiement par référence avec verrou (sans tenant)
+// Utilisé dans process_tontine_webhook.go pour éviter les doubles webhooks
+func (r *TontinePaymentRepositoryInfrastructure) FindByReferenceUnscopedForUpdate(ctx context.Context, reference string) (*entity.TontinePayment, error) {
+	query := `
+		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
+		       p.cycle_number, p.amount_cents, p.commission_cents,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
+		       p.payment_provider, p.status,
+		       p.due_date, p.paid_at,
+		       p.created_at, p.updated_at,
+		       COALESCE(p.commission_status, 'pending') as commission_status
+		FROM tontine_payments p
+		WHERE p.yengapay_reference = $1
+		LIMIT 1
+		FOR UPDATE
+	`
+	return r.scanPayment(r.queryRowContext(ctx, query, reference))
+}
+
+// FindByIDUnscopedForUpdate trouve un paiement par ID avec verrou (sans tenant)
+// Utilisé dans sync_tontine_payment.go pour éviter les doubles syncs
+func (r *TontinePaymentRepositoryInfrastructure) FindByIDUnscopedForUpdate(ctx context.Context, id string) (*entity.TontinePayment, error) {
+	query := `
+		SELECT p.id, p.group_id, p.participant_id, p.customer_id,
+		       p.cycle_number, p.amount_cents, p.commission_cents,
+		       p.yengapay_reference, p.provider_intent_id, p.yengapay_transaction_id,
+		       p.payment_provider, p.status,
+		       p.due_date, p.paid_at,
+		       p.created_at, p.updated_at,
+		       COALESCE(p.commission_status, 'pending') as commission_status
+		FROM tontine_payments p
+		WHERE p.id = $1
+		LIMIT 1
+		FOR UPDATE
+	`
+	return r.scanPayment(r.queryRowContext(ctx, query, id))
+}

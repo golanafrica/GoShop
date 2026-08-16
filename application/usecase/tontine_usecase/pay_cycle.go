@@ -20,7 +20,7 @@ type PayCycleUsecase struct {
 	groupRepo       repository.TontineGroupRepository
 	participantRepo repository.TontineParticipantRepository
 	paymentRepo     repository.TontinePaymentRepository
-	rateRepo        repository.CommissionRateRepository // 🆕 Pour le taux exact par type de cercle
+	rateRepo        repository.CommissionRateRepository
 	txManager       repository.TxManager
 	paymentRegistry paymentusecase.PaymentRegistry
 }
@@ -29,7 +29,7 @@ func NewPayCycleUsecase(
 	groupRepo repository.TontineGroupRepository,
 	participantRepo repository.TontineParticipantRepository,
 	paymentRepo repository.TontinePaymentRepository,
-	rateRepo repository.CommissionRateRepository, // 🆕 Injection du rateRepo
+	rateRepo repository.CommissionRateRepository,
 	txManager repository.TxManager,
 	paymentRegistry paymentusecase.PaymentRegistry,
 ) *PayCycleUsecase {
@@ -102,6 +102,7 @@ type PayCycleResponse struct {
 	RequiresOTP      bool   `json:"requires_otp,omitempty"`
 }
 
+// Execute initie un paiement de cycle tontine avec protection contre les race conditions
 func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*PayCycleResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -134,7 +135,21 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 
 	yengapayReference := fmt.Sprintf("TONTINE:%s:%d:%s", group.ID[:8], group.CurrentCycle, participant.ID[:8])
 
-	existingPayment, _ := uc.paymentRepo.FindByParticipantAndCycle(ctx, participant.ID, group.CurrentCycle)
+	// ============================================================
+	// 🛡️ v4.11.0 : ANTI-RACE CONDITION
+	// Démarrer la transaction AVANT de vérifier l'existence du paiement
+	// et utiliser FOR UPDATE pour verrouiller la ligne
+	// ============================================================
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	paymentRepoTx := uc.paymentRepo.WithTX(tx)
+
+	// Verrou pessimiste : FOR UPDATE bloque les autres threads jusqu'au commit
+	existingPayment, _ := paymentRepoTx.FindByParticipantAndCycleForUpdate(ctx, participant.ID, group.CurrentCycle)
 	if existingPayment != nil && existingPayment.IsDone() {
 		return nil, fmt.Errorf("you have already paid for cycle %d", group.CurrentCycle)
 	}
@@ -148,17 +163,17 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 			paymentEntity.Status = entity.TontinePaymentProcessing
 			paymentEntity.YengaPayReference = &yengapayReference
 			paymentEntity.UpdatedAt = time.Now().UTC()
-			if err := uc.paymentRepo.UpdateStatus(ctx, paymentEntity.ID, entity.TontinePaymentProcessing); err != nil {
+			if err := paymentRepoTx.UpdateStatus(ctx, paymentEntity.ID, entity.TontinePaymentProcessing); err != nil {
 				return nil, fmt.Errorf("failed to reset failed payment: %w", err)
 			}
 		}
 		logger.Info().Str("payment_id", paymentEntity.ID).Msg("Reusing existing processing/failed payment (Idempotence)")
 	} else {
-		// 🆕 FIX C5 & Audit Taux : Récupérer le taux exact basé sur le type de cercle
+		// Récupérer le taux exact basé sur le type de cercle
 		transactionType := getTontineTransactionType(group.CircleType)
 		rate, err := uc.rateRepo.GetDefaultRate(ctx, shop.ID.String(), transactionType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get commission rate: %w", err) // 🆕 Retourner l'erreur au lieu de continuer
+			return nil, fmt.Errorf("failed to get commission rate: %w", err)
 		}
 
 		commissionCents := entity.CalculateCommission(group.AmountPerCycleCents, rate.RateBps)
@@ -172,18 +187,14 @@ func (uc *PayCycleUsecase) Execute(ctx context.Context, req *PayCycleRequest) (*
 			return nil, fmt.Errorf("failed to mark payment processing: %w", err)
 		}
 
-		tx, err := uc.txManager.BeginTx(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start transaction: %w", err)
-		}
-		paymentRepoTx := uc.paymentRepo.WithTX(tx)
 		if err = paymentRepoTx.Create(ctx, paymentEntity); err != nil {
-			_ = tx.Rollback()
 			return nil, fmt.Errorf("failed to save payment: %w", err)
 		}
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("failed to commit transaction: %w", err)
-		}
+	}
+
+	// Commit la transaction de création/vérification AVANT d'appeler le provider externe
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	provider, err := uc.paymentRegistry.GetAvailable(ctx, entity.ProviderYengaPay)
@@ -337,7 +348,7 @@ func (uc *ListCustomerPaymentsUsecase) Execute(ctx context.Context, groupID, cus
 	}
 	payments, err := uc.paymentRepo.FindByCustomerAndGroup(ctx, customerID, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch payments: %w", err) // 🆕 Wrap l'erreur pour que le test passe
+		return nil, fmt.Errorf("failed to fetch payments: %w", err)
 	}
 	return payments, nil
 }

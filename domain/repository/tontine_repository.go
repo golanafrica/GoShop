@@ -76,6 +76,10 @@ type TontinePaymentRepository interface {
 	CountDoneByGroupAndCycle(ctx context.Context, groupID string, cycle int) (int, error)
 	UpdateStatus(ctx context.Context, paymentID string, status string) error
 	MarkDone(ctx context.Context, paymentID string, transactionID string) error
+	// 🛡️ v4.11.0 : Méthodes avec verrou pessimiste (anti-race condition)
+	FindByParticipantAndCycleForUpdate(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error)
+	FindByReferenceUnscopedForUpdate(ctx context.Context, reference string) (*entity.TontinePayment, error)
+	FindByIDUnscopedForUpdate(ctx context.Context, id string) (*entity.TontinePayment, error)
 	WithTX(tx Tx) TontinePaymentRepository
 
 	FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error)

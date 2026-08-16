@@ -17,6 +17,7 @@ type SyncTontinePaymentUsecase struct {
 	groupRepo        repository.TontineGroupRepository
 	paymentRegistry  paymentusecase.PaymentRegistry
 	tontineWebhookUC *paymentusecase.ProcessTontineWebhookUsecase
+	txManager        repository.TxManager // 🛡️ v4.11.0 : Pour FOR UPDATE
 }
 
 // NewSyncTontinePaymentUsecase crée une nouvelle instance
@@ -25,23 +26,23 @@ func NewSyncTontinePaymentUsecase(
 	groupRepo repository.TontineGroupRepository,
 	paymentRegistry paymentusecase.PaymentRegistry,
 	tontineWebhookUC *paymentusecase.ProcessTontineWebhookUsecase,
+	txManager repository.TxManager, // 🛡️ v4.11.0 : Ajouté
 ) *SyncTontinePaymentUsecase {
 	return &SyncTontinePaymentUsecase{
 		paymentRepo:      paymentRepo,
 		groupRepo:        groupRepo,
 		paymentRegistry:  paymentRegistry,
 		tontineWebhookUC: tontineWebhookUC,
+		txManager:        txManager,
 	}
 }
 
-// SyncPaymentRequest représente la requête de synchronisation
 type SyncPaymentRequest struct {
 	PaymentID      string `json:"payment_id"`
-	CustomerID     string `json:"customer_id"` // 🛡️ FIX C1 : Injecté par le handler depuis le JWT
+	CustomerID     string `json:"customer_id"`
 	ProviderIntent string `json:"provider_intent,omitempty"`
 }
 
-// SyncPaymentResponse représente la réponse de la synchronisation
 type SyncPaymentResponse struct {
 	PaymentID     string `json:"payment_id"`
 	CurrentStatus string `json:"current_status"`
@@ -49,22 +50,34 @@ type SyncPaymentResponse struct {
 	Message       string `json:"message"`
 }
 
-// Execute synchronise le statut d'un paiement tontine
+// Execute synchronise le statut d'un paiement tontine avec protection anti-race condition
 func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPaymentRequest) (*SyncPaymentResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le paiement (Unscoped car on peut être dans un cron ou sync manuel)
-	payment, err := uc.paymentRepo.FindByIDUnscoped(ctx, req.PaymentID)
+	// ============================================================
+	// 🛡️ v4.11.0 : ANTI-RACE CONDITION
+	// Démarrer une transaction et verrouiller le paiement avec FOR UPDATE
+	// pour éviter les doubles syncs simultanés (cron + manuel)
+	// ============================================================
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	paymentRepoTx := uc.paymentRepo.WithTX(tx)
+
+	// Verrou pessimiste : FOR UPDATE bloque les autres syncs simultanés
+	payment, err := paymentRepoTx.FindByIDUnscopedForUpdate(ctx, req.PaymentID)
 	if err != nil {
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
-	// 🛡️ FIX C1 : Vérifier que le paiement appartient bien à ce client
 	if payment.CustomerID != req.CustomerID {
 		return nil, fmt.Errorf("payment does not belong to this customer")
 	}
 
-	// Si déjà DONE, on retourne immédiatement (idempotence)
+	// Double-check après acquisition du verrou (idempotence)
 	if payment.IsDone() {
 		return &SyncPaymentResponse{
 			PaymentID:     payment.ID,
@@ -74,8 +87,11 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 		}, nil
 	}
 
-	// 🆕 FIX C2 : Utiliser exclusivement le ProviderIntentID.
-	// Pas de fallback sur la référence TONTINE car l'API CheckStatus de YengaPay exige un ID de transaction/intention valide.
+	// Commit le verrou AVANT d'appeler le provider externe (évite deadlock)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
 	intentID := req.ProviderIntent
 	if intentID == "" {
 		intentID = payment.ProviderIntentID
@@ -85,13 +101,11 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 		return nil, fmt.Errorf("no provider intent ID available for sync. The payment may have been initiated via a flow that does not support programmatic status checking, or the intent ID was not saved")
 	}
 
-	// 3. Récupérer le provider YengaPay
 	provider, err := uc.paymentRegistry.GetAvailable(ctx, entity.ProviderYengaPay)
 	if err != nil {
 		return nil, fmt.Errorf("payment provider not available: %w", err)
 	}
 
-	// 4. Interroger le statut auprès de YengaPay
 	logger.Info().Str("intent_id", intentID).Msg("Checking payment status with YengaPay")
 	statusResp, err := provider.CheckStatus(ctx, intentID)
 	if err != nil {
@@ -104,20 +118,17 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 		}, nil
 	}
 
-	// 5. Si le statut est SUCCESS et que notre paiement n'est pas encore DONE, on déclenche la logique de webhook
+	// Si le statut est SUCCESS, déclencher la logique de webhook
 	if statusResp.Status == entity.PaymentStatusSuccess && !payment.IsDone() {
 		logger.Info().Str("payment_id", payment.ID).Msg("Payment is SUCCESS on provider, triggering webhook logic")
 
-		// On a besoin de la référence TONTINE complète pour que le webhook retrouve le paiement
 		ref := *payment.YengaPayReference
-
-		// CheckStatus ne retourne pas toujours un ExternalID fiable, on utilise l'intentID en fallback
 		externalID := statusResp.ProviderRef
 		if externalID == "" {
 			externalID = intentID
 		}
 
-		// On appelle le usecase de webhook pour réutiliser toute la logique (mark done, check cycle completion, credit wallet, etc.)
+		// ProcessTontineWebhookUsecase gère ses propres verrous (idempotent)
 		err = uc.tontineWebhookUC.Execute(ctx, ref, externalID, entity.PaymentStatusSuccess)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to process tontine webhook logic during sync")
@@ -129,7 +140,6 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 			}, nil
 		}
 
-		// Re-fetch payment to get updated status
 		updatedPayment, err := uc.paymentRepo.FindByIDUnscoped(ctx, req.PaymentID)
 		if err == nil {
 			payment = updatedPayment
@@ -143,7 +153,6 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 		}, nil
 	}
 
-	// 6. Si le statut est FAILED
 	if statusResp.Status == entity.PaymentStatusFailed && payment.Status != string(entity.TontinePaymentFailed) {
 		logger.Info().Str("payment_id", payment.ID).Msg("Payment is FAILED on provider, updating status")
 		_ = uc.paymentRepo.UpdateStatus(ctx, payment.ID, string(entity.TontinePaymentFailed))
@@ -156,7 +165,6 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 		}, nil
 	}
 
-	// 7. Sinon, le statut est toujours en cours ou inchangé
 	return &SyncPaymentResponse{
 		PaymentID:     payment.ID,
 		CurrentStatus: payment.Status,

@@ -530,6 +530,7 @@ func (a *App) setupRouter() {
 		shopRepo,
 		notifService,
 		postgresCustomerRepo,
+		txmanagerRepo,
 	).WithWalletCreditor(creditWalletUC).
 		WithCommissionRateRepo(rateRepo) // taux tontine par boutique
 
@@ -686,6 +687,7 @@ func (a *App) setupRouter() {
 		tontineGroupRepo,
 		paymentRegistry,
 		processTontineWebhookUC,
+		txmanagerRepo, // 🛡️ v4.11.0 : Ajouté pour FOR UPDATE
 	)
 
 	a.Logger.Info().Msg("✅ Tontine usecases initialized (create_group, join_group, pay_cycle, list_payments, sync)")

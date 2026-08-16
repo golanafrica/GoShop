@@ -271,11 +271,13 @@ func TestPayCycleUsecase_ParticipantNotActive(t *testing.T) {
 	assert.Contains(t, err.Error(), "not active")
 }
 
+// 🆕 v4.11.0 : Test avec FOR UPDATE - déjà payé pour ce cycle
 func TestPayCycleUsecase_AlreadyPaidForCycle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, _, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, _, txManager, _ := newPayCycleUsecase(ctrl)
+	mockTx := mockrepo.NewMockTx(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -286,7 +288,12 @@ func TestPayCycleUsecase_AlreadyPaidForCycle(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(existingPayment, nil)
+
+	// 🛡️ v4.11.0 : Maintenant la transaction est démarrée AVANT la vérification
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+	paymentRepo.EXPECT().WithTX(mockTx).Return(paymentRepo)
+	paymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(existingPayment, nil)
 
 	resp, err := uc.Execute(ctx, req)
 
@@ -295,11 +302,13 @@ func TestPayCycleUsecase_AlreadyPaidForCycle(t *testing.T) {
 	assert.Contains(t, err.Error(), "already paid")
 }
 
+// 🆕 v4.11.0 : Test avec FOR UPDATE - erreur GetRate
 func TestPayCycleUsecase_GetRateError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, rateRepo, _, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, rateRepo, txManager, _ := newPayCycleUsecase(ctrl)
+	mockTx := mockrepo.NewMockTx(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -309,7 +318,12 @@ func TestPayCycleUsecase_GetRateError(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
+
+	// 🛡️ v4.11.0 : Transaction + FOR UPDATE avant la récupération du taux
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+	paymentRepo.EXPECT().WithTX(mockTx).Return(paymentRepo)
+	paymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
 	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(nil, errors.New("db error"))
 
 	resp, err := uc.Execute(ctx, req)
@@ -319,11 +333,12 @@ func TestPayCycleUsecase_GetRateError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to get commission rate")
 }
 
+// 🆕 v4.11.0 : Test avec FOR UPDATE - erreur BeginTx (nouvelle position)
 func TestPayCycleUsecase_BeginTxError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, rateRepo, txManager, _ := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, _, _, txManager, _ := newPayCycleUsecase(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -333,8 +348,8 @@ func TestPayCycleUsecase_BeginTxError(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
-	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
+
+	// 🛡️ v4.11.0 : BeginTx est maintenant appelé AVANT le FindForUpdate
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(nil, errors.New("db down"))
 
 	resp, err := uc.Execute(ctx, req)
@@ -360,10 +375,12 @@ func TestPayCycleUsecase_SaveError_RollbackCalled(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
-	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
+
+	// 🛡️ v4.11.0 : BeginTx AVANT la vérification FOR UPDATE
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
+	txPaymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
+	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
 	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -390,10 +407,12 @@ func TestPayCycleUsecase_CommitError(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
-	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
+
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // ✅ FIX : Accepter Rollback après Commit
 	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
+	txPaymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
+	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
 	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	mockTx.EXPECT().Commit().Return(errors.New("commit failed"))
 
@@ -421,20 +440,23 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
-	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
-	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
-	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 
-	// FIX : Attendre ProviderYengaPay au lieu de ProviderOrangeMoney
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // ✅ FIX : Accepter Rollback après Commit
+	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
+	txPaymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(nil, nil)
+	rateRepo.EXPECT().GetDefaultRate(gomock.Any(), shopID.String(), entity.TransactionTypeTontineFamily).Return(validCommissionRate(), nil)
+	txPaymentRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mockTx.EXPECT().Commit().Return(nil)
+
+	// ✅ FIX : Mock SetProviderIntentID appelé après InitiatePayment
+	paymentRepo.EXPECT().SetProviderIntentID(gomock.Any(), gomock.Any(), "prov-ref-123").Return(nil)
+
 	paymentRegistry.EXPECT().GetAvailable(gomock.Any(), entity.ProviderYengaPay).Return(mockProvider, nil)
 	mockProvider.EXPECT().InitiatePayment(gomock.Any(), gomock.Any()).Return(&payment.PaymentResponse{
 		ProviderRef: "prov-ref-123",
 		USSDCode:    "*144*123#",
 	}, nil)
-
-	mockTx.EXPECT().Commit().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
 
@@ -446,11 +468,14 @@ func TestPayCycleUsecase_Success(t *testing.T) {
 	assert.NotEmpty(t, resp.ProviderRef)
 }
 
+// 🆕 v4.11.0 : Test avec FOR UPDATE - paiement existant réutilisé
 func TestPayCycleUsecase_Success_ExistingPaymentNotDone(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	uc, groupRepo, participantRepo, paymentRepo, _, _, paymentRegistry := newPayCycleUsecase(ctrl)
+	uc, groupRepo, participantRepo, paymentRepo, _, txManager, paymentRegistry := newPayCycleUsecase(ctrl)
+	mockTx := mockrepo.NewMockTx(ctrl)
+	txPaymentRepo := mockrepo.NewMockTontinePaymentRepository(ctrl)
 
 	ctx, shopID := createTestContextForTontine()
 	req := validPayCycleRequest()
@@ -462,14 +487,17 @@ func TestPayCycleUsecase_Success_ExistingPaymentNotDone(t *testing.T) {
 
 	groupRepo.EXPECT().FindByID(gomock.Any(), req.GroupID).Return(group, nil)
 	participantRepo.EXPECT().FindByGroupAndCustomer(gomock.Any(), group.ID, req.CustomerID).Return(participant, nil)
-	paymentRepo.EXPECT().FindByParticipantAndCycle(gomock.Any(), participant.ID, group.CurrentCycle).Return(failedPayment, nil)
 
-	// Mock UpdateStatus pour la réinitialisation du paiement échoué
-	paymentRepo.EXPECT().UpdateStatus(gomock.Any(), "payment-old", entity.TontinePaymentProcessing).Return(nil)
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+	mockTx.EXPECT().Rollback().Return(nil).AnyTimes() // ✅ FIX : Accepter Rollback après Commit
+	paymentRepo.EXPECT().WithTX(mockTx).Return(txPaymentRepo)
+	txPaymentRepo.EXPECT().FindByParticipantAndCycleForUpdate(gomock.Any(), participant.ID, group.CurrentCycle).Return(failedPayment, nil)
+	txPaymentRepo.EXPECT().UpdateStatus(gomock.Any(), "payment-old", entity.TontinePaymentProcessing).Return(nil)
+	mockTx.EXPECT().Commit().Return(nil)
 
-	// FIX : Supprimer les attentes BeginTx/WithTX/Create/Commit car elles sont skipées pour les paiements existants
+	// ✅ FIX : Mock SetProviderIntentID appelé après InitiatePayment
+	paymentRepo.EXPECT().SetProviderIntentID(gomock.Any(), "payment-old", "prov-ref-123").Return(nil)
 
-	// FIX : Attendre ProviderYengaPay
 	paymentRegistry.EXPECT().GetAvailable(gomock.Any(), entity.ProviderYengaPay).Return(mockProvider, nil)
 	mockProvider.EXPECT().InitiatePayment(gomock.Any(), gomock.Any()).Return(&payment.PaymentResponse{
 		ProviderRef: "prov-ref-123",
@@ -559,7 +587,7 @@ func TestListCustomerPaymentsUsecase_RepositoryError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, payments)
-	assert.Contains(t, err.Error(), "db error") // FIX : Vérifier "db error" car c'est ce que retourne le mock
+	assert.Contains(t, err.Error(), "db error")
 }
 
 func TestListCustomerPaymentsUsecase_Success(t *testing.T) {

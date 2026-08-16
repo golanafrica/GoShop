@@ -18,7 +18,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// TontineWalletCreditor abstrait le crédit wallet (évite import circulaire usecase→usecase)
+// TontineWalletCreditor abstrait le crédit wallet
 type TontineWalletCreditor interface {
 	CreditFromTontine(ctx context.Context, shopID string, amountCents int64, groupID string, cycleNumber int) (*walletusecase.CreditWalletResponse, error)
 }
@@ -30,15 +30,15 @@ type ProcessTontineWebhookUsecase struct {
 	tontineParticipantRepo repository.TontineParticipantRepository
 	tontineVoucherRepo     repository.TontineVoucherRepository
 	shopRepo               repository.ShopRepository
+	txManager              repository.TxManager // 🛡️ v4.11.0 : Pour FOR UPDATE
 
 	notificationSvc    service.NotificationService
 	customerRepo       repository.CustomerRepositoryInterface
-	walletCreditor     TontineWalletCreditor               // optionnel (nil-safe)
-	commissionRateRepo repository.CommissionRateRepository // Phase 4 : optionnel (nil-safe)
+	walletCreditor     TontineWalletCreditor
+	commissionRateRepo repository.CommissionRateRepository
 }
 
 // NewProcessTontineWebhookUsecase crée une nouvelle instance
-// Signature inchangée pour ne pas casser app.go / tests.
 func NewProcessTontineWebhookUsecase(
 	tontinePaymentRepo repository.TontinePaymentRepository,
 	tontineGroupRepo repository.TontineGroupRepository,
@@ -47,6 +47,7 @@ func NewProcessTontineWebhookUsecase(
 	shopRepo repository.ShopRepository,
 	notificationSvc service.NotificationService,
 	customerRepo repository.CustomerRepositoryInterface,
+	txManager repository.TxManager, // 🛡️ v4.11.0 : Ajouté
 ) *ProcessTontineWebhookUsecase {
 	return &ProcessTontineWebhookUsecase{
 		tontinePaymentRepo:     tontinePaymentRepo,
@@ -54,29 +55,26 @@ func NewProcessTontineWebhookUsecase(
 		tontineParticipantRepo: tontineParticipantRepo,
 		tontineVoucherRepo:     tontineVoucherRepo,
 		shopRepo:               shopRepo,
+		txManager:              txManager,
 		notificationSvc:        notificationSvc,
 		customerRepo:           customerRepo,
 	}
 }
 
-// WithWalletCreditor injecte le crédit wallet
 func (uc *ProcessTontineWebhookUsecase) WithWalletCreditor(c TontineWalletCreditor) *ProcessTontineWebhookUsecase {
 	uc.walletCreditor = c
 	return uc
 }
 
-// WithCommissionRateRepo injecte le repo des taux boutique (Phase 4)
 func (uc *ProcessTontineWebhookUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *ProcessTontineWebhookUsecase {
 	uc.commissionRateRepo = r
 	return uc
 }
 
-// IsTontineReference vérifie si une référence est un paiement tontine
 func IsTontineReference(reference string) bool {
 	return strings.HasPrefix(reference, "TONTINE:")
 }
 
-// ParseTontineReference parse TONTINE:{groupID[:8]}:{cycle}:{participantID[:8]}
 func ParseTontineReference(reference string) (string, int, string, error) {
 	if !IsTontineReference(reference) {
 		return "", 0, "", fmt.Errorf("not a tontine reference: %s", reference)
@@ -96,7 +94,6 @@ func ParseTontineReference(reference string) (string, int, string, error) {
 	return groupPrefix, cycleNumber, parts[3], nil
 }
 
-// tontineCircleToTransactionType mappe le cercle vers le type commission_rates
 func tontineCircleToTransactionType(circleType string) string {
 	switch circleType {
 	case entity.TontineCircleCommercial:
@@ -110,7 +107,6 @@ func tontineCircleToTransactionType(circleType string) string {
 	}
 }
 
-// tontineCycleRateBps fallback plateforme si aucun taux boutique
 func tontineCycleRateBps(circleType string) int {
 	switch circleType {
 	case entity.TontineCircleCommercial:
@@ -124,7 +120,6 @@ func tontineCycleRateBps(circleType string) int {
 	}
 }
 
-// resolveTontineRateBps : taux boutique si présent et actif, sinon défaut plateforme
 func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	ctx context.Context,
 	shopID string,
@@ -155,7 +150,7 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	return rate.RateBps
 }
 
-// Execute traite un webhook tontine
+// Execute traite un webhook tontine avec protection anti-race condition
 func (uc *ProcessTontineWebhookUsecase) Execute(
 	ctx context.Context,
 	reference string,
@@ -175,11 +170,26 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		Str("status", string(status)).
 		Msg("Processing tontine webhook")
 
-	payment, err := uc.tontinePaymentRepo.FindByReferenceUnscoped(ctx, reference)
+	// ============================================================
+	// 🛡️ v4.11.0 : ANTI-RACE CONDITION
+	// Démarrer une transaction et verrouiller le paiement avec FOR UPDATE
+	// pour éviter les doubles webhooks simultanés
+	// ============================================================
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	tontinePaymentRepoTx := uc.tontinePaymentRepo.WithTX(tx)
+
+	// Verrou pessimiste : FOR UPDATE bloque les autres webhooks simultanés
+	payment, err := tontinePaymentRepoTx.FindByReferenceUnscopedForUpdate(ctx, reference)
 	if err != nil {
 		return fmt.Errorf("tontine payment not found for reference %s: %w", reference, err)
 	}
 
+	// Double-check après acquisition du verrou (idempotence)
 	if payment.IsDone() {
 		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment already done, ignoring webhook")
 		return nil
@@ -204,9 +214,15 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 
 	switch status {
 	case entity.PaymentStatusSuccess:
-		if err := uc.tontinePaymentRepo.MarkDone(ctx, payment.ID, transactionID); err != nil {
+		if err := tontinePaymentRepoTx.MarkDone(ctx, payment.ID, transactionID); err != nil {
 			return fmt.Errorf("mark tontine payment done: %w", err)
 		}
+
+		// Commit le changement de statut AVANT les opérations lourdes
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
 		logger.Info().
 			Str("payment_id", payment.ID).
 			Str("transaction_id", transactionID).
@@ -215,8 +231,11 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		uc.notifyGroupMembers(ctx, group, cycleNumber, payment.CustomerID, logger)
 
 	case entity.PaymentStatusFailed:
-		if err := uc.tontinePaymentRepo.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
+		if err := tontinePaymentRepoTx.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
 			return fmt.Errorf("mark tontine payment failed: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
 		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment marked as FAILED")
 		return nil
@@ -316,7 +335,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("beneficiary not found for cycle %d: %w", cycleNumber, err)
 	}
 
-	// ── Phase 5 : calculer net AVANT le voucher pour stocker held_amount_cents ──
 	grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
 	rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
 	commissionCents := entity.CalculateCommission(grossCents, rateBps)
@@ -353,7 +371,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("create voucher entity: %w", err)
 	}
 
-	// Phase 5 : montant exact à libérer au redeem
 	voucher.HeldAmountCents = netCents
 
 	if err := uc.tontineVoucherRepo.Create(ctx, voucher); err != nil {
@@ -367,7 +384,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Int64("held_amount_cents", voucher.HeldAmountCents).
 		Msg("✅ Voucher generated for beneficiary")
 
-	// Crédit NET + hold sur le wallet marchand
 	if uc.walletCreditor != nil && netCents > 0 {
 		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
 			logger.Error().Err(err).
