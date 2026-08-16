@@ -3,7 +3,9 @@ package orders
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/interfaces/utils"
 
@@ -85,6 +87,7 @@ func (r *DeliverRequest) Validate() error {
 // @Router /api/orders/{id}/accept [post]
 func (h *CashOrderHandler) AcceptOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -97,10 +100,27 @@ func (h *CashOrderHandler) AcceptOrder(w http.ResponseWriter, r *http.Request) e
 		Msg("Accepting order")
 
 	order, err := h.acceptUC.Execute(ctx, orderID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to accept order")
+
+		// 📊 MÉTRIQUES : Échec acceptation
+		metrics.CODOperationTotal.WithLabelValues("accept", "error").Inc()
+		metrics.CODOperationDuration.WithLabelValues("accept").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("cod_accept", "cash_order_handler").Inc()
+
 		return utils.NewAppError("ORDER_ACCEPT_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès acceptation
+	metrics.CODOperationTotal.WithLabelValues("accept", "success").Inc()
+	metrics.CODOperationDuration.WithLabelValues("accept").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderID).
+		Float64("duration_seconds", duration).
+		Msg("Order accepted successfully")
 
 	utils.WriteJSON(w, http.StatusOK, order)
 	return nil
@@ -122,6 +142,7 @@ func (h *CashOrderHandler) AcceptOrder(w http.ResponseWriter, r *http.Request) e
 // @Router /api/orders/{id}/reject [post]
 func (h *CashOrderHandler) RejectOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -145,10 +166,27 @@ func (h *CashOrderHandler) RejectOrder(w http.ResponseWriter, r *http.Request) e
 		Msg("Rejecting order")
 
 	order, err := h.rejectUC.Execute(ctx, orderID, req.Reason)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to reject order")
+
+		// 📊 MÉTRIQUES : Échec rejet
+		metrics.CODOperationTotal.WithLabelValues("reject", "error").Inc()
+		metrics.CODOperationDuration.WithLabelValues("reject").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("cod_reject", "cash_order_handler").Inc()
+
 		return utils.NewAppError("ORDER_REJECT_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès rejet
+	metrics.CODOperationTotal.WithLabelValues("reject", "success").Inc()
+	metrics.CODOperationDuration.WithLabelValues("reject").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderID).
+		Float64("duration_seconds", duration).
+		Msg("Order rejected successfully")
 
 	utils.WriteJSON(w, http.StatusOK, order)
 	return nil
@@ -169,6 +207,7 @@ func (h *CashOrderHandler) RejectOrder(w http.ResponseWriter, r *http.Request) e
 // @Router /api/orders/{id}/out-for-delivery [post]
 func (h *CashOrderHandler) OutForDelivery(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -181,10 +220,27 @@ func (h *CashOrderHandler) OutForDelivery(w http.ResponseWriter, r *http.Request
 		Msg("Marking order as out for delivery")
 
 	order, err := h.outForDeliveryUC.Execute(ctx, orderID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to mark out for delivery")
+
+		// 📊 MÉTRIQUES : Échec out_for_delivery
+		metrics.CODOperationTotal.WithLabelValues("out_for_delivery", "error").Inc()
+		metrics.CODOperationDuration.WithLabelValues("out_for_delivery").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("cod_out_for_delivery", "cash_order_handler").Inc()
+
 		return utils.NewAppError("ORDER_DELIVERY_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès out_for_delivery
+	metrics.CODOperationTotal.WithLabelValues("out_for_delivery", "success").Inc()
+	metrics.CODOperationDuration.WithLabelValues("out_for_delivery").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderID).
+		Float64("duration_seconds", duration).
+		Msg("Order marked as out for delivery")
 
 	utils.WriteJSON(w, http.StatusOK, order)
 	return nil
@@ -206,6 +262,7 @@ func (h *CashOrderHandler) OutForDelivery(w http.ResponseWriter, r *http.Request
 // @Router /api/orders/{id}/deliver [post]
 func (h *CashOrderHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -234,10 +291,33 @@ func (h *CashOrderHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) 
 	}
 
 	order, err := h.deliverUC.Execute(ctx, orderID, deliverReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to deliver order")
+
+		// 📊 MÉTRIQUES : Échec livraison
+		metrics.CODOperationTotal.WithLabelValues("deliver", "error").Inc()
+		metrics.CODOperationDuration.WithLabelValues("deliver").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("cod_deliver", "cash_order_handler").Inc()
+
 		return utils.NewAppError("ORDER_DELIVER_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès livraison
+	metrics.CODOperationTotal.WithLabelValues("deliver", "success").Inc()
+	metrics.CODOperationDuration.WithLabelValues("deliver").Observe(duration)
+
+	// 📊 MÉTRIQUE : Montant reçu en livraison
+	if req.AmountReceived > 0 {
+		metrics.CODDeliveryAmountCents.Observe(float64(req.AmountReceived))
+	}
+
+	logger.Info().
+		Str("order_id", orderID).
+		Int64("amount_received", req.AmountReceived).
+		Float64("duration_seconds", duration).
+		Msg("Order delivered successfully")
 
 	utils.WriteJSON(w, http.StatusOK, order)
 	return nil
@@ -258,6 +338,7 @@ func (h *CashOrderHandler) DeliverOrder(w http.ResponseWriter, r *http.Request) 
 // @Router /api/orders/{id}/cancel [post]
 func (h *CashOrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -270,10 +351,27 @@ func (h *CashOrderHandler) CancelOrder(w http.ResponseWriter, r *http.Request) e
 		Msg("Cancelling order")
 
 	order, err := h.cancelUC.Execute(ctx, orderID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to cancel order")
+
+		// 📊 MÉTRIQUES : Échec annulation
+		metrics.CODOperationTotal.WithLabelValues("cancel", "error").Inc()
+		metrics.CODOperationDuration.WithLabelValues("cancel").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("cod_cancel", "cash_order_handler").Inc()
+
 		return utils.NewAppError("ORDER_CANCEL_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès annulation
+	metrics.CODOperationTotal.WithLabelValues("cancel", "success").Inc()
+	metrics.CODOperationDuration.WithLabelValues("cancel").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderID).
+		Float64("duration_seconds", duration).
+		Msg("Order cancelled successfully")
 
 	utils.WriteJSON(w, http.StatusOK, order)
 	return nil

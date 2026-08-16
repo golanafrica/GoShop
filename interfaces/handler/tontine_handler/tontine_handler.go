@@ -2,10 +2,12 @@ package tontinehandler
 
 import (
 	"encoding/json"
-	"errors" // 🆕 AJOUTÉ pour la détection d'erreurs
+	"errors"
 	"net/http"
-	"strings" // 🆕 AJOUTÉ pour la détection d'erreurs métier
+	"strings"
+	"time"
 
+	"Goshop/application/metrics"
 	tontineusecase "Goshop/application/usecase/tontine_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -24,8 +26,8 @@ type TontineHandler struct {
 	payCycleUC             *tontineusecase.PayCycleUsecase
 	listCustomerPaymentsUC *tontineusecase.ListCustomerPaymentsUsecase
 	syncPaymentUC          *tontineusecase.SyncTontinePaymentUsecase
-	redeemVoucherUC        *tontineusecase.RedeemTontineVoucherUsecase // Phase 5
-	voucherRepo            repository.TontineVoucherRepository         // 🆕 Phase 5 : pour ListVouchers
+	redeemVoucherUC        *tontineusecase.RedeemTontineVoucherUsecase
+	voucherRepo            repository.TontineVoucherRepository
 	customerRepo           repository.CustomerRepositoryInterface
 }
 
@@ -36,8 +38,8 @@ func NewTontineHandler(
 	payCycleUC *tontineusecase.PayCycleUsecase,
 	listCustomerPaymentsUC *tontineusecase.ListCustomerPaymentsUsecase,
 	syncPaymentUC *tontineusecase.SyncTontinePaymentUsecase,
-	redeemVoucherUC *tontineusecase.RedeemTontineVoucherUsecase, // Phase 5 (peut être nil)
-	voucherRepo repository.TontineVoucherRepository, // 🆕 Phase 5
+	redeemVoucherUC *tontineusecase.RedeemTontineVoucherUsecase,
+	voucherRepo repository.TontineVoucherRepository,
 	customerRepo repository.CustomerRepositoryInterface,
 ) *TontineHandler {
 	return &TontineHandler{
@@ -55,6 +57,7 @@ func NewTontineHandler(
 // CreateGroup initialise un nouveau groupe de tontine
 func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	authUserID, ok := utils.UserIDFromContext(ctx)
@@ -77,9 +80,23 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 	req.CreatorCustomerID = customer.ID
 
 	group, err := h.createGroupUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUE : Échec création de groupe
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_create_group", "tontine_handler").Inc()
+		metrics.TontineOperationDuration.WithLabelValues("create_group").Observe(duration)
 		return utils.NewAppError("CREATE_GROUP_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès création de groupe
+	metrics.TontineGroupCreatedTotal.Inc()
+	metrics.TontineOperationDuration.WithLabelValues("create_group").Observe(duration)
+
+	logger.Info().
+		Str("group_id", group.ID).
+		Float64("duration_seconds", duration).
+		Msg("Tontine group created successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, group)
 	return nil
@@ -88,6 +105,8 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 // JoinGroup permet à un client de rejoindre un groupe via invite_code
 func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	authUserID, ok := utils.UserIDFromContext(ctx)
 	if !ok || authUserID == "" {
@@ -108,9 +127,23 @@ func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error
 	req.CustomerID = customer.ID
 
 	response, err := h.joinGroupUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUE : Échec de join
+		metrics.TontineGroupJoinTotal.WithLabelValues("error").Inc()
+		metrics.TontineOperationDuration.WithLabelValues("join_group").Observe(duration)
 		return utils.NewAppError("JOIN_GROUP_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès de join
+	metrics.TontineGroupJoinTotal.WithLabelValues("success").Inc()
+	metrics.TontineOperationDuration.WithLabelValues("join_group").Observe(duration)
+
+	logger.Info().
+		Str("customer_id", customer.ID).
+		Float64("duration_seconds", duration).
+		Msg("Customer joined tontine group successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -119,6 +152,9 @@ func (h *TontineHandler) JoinGroup(w http.ResponseWriter, r *http.Request) error
 // PayCycle initie le paiement d'un cycle pour le client connecté
 func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
+
 	groupID := chi.URLParam(r, "group_id")
 	if groupID == "" {
 		return utils.ErrInvalidPayload
@@ -144,9 +180,35 @@ func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error 
 	req.CustomerID = customer.ID
 
 	response, err := h.payCycleUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec de paiement
+		metrics.TontinePaymentFailedTotal.Inc()
+		metrics.TontinePaymentDuration.Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_pay_cycle", "tontine_handler").Inc()
+
+		logger.Error().
+			Err(err).
+			Str("group_id", groupID).
+			Str("customer_id", customer.ID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to initiate tontine payment")
+
 		return utils.NewAppError("PAY_CYCLE_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès de paiement initié
+	metrics.TontinePaymentInitiatedTotal.WithLabelValues(req.Operator).Inc()
+	metrics.TontinePaymentSuccessTotal.Inc()
+	metrics.TontinePaymentDuration.Observe(duration)
+
+	logger.Info().
+		Str("group_id", groupID).
+		Str("customer_id", customer.ID).
+		Str("operator", req.Operator).
+		Float64("duration_seconds", duration).
+		Msg("Tontine payment initiated successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -155,6 +217,8 @@ func (h *TontineHandler) PayCycle(w http.ResponseWriter, r *http.Request) error 
 // ListCustomerPayments liste les paiements du client connecté pour un groupe
 func (h *TontineHandler) ListCustomerPayments(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+
 	groupID := chi.URLParam(r, "group_id")
 	if groupID == "" {
 		return utils.ErrInvalidPayload
@@ -171,9 +235,15 @@ func (h *TontineHandler) ListCustomerPayments(w http.ResponseWriter, r *http.Req
 	}
 
 	payments, err := h.listCustomerPaymentsUC.Execute(ctx, groupID, customer.ID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.TontineOperationDuration.WithLabelValues("list_payments").Observe(duration)
 		return utils.NewAppError("LIST_PAYMENTS_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUE : Durée de listing
+	metrics.TontineOperationDuration.WithLabelValues("list_payments").Observe(duration)
 
 	utils.WriteJSON(w, http.StatusOK, payments)
 	return nil
@@ -182,6 +252,7 @@ func (h *TontineHandler) ListCustomerPayments(w http.ResponseWriter, r *http.Req
 // SyncPayment synchronise le statut d'un paiement tontine (ownership via JWT)
 func (h *TontineHandler) SyncPayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	authUserID, ok := utils.UserIDFromContext(ctx)
@@ -209,35 +280,52 @@ func (h *TontineHandler) SyncPayment(w http.ResponseWriter, r *http.Request) err
 	req.CustomerID = customer.ID
 
 	resp, err := h.syncPaymentUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Str("payment_id", req.PaymentID).Msg("Failed to sync tontine payment")
+		// 📊 MÉTRIQUES : Échec de sync
+		metrics.TontineSyncPaymentTotal.WithLabelValues("error").Inc()
+		metrics.TontineOperationDuration.WithLabelValues("sync_payment").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_sync_payment", "tontine_handler").Inc()
+
+		logger.Error().
+			Err(err).
+			Str("payment_id", req.PaymentID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to sync tontine payment")
+
 		return utils.NewAppError("SYNC_PAYMENT_FAILED", err.Error(), http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès de sync
+	status := "no_change"
+	if resp.Synced {
+		status = "synced"
+	}
+	metrics.TontineSyncPaymentTotal.WithLabelValues(status).Inc()
+	metrics.TontineOperationDuration.WithLabelValues("sync_payment").Observe(duration)
+
+	logger.Info().
+		Str("payment_id", req.PaymentID).
+		Str("sync_status", status).
+		Float64("duration_seconds", duration).
+		Msg("Tontine payment synced")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 	return nil
 }
 
-// ============================================================
-// Phase 5 : ListVouchers
-// GET /api/tontine/vouchers?group_id=xxx
-//
-// Comportement :
-//   - Si group_id fourni : retourne tous les vouchers du groupe (filtré par tenant shop_id)
-//   - Si group_id absent ET user a un profil customer : retourne les vouchers du client connecté
-//   - Si group_id absent ET user n'a pas de profil customer (marchand) : retourne tous les vouchers du shop
-//
-// ============================================================
+// ListVouchers liste les vouchers de tontine
 func (h *TontineHandler) ListVouchers(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// Vérifier le tenant (shop_id)
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
-		// 🆕 FIX : Ne pas retourner d'erreur si le tenant n'est pas résolu
-		// Retourner un tableau vide au lieu d'une 404
 		logger.Warn().Err(err).Msg("Tenant context not resolved, returning empty vouchers list")
+		metrics.TontineVoucherListedTotal.Inc()
 		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"data":    []*entity.TontineVoucher{},
@@ -256,28 +344,21 @@ func (h *TontineHandler) ListVouchers(w http.ResponseWriter, r *http.Request) er
 	var vouchers []*entity.TontineVoucher
 
 	if groupID != "" {
-		// Lister tous les vouchers d'un groupe (filtré par shop_id via tenant)
 		vouchers, err = h.voucherRepo.FindByGroupID(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Str("group_id", groupID).Msg("Failed to list vouchers by group")
-			// 🆕 FIX : Retourner un tableau vide au lieu d'une erreur 500
 			vouchers = []*entity.TontineVoucher{}
 		}
 	} else {
-		// 🆕 FIX CRITIQUE : Essayer d'abord de trouver un profil customer
 		customer, err := h.customerRepo.FindByUserID(ctx, authUserID)
 		if err != nil {
-			// Pas de profil customer → c'est probablement un marchand
-			// Retourner tous les vouchers du shop
 			logger.Debug().Str("user_id", authUserID).Msg("No customer profile found, fetching shop vouchers")
 			vouchers, err = h.voucherRepo.FindByShopID(ctx, shop.ID.String())
 			if err != nil {
 				logger.Error().Err(err).Str("shop_id", shop.ID.String()).Msg("Failed to list vouchers by shop")
-				// Retourner un tableau vide au lieu d'une erreur
 				vouchers = []*entity.TontineVoucher{}
 			}
 		} else {
-			// Profil customer trouvé → retourner les vouchers du client
 			vouchers, err = h.voucherRepo.FindByCustomerID(ctx, customer.ID)
 			if err != nil {
 				logger.Error().Err(err).Str("customer_id", customer.ID).Msg("Failed to list vouchers by customer")
@@ -286,7 +367,7 @@ func (h *TontineHandler) ListVouchers(w http.ResponseWriter, r *http.Request) er
 		}
 	}
 
-	// Filtrer par shop_id pour sécurité multi-tenant (au cas où le repo ne l'a pas fait)
+	// Filtrer par shop_id pour sécurité multi-tenant
 	filtered := make([]*entity.TontineVoucher, 0)
 	for _, v := range vouchers {
 		if v.ShopID == shop.ID.String() {
@@ -294,7 +375,10 @@ func (h *TontineHandler) ListVouchers(w http.ResponseWriter, r *http.Request) er
 		}
 	}
 
-	// 🆕 FIX : Toujours retourner 200 OK avec un tableau (même vide), jamais de 404
+	// 📊 MÉTRIQUE : Vouchers listés
+	metrics.TontineVoucherListedTotal.Inc()
+	metrics.TontineOperationDuration.WithLabelValues("list_vouchers").Observe(time.Since(start).Seconds())
+
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"data":    filtered,
@@ -303,18 +387,10 @@ func (h *TontineHandler) ListVouchers(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
-// ============================================================
-// Phase 5 : RedeemVoucher
-// POST /api/tontine/vouchers/redeem
-// Body: { "voucher_code": "ABC123..." }
-//
-// Effet :
-//  1. Marque le voucher comme "redeemed"
-//  2. Libère held_amount_cents sur le wallet marchand
-//
-// ============================================================
+// RedeemVoucher échange un voucher de tontine
 func (h *TontineHandler) RedeemVoucher(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	if h.redeemVoucherUC == nil {
@@ -340,17 +416,25 @@ func (h *TontineHandler) RedeemVoucher(w http.ResponseWriter, r *http.Request) e
 
 	req := &tontineusecase.RedeemTontineVoucherRequest{
 		VoucherCode: body.VoucherCode,
-		RedeemedBy:  authUserID, // forcé depuis le JWT
+		RedeemedBy:  authUserID,
 	}
 
 	resp, err := h.redeemVoucherUC.Execute(ctx, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).
+		// 📊 MÉTRIQUES : Échec de redeem
+		metrics.TontineVoucherRedeemFailedTotal.Inc()
+		metrics.TontineOperationDuration.WithLabelValues("redeem_voucher").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_redeem_voucher", "tontine_handler").Inc()
+
+		logger.Error().
+			Err(err).
 			Str("voucher_code", body.VoucherCode).
 			Str("redeemed_by", authUserID).
+			Float64("duration_seconds", duration).
 			Msg("Failed to redeem tontine voucher")
 
-		// 🆕 FIX CRITIQUE : Détection robuste des erreurs métier
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
@@ -366,6 +450,16 @@ func (h *TontineHandler) RedeemVoucher(w http.ResponseWriter, r *http.Request) e
 
 		return utils.NewAppError("REDEEM_VOUCHER_FAILED", errMsg, http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès de redeem
+	metrics.TontineVoucherRedeemedTotal.Inc()
+	metrics.TontineOperationDuration.WithLabelValues("redeem_voucher").Observe(duration)
+
+	logger.Info().
+		Str("voucher_code", body.VoucherCode).
+		Str("redeemed_by", authUserID).
+		Float64("duration_seconds", duration).
+		Msg("Tontine voucher redeemed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 	return nil

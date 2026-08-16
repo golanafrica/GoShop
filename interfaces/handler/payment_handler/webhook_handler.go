@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
+	"Goshop/application/metrics"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/interfaces/utils"
@@ -51,6 +53,7 @@ func NewWebhookHandler(processUC ProcessWebhookUseCaseInterface) *WebhookHandler
 // @Router /webhooks/{provider} [post]
 func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// Récupérer le provider depuis l'URL
@@ -109,6 +112,12 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 	if eventType == "" {
 		eventType = r.Header.Get("X-Yengapay-Event")
 	}
+	if eventType == "" {
+		eventType = "unknown"
+	}
+
+	// 📊 MÉTRIQUE : Webhook reçu
+	metrics.WebhookReceivedTotal.WithLabelValues(providerCode, eventType).Inc()
 
 	logger.Info().
 		Str("provider", providerCode).
@@ -120,8 +129,16 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 	// Traiter le webhook
 	err = h.processUC.Execute(ctx, provider, payload, signature)
 
+	// 📊 MÉTRIQUES de traitement
+	duration := time.Since(start).Seconds()
+	metrics.WebhookProcessingDuration.WithLabelValues(providerCode).Observe(duration)
+
 	// ✅ DISTINGUER LES ERREURS
 	if err != nil {
+		// 📊 Métriques d'erreur
+		metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("webhook_processing", "webhook_handler").Inc()
+
 		// Erreur de validation (signature invalide, payload malformé) → 400
 		if errors.Is(err, paymentusecase.ErrWebhookValidation) {
 			logger.Warn().Err(err).Msg("Webhook validation failed")
@@ -139,10 +156,14 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		} else if errors.Is(err, paymentusecase.ErrWebhookAlreadyProcessed) {
 			// 🛡️ CORRECTION AUDIT : Idempotence - webhook déjà traité
 			logger.Info().Msg("Webhook already processed (idempotent, returning 200)")
+			metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "duplicate").Inc()
 		} else {
 			// Autres erreurs → 200 (pour éviter les retries)
 			logger.Error().Err(err).Msg("Webhook processing error (returning 200)")
 		}
+	} else {
+		// 📊 Métrique de succès
+		metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "success").Inc()
 	}
 
 	// Retourner 200 pour que le provider ne renvoie pas le webhook

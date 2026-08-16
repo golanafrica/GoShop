@@ -8,6 +8,7 @@ import (
 	"time"
 
 	dto "Goshop/application/dto/product_dto"
+	"Goshop/application/metrics"
 	productuscase "Goshop/application/usecase/product_uscase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -69,8 +70,18 @@ func (ph *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) 
 	}
 
 	product, err := ph.createProductUsecase.Execute(ctx, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Str("product_name", req.Name).Msg("Failed to create product")
+		// 📊 MÉTRIQUES : Échec création
+		metrics.ProductsOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.ProductsOperationErrors.WithLabelValues("create", "business_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("product_create", "product_handler").Inc()
+
+		logger.Error().Err(err).Str("product_name", req.Name).
+			Float64("duration_seconds", duration).
+			Msg("Failed to create product")
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
@@ -78,7 +89,19 @@ func (ph *ProductHandler) CreateProduct(w http.ResponseWriter, r *http.Request) 
 		return utils.ErrProductCreateFail
 	}
 
-	logger.Info().Str("product_id", product.ID).Str("product_name", product.Name).Dur("duration", time.Since(start)).Msg("Product created successfully")
+	// 📊 MÉTRIQUES : Succès création
+	metrics.ProductsCreatedTotal.Inc()
+	metrics.ProductsCreateDuration.Observe(duration)
+	metrics.ProductsOperationDuration.WithLabelValues("create").Observe(duration)
+
+	logger.Info().
+		Str("product_id", product.ID).
+		Str("product_name", product.Name).
+		Int64("price_cents", product.PriceCents).
+		Int("stock", product.Stock).
+		Float64("duration_seconds", duration).
+		Msg("Product created successfully")
+
 	utils.WriteJSON(w, http.StatusCreated, product)
 	return nil
 }
@@ -105,7 +128,6 @@ func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request)
 
 	logger.Info().Str("method", r.Method).Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Msg("Listing products with filters")
 
-	// Parsing des paramètres de requête pour la recherche FTS et les filtres
 	req := &dto.ListProductsRequest{
 		Search: r.URL.Query().Get("search"),
 		Limit:  50,
@@ -145,8 +167,18 @@ func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request)
 		Msg("Filter parameters parsed")
 
 	products, err := ph.listProductUsecase.Execute(ctx, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to list products")
+		// 📊 MÉTRIQUES : Échec listing
+		metrics.ProductsOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ProductsOperationErrors.WithLabelValues("list", "query_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("product_list", "product_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("Failed to list products")
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
@@ -154,7 +186,17 @@ func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request)
 		return utils.ErrInternalServer
 	}
 
-	logger.Info().Int("count", len(products)).Dur("duration", time.Since(start)).Msg("Products listed successfully")
+	// 📊 MÉTRIQUES : Succès listing
+	metrics.ProductsListDuration.Observe(duration)
+	metrics.ProductsOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.ProductsListedCount.Observe(float64(len(products)))
+
+	logger.Info().
+		Int("count", len(products)).
+		Int("limit", req.Limit).
+		Int("offset", req.Offset).
+		Float64("duration_seconds", duration).
+		Msg("Products listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -179,26 +221,56 @@ func (ph *ProductHandler) GetAllProducts(w http.ResponseWriter, r *http.Request)
 // @Router /api/products/{id} [get]
 func (ph *ProductHandler) GetProductById(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	id := chi.URLParam(r, "id")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Str("product_id", id).Msg("Getting product by ID")
 
 	product, err := ph.getProductByIdUsecase.Execute(ctx, id)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec
+		metrics.ProductsOperationDuration.WithLabelValues("get").Observe(duration)
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) && appErr.Code == "PRODUCT_NOT_FOUND" {
-			logger.Warn().Err(err).Msg("Product not found")
+			// 404 n'est pas une erreur applicative, juste un not found
+			metrics.ProductsOperationErrors.WithLabelValues("get", "not_found").Inc()
+			logger.Warn().Err(err).
+				Str("product_id", id).
+				Float64("duration_seconds", duration).
+				Msg("Product not found")
 			return utils.ErrProductNotFound
 		}
-		logger.Error().Err(err).Msg("Failed to get product")
+
+		// Vraie erreur applicative
+		metrics.ProductsOperationErrors.WithLabelValues("get", "business_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("product_get", "product_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("product_id", id).
+			Float64("duration_seconds", duration).
+			Msg("Failed to get product")
+
 		if errors.As(err, &appErr) {
 			return appErr
 		}
 		return utils.ErrInternalServer
 	}
 
-	logger.Info().Str("product_name", product.Name).Msg("Product retrieved successfully")
+	// 📊 MÉTRIQUES : Succès
+	metrics.ProductsGetDuration.Observe(duration)
+	metrics.ProductsOperationDuration.WithLabelValues("get").Observe(duration)
+
+	logger.Info().
+		Str("product_id", product.ID).
+		Str("product_name", product.Name).
+		Int64("price_cents", product.PriceCents).
+		Float64("duration_seconds", duration).
+		Msg("Product retrieved successfully")
+
 	utils.WriteJSON(w, http.StatusOK, product)
 	return nil
 }
@@ -219,6 +291,7 @@ func (ph *ProductHandler) GetProductById(w http.ResponseWriter, r *http.Request)
 // @Router /api/products/{id} [put]
 func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	id := chi.URLParam(r, "id")
 	logger := zerolog.Ctx(ctx)
 
@@ -244,18 +317,40 @@ func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) 
 	}
 
 	updated, err := ph.updateProductUsecase.Execute(ctx, product)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec update
+		metrics.ProductsOperationDuration.WithLabelValues("update").Observe(duration)
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) && appErr.Code == "PRODUCT_NOT_FOUND" {
-			logger.Warn().Err(err).Msg("Product not found for update")
+			metrics.ProductsOperationErrors.WithLabelValues("update", "not_found").Inc()
+			logger.Warn().Err(err).
+				Str("product_id", id).
+				Float64("duration_seconds", duration).
+				Msg("Product not found for update")
 			return utils.ErrProductNotFound
 		}
-		logger.Error().Err(err).Str("product_name", req.Name).Msg("Failed to update product")
+
+		metrics.ProductsOperationErrors.WithLabelValues("update", "business_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("product_update", "product_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("product_id", id).
+			Str("product_name", req.Name).
+			Float64("duration_seconds", duration).
+			Msg("Failed to update product")
+
 		if errors.As(err, &appErr) {
 			return appErr
 		}
 		return utils.ErrProductUpdateFail
 	}
+
+	// 📊 MÉTRIQUES : Succès update
+	metrics.ProductsUpdatedTotal.Inc()
+	metrics.ProductsOperationDuration.WithLabelValues("update").Observe(duration)
 
 	response := dto.ProductResponse{
 		ID:          updated.ID,
@@ -267,7 +362,13 @@ func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) 
 		UpdatedAt:   updated.UpdatedAt.Format("2006-01-02 15:04:05"),
 	}
 
-	logger.Info().Str("product_name", response.Name).Msg("Product updated successfully")
+	logger.Info().
+		Str("product_id", response.ID).
+		Str("product_name", response.Name).
+		Int64("price_cents", response.PriceCents).
+		Float64("duration_seconds", duration).
+		Msg("Product updated successfully")
+
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
 }
@@ -287,30 +388,61 @@ func (ph *ProductHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) 
 // @Router /api/products/{id} [delete]
 func (ph *ProductHandler) DeleteProduct(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	id := chi.URLParam(r, "id")
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Str("product_id", id).Msg("Deleting product")
 
 	if err := ph.deleteProductUsecase.Execute(ctx, id); err != nil {
+		duration := time.Since(start).Seconds()
+
+		// 📊 MÉTRIQUES : Échec deletion
+		metrics.ProductsOperationDuration.WithLabelValues("delete").Observe(duration)
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			switch appErr.Code {
 			case "PRODUCT_NOT_FOUND":
-				logger.Warn().Err(err).Msg("Product not found for deletion")
+				metrics.ProductsOperationErrors.WithLabelValues("delete", "not_found").Inc()
+				logger.Warn().Err(err).
+					Str("product_id", id).
+					Float64("duration_seconds", duration).
+					Msg("Product not found for deletion")
 				return utils.ErrProductNotFound
 			case "PRODUCT_DELETE_FAILED":
-				logger.Error().Err(err).Msg("Failed to delete product")
+				metrics.ProductsOperationErrors.WithLabelValues("delete", "business_error").Inc()
+				metrics.ApplicationErrorsTotal.WithLabelValues("product_delete", "product_handler").Inc()
+				logger.Error().Err(err).
+					Str("product_id", id).
+					Float64("duration_seconds", duration).
+					Msg("Failed to delete product")
 				return utils.ErrProductDeleteFail
 			default:
+				metrics.ProductsOperationErrors.WithLabelValues("delete", "unknown").Inc()
 				return appErr
 			}
 		}
-		logger.Error().Err(err).Msg("Failed to delete product")
+
+		metrics.ProductsOperationErrors.WithLabelValues("delete", "unknown").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("product_delete", "product_handler").Inc()
+		logger.Error().Err(err).
+			Str("product_id", id).
+			Float64("duration_seconds", duration).
+			Msg("Failed to delete product")
 		return utils.ErrProductDeleteFail
 	}
 
-	logger.Info().Msg("Product deleted successfully")
+	// 📊 MÉTRIQUES : Succès deletion
+	duration := time.Since(start).Seconds()
+	metrics.ProductsDeletedTotal.Inc()
+	metrics.ProductsOperationDuration.WithLabelValues("delete").Observe(duration)
+
+	logger.Info().
+		Str("product_id", id).
+		Float64("duration_seconds", duration).
+		Msg("Product deleted successfully")
+
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }

@@ -3,7 +3,9 @@ package customerhandler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/repository"
 	"Goshop/interfaces/middl"
@@ -54,6 +56,7 @@ func NewKYCHandler(
 // @Router /api/customers/kyc/upload [post]
 func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// 1. Récupérer l'ID utilisateur du JWT (users.id)
@@ -72,6 +75,9 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 
 	var req customerusecase.UploadKYCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.CustomerKYCOperationDuration.WithLabelValues("upload").Observe(time.Since(start).Seconds())
+		metrics.CustomerKYCUploadTotal.WithLabelValues("unknown", "error").Inc()
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
@@ -86,9 +92,20 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 		Msg("Processing secure KYC upload")
 
 	doc, err := h.uploadKYCUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec upload
+		metrics.CustomerKYCUploadTotal.WithLabelValues(string(req.DocumentType), "error").Inc()
+		metrics.CustomerKYCOperationDuration.WithLabelValues("upload").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_kyc_upload", "kyc_handler").Inc()
+
 		return utils.NewAppError("UPLOAD_KYC_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès upload
+	metrics.CustomerKYCUploadTotal.WithLabelValues(string(req.DocumentType), "success").Inc()
+	metrics.CustomerKYCOperationDuration.WithLabelValues("upload").Observe(duration)
 
 	utils.WriteJSON(w, http.StatusCreated, doc)
 	return nil
@@ -109,6 +126,7 @@ func (h *KYCHandler) UploadKYC(w http.ResponseWriter, r *http.Request) error {
 // @Router /api/customers/{customer_id}/kyc/status [get]
 func (h *KYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 
 	customerID := chi.URLParam(r, "customer_id")
 	if customerID == "" {
@@ -116,9 +134,19 @@ func (h *KYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error 
 	}
 
 	response, err := h.getKYCStatusUC.Execute(ctx, customerID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec status check
+		metrics.CustomerKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_kyc_status", "kyc_handler").Inc()
+
 		return utils.NewAppError("GET_KYC_STATUS_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès status check
+	metrics.CustomerKYCStatusCheckTotal.Inc()
+	metrics.CustomerKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -141,6 +169,7 @@ func (h *KYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error 
 // @Router /api/merchant/kyc/{customer_id}/review [post]
 func (h *KYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 
 	customerID := chi.URLParam(r, "customer_id")
 	if customerID == "" {
@@ -156,9 +185,20 @@ func (h *KYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	req.CustomerID = customerID
 
 	response, err := h.reviewKYCUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec review
+		metrics.CustomerKYCReviewTotal.WithLabelValues("error").Inc()
+		metrics.CustomerKYCOperationDuration.WithLabelValues("review").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_kyc_review", "kyc_handler").Inc()
+
 		return utils.NewAppError("REVIEW_KYC_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès review
+	metrics.CustomerKYCReviewTotal.WithLabelValues("success").Inc()
+	metrics.CustomerKYCOperationDuration.WithLabelValues("review").Observe(duration)
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -177,11 +217,22 @@ func (h *KYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 // @Router /api/merchant/kyc/pending [get]
 func (h *KYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 
 	items, err := h.listPendingKYCUC.Execute(ctx)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec list pending
+		metrics.CustomerKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_kyc_list", "kyc_handler").Inc()
+
 		return utils.NewAppError("LIST_PENDING_KYC_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès list pending
+	metrics.CustomerKYCPendingListTotal.Inc()
+	metrics.CustomerKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
 
 	utils.WriteJSON(w, http.StatusOK, items)
 	return nil

@@ -3,7 +3,9 @@ package customerhandler
 import (
 	"errors"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/repository"
 	"Goshop/interfaces/utils"
@@ -39,6 +41,7 @@ func NewCustomerDashboardHandler(
 // @Router /api/client/dashboard [get]
 func (h *CustomerDashboardHandler) GetDashboard(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// 1. Récupérer l'ID utilisateur du JWT (users.id)
@@ -58,8 +61,17 @@ func (h *CustomerDashboardHandler) GetDashboard(w http.ResponseWriter, r *http.R
 
 	// 3. Exécuter le usecase avec le VRAI customer.id
 	dashboard, err := h.getDashboardUC.Execute(ctx, customer.ID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to get dashboard")
+		// 📊 MÉTRIQUES : Échec dashboard
+		metrics.CustomerDashboardRequestTotal.WithLabelValues("error").Inc()
+		metrics.CustomerDashboardDuration.Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_dashboard", "dashboard_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("Failed to get dashboard")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -67,6 +79,10 @@ func (h *CustomerDashboardHandler) GetDashboard(w http.ResponseWriter, r *http.R
 		}
 		return utils.ErrInternalServer
 	}
+
+	// 📊 MÉTRIQUES : Succès dashboard
+	metrics.CustomerDashboardRequestTotal.WithLabelValues("success").Inc()
+	metrics.CustomerDashboardDuration.Observe(duration)
 
 	// 4. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{

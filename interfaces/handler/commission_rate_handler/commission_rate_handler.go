@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"Goshop/application/metrics"
 	appscheduler "Goshop/application/scheduler"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -19,8 +20,6 @@ import (
 // COMMISSION RATE HANDLER
 // ============================================================
 
-// CommissionRateHandler gère les endpoints de configuration des taux
-// et les triggers manuels pour les schedulers
 type CommissionRateHandler struct {
 	rateRepo           repository.CommissionRateRepository
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler
@@ -28,7 +27,6 @@ type CommissionRateHandler struct {
 	creditSched        *appscheduler.CreditScheduler
 }
 
-// NewCommissionRateHandler crée une nouvelle instance
 func NewCommissionRateHandler(
 	rateRepo repository.CommissionRateRepository,
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler,
@@ -47,7 +45,6 @@ func NewCommissionRateHandler(
 // REQUEST/RESPONSE TYPES
 // ============================================================
 
-// CommissionRateRequest représente la requête de mise à jour d'un taux de commission
 type CommissionRateRequest struct {
 	ShopID             string `json:"shop_id" example:"123e4567-e89b-12d3-a456-426614174000"`
 	TransactionType    string `json:"transaction_type" example:"online_payment"`
@@ -74,6 +71,7 @@ type CommissionRateRequest struct {
 // @Router /api/admin/commission-rates [put]
 func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	var req CommissionRateRequest
@@ -118,14 +116,36 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 			UpdatedAt:          now,
 		}
 		if err := h.rateRepo.Create(ctx, rate); err != nil {
-			logger.Error().Err(err).Msg("Failed to create commission rate")
+			duration := time.Since(start).Seconds()
+
+			// 📊 MÉTRIQUES : Échec création
+			metrics.CommissionRateUpdateTotal.WithLabelValues("create", "error", req.TransactionType).Inc()
+			metrics.CommissionRateOperationDuration.WithLabelValues("create").Observe(duration)
+			metrics.ApplicationErrorsTotal.WithLabelValues("commission_rate_create", "commission_rate_handler").Inc()
+
+			logger.Error().Err(err).
+				Str("shop_id", req.ShopID).
+				Str("transaction_type", req.TransactionType).
+				Float64("duration_seconds", duration).
+				Msg("Failed to create commission rate")
+
 			return utils.NewAppError("RATE_CREATE_FAILED", "Failed to create rate", http.StatusInternalServerError)
 		}
+
+		duration := time.Since(start).Seconds()
+
+		// 📊 MÉTRIQUES : Succès création
+		metrics.CommissionRateUpdateTotal.WithLabelValues("create", "success", req.TransactionType).Inc()
+		metrics.CommissionRateOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.CommissionRateConfigured.WithLabelValues(req.ShopID, req.TransactionType).Inc()
+		metrics.CommissionRateValueBps.WithLabelValues(req.TransactionType).Observe(float64(req.RateBps))
+
 		logger.Info().
 			Str("shop_id", req.ShopID).
 			Str("transaction_type", req.TransactionType).
 			Int("rate_bps", req.RateBps).
-			Msg("Commission rate created")
+			Float64("duration_seconds", duration).
+			Msg("✅ Commission rate created")
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -144,15 +164,35 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 	existing.UpdatedAt = now
 
 	if err := h.rateRepo.Update(ctx, existing); err != nil {
-		logger.Error().Err(err).Msg("Failed to update commission rate")
+		duration := time.Since(start).Seconds()
+
+		// 📊 MÉTRIQUES : Échec mise à jour
+		metrics.CommissionRateUpdateTotal.WithLabelValues("update", "error", req.TransactionType).Inc()
+		metrics.CommissionRateOperationDuration.WithLabelValues("update").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("commission_rate_update", "commission_rate_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", req.ShopID).
+			Str("transaction_type", req.TransactionType).
+			Float64("duration_seconds", duration).
+			Msg("Failed to update commission rate")
+
 		return utils.NewAppError("RATE_UPDATE_FAILED", "Failed to update rate", http.StatusInternalServerError)
 	}
+
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Succès mise à jour
+	metrics.CommissionRateUpdateTotal.WithLabelValues("update", "success", req.TransactionType).Inc()
+	metrics.CommissionRateOperationDuration.WithLabelValues("update").Observe(duration)
+	metrics.CommissionRateValueBps.WithLabelValues(req.TransactionType).Observe(float64(req.RateBps))
 
 	logger.Info().
 		Str("shop_id", req.ShopID).
 		Str("transaction_type", req.TransactionType).
 		Int("rate_bps", req.RateBps).
-		Msg("Commission rate updated")
+		Float64("duration_seconds", duration).
+		Msg("✅ Commission rate updated")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -176,6 +216,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 // @Router /api/admin/commission-rates [get]
 func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	shopID := r.URL.Query().Get("shop_id")
@@ -184,10 +225,31 @@ func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request)
 	}
 
 	rates, err := h.rateRepo.FindByShop(ctx, shopID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to fetch rates")
+		// 📊 MÉTRIQUES : Échec get
+		metrics.CommissionRateGetTotal.WithLabelValues("error").Inc()
+		metrics.CommissionRateOperationDuration.WithLabelValues("get").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("commission_rate_get", "commission_rate_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to fetch rates")
+
 		return utils.NewAppError("RATES_FETCH_FAILED", "Failed to fetch rates", http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès get
+	metrics.CommissionRateGetTotal.WithLabelValues("success").Inc()
+	metrics.CommissionRateOperationDuration.WithLabelValues("get").Observe(duration)
+
+	logger.Info().
+		Str("shop_id", shopID).
+		Int("rates_count", len(rates)).
+		Float64("duration_seconds", duration).
+		Msg("✅ Commission rates fetched successfully")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -212,14 +274,34 @@ func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request)
 // @Router /api/admin/commission-rates/trigger-online [post]
 func (h *CommissionRateHandler) TriggerOnlineCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
+
+	// 📊 MÉTRIQUE : Trigger déclenché
+	metrics.CommissionTriggerTotal.WithLabelValues("online", "triggered").Inc()
+
 	logger.Info().Msg("🔧 Manual online payment collection triggered")
 
 	go func() {
 		bgCtx := context.Background()
+		bgStart := time.Now()
+
 		if h.onlinePaymentSched != nil {
 			if err := h.onlinePaymentSched.RunCollection(bgCtx); err != nil {
-				logger.Error().Err(err).Msg("❌ Manual online payment collection failed")
+				// 📊 MÉTRIQUE : Échec en arrière-plan
+				metrics.CommissionTriggerTotal.WithLabelValues("online", "error").Inc()
+				metrics.ApplicationErrorsTotal.WithLabelValues("commission_trigger_online", "commission_rate_handler").Inc()
+
+				logger.Error().Err(err).
+					Float64("duration_seconds", time.Since(bgStart).Seconds()).
+					Msg("❌ Manual online payment collection failed")
+				return
 			}
+
+			// 📊 MÉTRIQUE : Succès en arrière-plan
+			metrics.CommissionTriggerTotal.WithLabelValues("online", "success").Inc()
+
+			logger.Info().
+				Float64("duration_seconds", time.Since(bgStart).Seconds()).
+				Msg("✅ Online payment collection completed")
 		}
 	}()
 
@@ -241,15 +323,36 @@ func (h *CommissionRateHandler) TriggerOnlineCollection(w http.ResponseWriter, r
 // @Router /api/admin/commission-rates/trigger-tontine [post]
 func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
+
+	// 📊 MÉTRIQUE : Trigger déclenché
+	metrics.CommissionTriggerTotal.WithLabelValues("tontine", "triggered").Inc()
+
 	logger.Info().Msg("🎯 Manual tontine collection triggered")
 
 	go func() {
 		bgCtx := context.Background()
+		bgStart := time.Now()
+
 		if h.tontineSched != nil {
 			if err := h.tontineSched.RunCollection(bgCtx); err != nil {
-				logger.Error().Err(err).Msg("❌ Manual tontine collection failed")
+				// 📊 MÉTRIQUE : Échec en arrière-plan
+				metrics.CommissionTriggerTotal.WithLabelValues("tontine", "error").Inc()
+				metrics.ApplicationErrorsTotal.WithLabelValues("commission_trigger_tontine", "commission_rate_handler").Inc()
+
+				logger.Error().Err(err).
+					Float64("duration_seconds", time.Since(bgStart).Seconds()).
+					Msg("❌ Manual tontine collection failed")
+				return
 			}
+
+			// 📊 MÉTRIQUE : Succès en arrière-plan
+			metrics.CommissionTriggerTotal.WithLabelValues("tontine", "success").Inc()
+
+			logger.Info().
+				Float64("duration_seconds", time.Since(bgStart).Seconds()).
+				Msg("✅ Tontine collection completed")
 		} else {
+			metrics.CommissionTriggerTotal.WithLabelValues("tontine", "not_initialized").Inc()
 			logger.Warn().Msg("⚠️ Tontine scheduler not initialized")
 		}
 	}()
@@ -272,15 +375,36 @@ func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, 
 // @Router /api/admin/commission-rates/trigger-credit [post]
 func (h *CommissionRateHandler) TriggerCreditCollection(w http.ResponseWriter, r *http.Request) error {
 	logger := zerolog.Ctx(r.Context())
+
+	// 📊 MÉTRIQUE : Trigger déclenché
+	metrics.CommissionTriggerTotal.WithLabelValues("credit", "triggered").Inc()
+
 	logger.Info().Msg("💰 Manual credit collection triggered")
 
 	go func() {
 		bgCtx := context.Background()
+		bgStart := time.Now()
+
 		if h.creditSched != nil {
 			if err := h.creditSched.RunCollection(bgCtx); err != nil {
-				logger.Error().Err(err).Msg("❌ Manual credit collection failed")
+				// 📊 MÉTRIQUE : Échec en arrière-plan
+				metrics.CommissionTriggerTotal.WithLabelValues("credit", "error").Inc()
+				metrics.ApplicationErrorsTotal.WithLabelValues("commission_trigger_credit", "commission_rate_handler").Inc()
+
+				logger.Error().Err(err).
+					Float64("duration_seconds", time.Since(bgStart).Seconds()).
+					Msg("❌ Manual credit collection failed")
+				return
 			}
+
+			// 📊 MÉTRIQUE : Succès en arrière-plan
+			metrics.CommissionTriggerTotal.WithLabelValues("credit", "success").Inc()
+
+			logger.Info().
+				Float64("duration_seconds", time.Since(bgStart).Seconds()).
+				Msg("✅ Credit collection completed")
 		} else {
+			metrics.CommissionTriggerTotal.WithLabelValues("credit", "not_initialized").Inc()
 			logger.Warn().Msg("⚠️ Credit scheduler not initialized")
 		}
 	}()

@@ -3,7 +3,9 @@ package shophandler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	shopusecase "Goshop/application/usecase/shop_usecase"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
@@ -11,18 +13,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 )
 
 // TontineSettingsHandler gère la configuration tontine par boutique
 type TontineSettingsHandler struct {
 	configureTontineUC *shopusecase.ConfigureTontineUsecase
-	shopRepo           repository.ShopRepository // 🆕 Ajouté pour injecter le tenant
+	shopRepo           repository.ShopRepository
 }
 
 // NewTontineSettingsHandler crée une nouvelle instance
 func NewTontineSettingsHandler(
 	configureTontineUC *shopusecase.ConfigureTontineUsecase,
-	shopRepo repository.ShopRepository, // 🆕 Ajouté
+	shopRepo repository.ShopRepository,
 ) *TontineSettingsHandler {
 	return &TontineSettingsHandler{
 		configureTontineUC: configureTontineUC,
@@ -58,6 +61,8 @@ type TontineSettingsRequest struct {
 // @Router /api/shops/{id}/tontine-settings [get]
 func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	shopIDStr := chi.URLParam(r, "id")
 	shopID, err := uuid.Parse(shopIDStr)
@@ -65,7 +70,6 @@ func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *ht
 		return utils.NewAppError("INVALID_SHOP_ID", "invalid shop ID format", http.StatusBadRequest)
 	}
 
-	// 🆕 Récupérer le shop et injecter le tenant
 	shop, err := h.shopRepo.FindByID(ctx, shopID)
 	if err != nil {
 		return utils.NewAppError("SHOP_NOT_FOUND", "shop not found", http.StatusNotFound)
@@ -78,9 +82,33 @@ func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *ht
 	}
 
 	settings, err := h.configureTontineUC.GetTontineSettings(ctx, productID)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec get settings
+		metrics.TontineSettingsOperationTotal.WithLabelValues("get", "error").Inc()
+		metrics.TontineSettingsDuration.WithLabelValues("get").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_settings_get", "tontine_settings_handler").Inc()
+
+		logger.Error().
+			Err(err).
+			Str("shop_id", shopID.String()).
+			Str("product_id", productID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to get tontine settings")
+
 		return utils.NewAppError("GET_TONTINE_SETTINGS_FAILED", err.Error(), http.StatusNotFound)
 	}
+
+	// 📊 MÉTRIQUES : Succès get settings
+	metrics.TontineSettingsOperationTotal.WithLabelValues("get", "success").Inc()
+	metrics.TontineSettingsDuration.WithLabelValues("get").Observe(duration)
+
+	logger.Info().
+		Str("shop_id", shopID.String()).
+		Str("product_id", productID).
+		Float64("duration_seconds", duration).
+		Msg("Tontine settings retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, settings)
 	return nil
@@ -103,6 +131,8 @@ func (h *TontineSettingsHandler) GetTontineSettings(w http.ResponseWriter, r *ht
 // @Router /api/shops/{id}/tontine-settings [put]
 func (h *TontineSettingsHandler) UpdateTontineSettings(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	shopIDStr := chi.URLParam(r, "id")
 	if shopIDStr == "" {
@@ -114,12 +144,11 @@ func (h *TontineSettingsHandler) UpdateTontineSettings(w http.ResponseWriter, r 
 		return utils.NewAppError("INVALID_SHOP_ID", "invalid shop ID format", http.StatusBadRequest)
 	}
 
-	// 🆕 Récupérer le shop et injecter le tenant
 	shop, err := h.shopRepo.FindByID(ctx, shopID)
 	if err != nil {
 		return utils.NewAppError("SHOP_NOT_FOUND", "shop not found", http.StatusNotFound)
 	}
-	ctx = tenant.WithTenant(ctx, shop) // 🆕 Injection du tenant
+	ctx = tenant.WithTenant(ctx, shop)
 
 	var req TontineSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -127,7 +156,6 @@ func (h *TontineSettingsHandler) UpdateTontineSettings(w http.ResponseWriter, r 
 	}
 	defer r.Body.Close()
 
-	// Convertir en ConfigureTontineRequest avec ShopID explicite
 	ucReq := &shopusecase.ConfigureTontineRequest{
 		ProductID:             req.ProductID,
 		ShopID:                shopID.String(),
@@ -140,9 +168,37 @@ func (h *TontineSettingsHandler) UpdateTontineSettings(w http.ResponseWriter, r 
 	}
 
 	settings, err := h.configureTontineUC.Execute(ctx, ucReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec update settings
+		metrics.TontineSettingsOperationTotal.WithLabelValues("update", "error").Inc()
+		metrics.TontineSettingsDuration.WithLabelValues("update").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_settings_update", "tontine_settings_handler").Inc()
+
+		logger.Error().
+			Err(err).
+			Str("shop_id", shopID.String()).
+			Str("product_id", req.ProductID).
+			Bool("tontine_enabled", req.IsTontineEnabled).
+			Float64("duration_seconds", duration).
+			Msg("Failed to update tontine settings")
+
 		return utils.NewAppError("UPDATE_TONTINE_SETTINGS_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès update settings
+	metrics.TontineSettingsOperationTotal.WithLabelValues("update", "success").Inc()
+	metrics.TontineSettingsDuration.WithLabelValues("update").Observe(duration)
+
+	logger.Info().
+		Str("shop_id", shopID.String()).
+		Str("product_id", req.ProductID).
+		Bool("tontine_enabled", req.IsTontineEnabled).
+		Int("min_participants", req.MinParticipants).
+		Int("max_participants", req.MaxParticipants).
+		Float64("duration_seconds", duration).
+		Msg("Tontine settings updated successfully")
 
 	utils.WriteJSON(w, http.StatusOK, settings)
 	return nil

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	deliveryproofusecase "Goshop/application/usecase/delivery_proof_usecase"
 	"Goshop/domain/tenant"
 	"Goshop/interfaces/utils"
@@ -57,32 +59,56 @@ func NewDeliveryProofHandler(
 // @Security ApiKeyAuth
 // @Router /api/delivery/proof/shipping [post]
 func (h *DeliveryProofHandler) SubmitShippingProof(w http.ResponseWriter, r *http.Request) {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
-	_, err := tenant.FromContext(r.Context())
+	_, err := tenant.FromContext(ctx)
 	if err != nil {
+		// 📊 MÉTRIQUE : Erreur tenant
+		metrics.DeliveryProofTenantErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("shipping", "error").Inc()
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
 		return
 	}
 
 	var req deliveryproofusecase.SubmitShippingProofRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.DeliveryProofPayloadErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("shipping", "error").Inc()
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 	defer r.Body.Close()
 
-	resp, err := h.submitShippingUC.Execute(r.Context(), &req)
+	resp, err := h.submitShippingUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to submit shipping proof")
+		// 📊 MÉTRIQUES : Échec soumission
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("shipping", "error").Inc()
+		metrics.DeliveryProofDuration.WithLabelValues("shipping").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("delivery_proof_shipping", "delivery_proof_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("order_id", req.OrderID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to submit shipping proof")
+
 		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to submit shipping proof: %v", err))
 		return
 	}
 
+	// 📊 MÉTRIQUES : Succès soumission
+	metrics.DeliveryProofSubmitTotal.WithLabelValues("shipping", "success").Inc()
+	metrics.DeliveryProofDuration.WithLabelValues("shipping").Observe(duration)
+
 	logger.Info().
 		Str("order_id", req.OrderID).
 		Str("proof_id", resp.ProofID).
-		Msg("Shipping proof submitted successfully")
+		Float64("duration_seconds", duration).
+		Msg("✅ Shipping proof submitted successfully")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 }
@@ -101,32 +127,56 @@ func (h *DeliveryProofHandler) SubmitShippingProof(w http.ResponseWriter, r *htt
 // @Security ApiKeyAuth
 // @Router /api/delivery/proof/tontine-shipping [post]
 func (h *DeliveryProofHandler) SubmitTontineShippingProof(w http.ResponseWriter, r *http.Request) {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
-	_, err := tenant.FromContext(r.Context())
+	_, err := tenant.FromContext(ctx)
 	if err != nil {
+		// 📊 MÉTRIQUE : Erreur tenant
+		metrics.DeliveryProofTenantErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_shipping", "error").Inc()
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
 		return
 	}
 
 	var req deliveryproofusecase.SubmitTontineShippingProofRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.DeliveryProofPayloadErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_shipping", "error").Inc()
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 	defer r.Body.Close()
 
-	resp, err := h.submitTontineShippingUC.Execute(r.Context(), &req)
+	resp, err := h.submitTontineShippingUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to submit tontine shipping proof")
+		// 📊 MÉTRIQUES : Échec soumission
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_shipping", "error").Inc()
+		metrics.DeliveryProofDuration.WithLabelValues("tontine_shipping").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("delivery_proof_tontine_shipping", "delivery_proof_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("voucher_id", req.VoucherID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to submit tontine shipping proof")
+
 		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to submit tontine shipping proof: %v", err))
 		return
 	}
 
+	// 📊 MÉTRIQUES : Succès soumission
+	metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_shipping", "success").Inc()
+	metrics.DeliveryProofDuration.WithLabelValues("tontine_shipping").Observe(duration)
+
 	logger.Info().
 		Str("voucher_id", req.VoucherID).
 		Str("proof_id", resp.ProofID).
-		Msg("Tontine shipping proof submitted successfully")
+		Float64("duration_seconds", duration).
+		Msg("✅ Tontine shipping proof submitted successfully")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 }
@@ -149,32 +199,56 @@ func (h *DeliveryProofHandler) SubmitTontineShippingProof(w http.ResponseWriter,
 // @Security ApiKeyAuth
 // @Router /api/delivery/proof/delivery [post]
 func (h *DeliveryProofHandler) SubmitDeliveryProof(w http.ResponseWriter, r *http.Request) {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
-	_, err := tenant.FromContext(r.Context())
+	_, err := tenant.FromContext(ctx)
 	if err != nil {
+		// 📊 MÉTRIQUE : Erreur tenant
+		metrics.DeliveryProofTenantErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("delivery", "error").Inc()
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
 		return
 	}
 
 	var req deliveryproofusecase.SubmitDeliveryProofRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.DeliveryProofPayloadErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("delivery", "error").Inc()
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 	defer r.Body.Close()
 
-	resp, err := h.submitDeliveryUC.Execute(r.Context(), &req)
+	resp, err := h.submitDeliveryUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to submit delivery proof")
+		// 📊 MÉTRIQUES : Échec soumission
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("delivery", "error").Inc()
+		metrics.DeliveryProofDuration.WithLabelValues("delivery").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("delivery_proof_delivery", "delivery_proof_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("order_id", req.OrderID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to submit delivery proof")
+
 		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to submit delivery proof: %v", err))
 		return
 	}
 
+	// 📊 MÉTRIQUES : Succès soumission
+	metrics.DeliveryProofSubmitTotal.WithLabelValues("delivery", "success").Inc()
+	metrics.DeliveryProofDuration.WithLabelValues("delivery").Observe(duration)
+
 	logger.Info().
 		Str("order_id", req.OrderID).
 		Str("proof_id", resp.ProofID).
-		Msg("Delivery proof submitted successfully by customer")
+		Float64("duration_seconds", duration).
+		Msg("✅ Delivery proof submitted successfully by customer")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 }
@@ -193,32 +267,56 @@ func (h *DeliveryProofHandler) SubmitDeliveryProof(w http.ResponseWriter, r *htt
 // @Security ApiKeyAuth
 // @Router /api/delivery/proof/tontine-delivery [post]
 func (h *DeliveryProofHandler) SubmitTontineDeliveryProof(w http.ResponseWriter, r *http.Request) {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
-	_, err := tenant.FromContext(r.Context())
+	_, err := tenant.FromContext(ctx)
 	if err != nil {
+		// 📊 MÉTRIQUE : Erreur tenant
+		metrics.DeliveryProofTenantErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_delivery", "error").Inc()
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
 		return
 	}
 
 	var req deliveryproofusecase.SubmitTontineDeliveryProofRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.DeliveryProofPayloadErrors.Inc()
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_delivery", "error").Inc()
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 	defer r.Body.Close()
 
-	resp, err := h.submitTontineDeliveryUC.Execute(r.Context(), &req)
+	resp, err := h.submitTontineDeliveryUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to submit tontine delivery proof")
+		// 📊 MÉTRIQUES : Échec soumission
+		metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_delivery", "error").Inc()
+		metrics.DeliveryProofDuration.WithLabelValues("tontine_delivery").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("delivery_proof_tontine_delivery", "delivery_proof_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("voucher_id", req.VoucherID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to submit tontine delivery proof")
+
 		utils.WriteError(w, http.StatusBadRequest, fmt.Sprintf("Failed to submit tontine delivery proof: %v", err))
 		return
 	}
 
+	// 📊 MÉTRIQUES : Succès soumission
+	metrics.DeliveryProofSubmitTotal.WithLabelValues("tontine_delivery", "success").Inc()
+	metrics.DeliveryProofDuration.WithLabelValues("tontine_delivery").Observe(duration)
+
 	logger.Info().
 		Str("voucher_id", req.VoucherID).
 		Str("proof_id", resp.ProofID).
-		Msg("Tontine delivery proof submitted successfully by participant")
+		Float64("duration_seconds", duration).
+		Msg("✅ Tontine delivery proof submitted successfully by participant")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 }

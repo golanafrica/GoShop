@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"Goshop/application/metrics"
 	apikeyusecase "Goshop/application/usecase/apikey_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -20,23 +22,6 @@ import (
 
 // ============================================================
 // 🆕 v4.4.3 : API KEY MANAGEMENT HANDLER
-// ============================================================
-//
-// 🎯 Objectif :
-//   Exposer les endpoints HTTP pour la gestion des clés API.
-//
-// 📋 Endpoints :
-//   - POST   /api/admin/api-keys           - Créer une clé
-//   - GET    /api/admin/api-keys           - Lister les clés
-//   - POST   /api/admin/api-keys/revoke    - Révoquer une clé
-//   - POST   /api/admin/api-keys/revoke-all - Révoquer toutes
-//   - GET    /api/admin/api-keys/stats     - Statistiques
-//
-// 🔐 Sécurité :
-//   - Tous les endpoints nécessitent une authentification admin
-//   - RBAC : super_admin / admin
-//   - La clé complète est affichée UNE SEULE FOIS à la création
-//
 // ============================================================
 
 // APIKeyHandler gère les endpoints de gestion des clés API
@@ -70,21 +55,10 @@ func NewAPIKeyHandler(
 // ============================================================
 
 // @Summary Créer une nouvelle clé API
-// @Description Génère une nouvelle clé API pour un utilisateur avec des scopes spécifiques. La clé complète n'est affichée qu'une seule fois à la création.
-// @Tags API Key Management
-// @Accept json
-// @Produce json
-// @Param request body apikeyusecase.CreateAPIKeyRequest true "Détails de la clé API (name, scopes, is_test)"
-// @Success 201 {object} apikeyusecase.CreateAPIKeyResponse
-// @Failure 400 {object} utils.AppError "Payload invalide ou champs manquants"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 429 {object} utils.AppError "Limite de clés atteinte"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/api-keys [post]
 func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -114,10 +88,44 @@ func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) err
 		Bool("is_test", req.IsTest).
 		Msg("🔑 Create API key request")
 
-	response, err := h.createUC.Execute(r.Context(), admin, &req)
+	response, err := h.createUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec création
+		isTestStr := "false"
+		if req.IsTest {
+			isTestStr = "true"
+		}
+		metrics.APIKeyCreateTotal.WithLabelValues("error", isTestStr).Inc()
+		metrics.APIKeyOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("apikey_create", "apikey_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Str("key_name", req.Name).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to create API key")
+
 		return handleAPIKeyError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès création
+	isTestStr := "false"
+	if req.IsTest {
+		isTestStr = "true"
+	}
+	metrics.APIKeyCreateTotal.WithLabelValues("success", isTestStr).Inc()
+	metrics.APIKeyOperationDuration.WithLabelValues("create").Observe(duration)
+	metrics.APIKeyScopesCount.Observe(float64(len(req.Scopes)))
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("key_name", req.Name).
+		Int("scopes_count", len(req.Scopes)).
+		Bool("is_test", req.IsTest).
+		Float64("duration_seconds", duration).
+		Msg("✅ API key created successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, response)
 	return nil
@@ -128,22 +136,10 @@ func (h *APIKeyHandler) CreateAPIKey(w http.ResponseWriter, r *http.Request) err
 // ============================================================
 
 // @Summary Lister les clés API
-// @Description Récupère la liste paginée des clés API d'un utilisateur (ou de tous les utilisateurs pour les admins).
-// @Tags API Key Management
-// @Accept json
-// @Produce json
-// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
-// @Param active_only query boolean false "Ne retourner que les clés actives (défaut: true)"
-// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
-// @Param offset query int false "Décalage (défaut: 0)"
-// @Success 200 {object} apikeyusecase.ListAPIKeysResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/api-keys [get]
 func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -180,10 +176,40 @@ func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) erro
 		Bool("active_only", activeOnly).
 		Msg("📋 List API keys request")
 
-	response, err := h.listUC.Execute(r.Context(), admin, req)
+	response, err := h.listUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec listing
+		activeOnlyStrMetric := "false"
+		if activeOnly {
+			activeOnlyStrMetric = "true"
+		}
+		metrics.APIKeyListTotal.WithLabelValues("error", activeOnlyStrMetric).Inc()
+		metrics.APIKeyOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("apikey_list", "apikey_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to list API keys")
+
 		return handleAPIKeyError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès listing
+	activeOnlyStrMetric := "false"
+	if activeOnly {
+		activeOnlyStrMetric = "true"
+	}
+	metrics.APIKeyListTotal.WithLabelValues("success", activeOnlyStrMetric).Inc()
+	metrics.APIKeyOperationDuration.WithLabelValues("list").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", userID).
+		Bool("active_only", activeOnly).
+		Float64("duration_seconds", duration).
+		Msg("✅ API keys listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -194,22 +220,10 @@ func (h *APIKeyHandler) ListAPIKeys(w http.ResponseWriter, r *http.Request) erro
 // ============================================================
 
 // @Summary Révoquer une clé API
-// @Description Révoque une clé API spécifique, l'empêchant d'être utilisée pour de futures requêtes.
-// @Tags API Key Management
-// @Accept json
-// @Produce json
-// @Param request body apikeyusecase.RevokeAPIKeyRequest true "ID de la clé et motif de révocation"
-// @Success 200 {object} apikeyusecase.RevokeAPIKeyResponse
-// @Failure 400 {object} utils.AppError "Payload invalide ou api_key_id manquant"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 404 {object} utils.AppError "Clé API introuvable"
-// @Failure 409 {object} utils.AppError "Clé déjà révoquée"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/api-keys/revoke [post]
 func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -233,10 +247,33 @@ func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) err
 		Str("reason", req.Reason).
 		Msg("🔑 Revoke API key request")
 
-	response, err := h.revokeUC.Execute(r.Context(), admin, &req)
+	response, err := h.revokeUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec révocation
+		metrics.APIKeyRevokeTotal.WithLabelValues("error", "single").Inc()
+		metrics.APIKeyOperationDuration.WithLabelValues("revoke").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("apikey_revoke", "apikey_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Str("api_key_id", req.APIKeyID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to revoke API key")
+
 		return handleAPIKeyError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès révocation
+	metrics.APIKeyRevokeTotal.WithLabelValues("success", "single").Inc()
+	metrics.APIKeyOperationDuration.WithLabelValues("revoke").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("api_key_id", req.APIKeyID).
+		Float64("duration_seconds", duration).
+		Msg("✅ API key revoked successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -247,20 +284,10 @@ func (h *APIKeyHandler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) err
 // ============================================================
 
 // @Summary Révoquer toutes les clés API d'un utilisateur
-// @Description Révoque toutes les clés API actives associées à un utilisateur spécifique.
-// @Tags API Key Management
-// @Accept json
-// @Produce json
-// @Param request body apikeyusecase.RevokeAllAPIKeysRequest false "ID de l'utilisateur et motif de révocation"
-// @Success 200 {object} apikeyusecase.RevokeAllAPIKeysResponse
-// @Failure 400 {object} utils.AppError "Payload invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/api-keys/revoke-all [post]
 func (h *APIKeyHandler) RevokeAllAPIKeys(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -280,10 +307,33 @@ func (h *APIKeyHandler) RevokeAllAPIKeys(w http.ResponseWriter, r *http.Request)
 		Str("reason", req.Reason).
 		Msg("🔑 Revoke all API keys request")
 
-	response, err := h.revokeAllUC.Execute(r.Context(), admin, &req)
+	response, err := h.revokeAllUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec révocation bulk
+		metrics.APIKeyRevokeTotal.WithLabelValues("error", "bulk").Inc()
+		metrics.APIKeyOperationDuration.WithLabelValues("revoke_all").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("apikey_revoke_all", "apikey_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Str("target_user_id", req.UserID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to revoke all API keys")
+
 		return handleAPIKeyError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès révocation bulk
+	metrics.APIKeyRevokeTotal.WithLabelValues("success", "bulk").Inc()
+	metrics.APIKeyOperationDuration.WithLabelValues("revoke_all").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", req.UserID).
+		Float64("duration_seconds", duration).
+		Msg("✅ All API keys revoked successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -294,19 +344,10 @@ func (h *APIKeyHandler) RevokeAllAPIKeys(w http.ResponseWriter, r *http.Request)
 // ============================================================
 
 // @Summary Obtenir les statistiques des clés API
-// @Description Récupère les statistiques d'utilisation et l'état des clés API pour un utilisateur ou globalement.
-// @Tags API Key Management
-// @Accept json
-// @Produce json
-// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
-// @Success 200 {object} apikeyusecase.GetAPIKeyStatsResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/api-keys/stats [get]
 func (h *APIKeyHandler) GetStatistics(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -324,10 +365,31 @@ func (h *APIKeyHandler) GetStatistics(w http.ResponseWriter, r *http.Request) er
 		Str("target_user_id", userID).
 		Msg("📊 Get API key statistics request")
 
-	response, err := h.getStatsUC.Execute(r.Context(), admin, req)
+	response, err := h.getStatsUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec stats
+		metrics.APIKeyStatsTotal.WithLabelValues("error").Inc()
+		metrics.APIKeyOperationDuration.WithLabelValues("get_stats").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("apikey_stats", "apikey_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to get API key statistics")
+
 		return handleAPIKeyError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès stats
+	metrics.APIKeyStatsTotal.WithLabelValues("success").Inc()
+	metrics.APIKeyOperationDuration.WithLabelValues("get_stats").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", userID).
+		Float64("duration_seconds", duration).
+		Msg("✅ API key statistics retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -338,7 +400,6 @@ func (h *APIKeyHandler) GetStatistics(w http.ResponseWriter, r *http.Request) er
 // ============================================================
 
 // RegisterRoutes enregistre toutes les routes de gestion des clés API
-// Routes accessibles aux admins (super_admin + admin)
 func (h *APIKeyHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/", middl.ErrorHandler(h.CreateAPIKey))
 	r.Get("/", middl.ErrorHandler(h.ListAPIKeys))

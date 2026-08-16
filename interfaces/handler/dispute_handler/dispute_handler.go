@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
+	"Goshop/application/metrics"
 	disputeusecase "Goshop/application/usecase/dispute_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -57,6 +59,7 @@ func mapResolveErr(err error) error {
 
 func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 	orderID := chi.URLParam(r, "id")
 
@@ -95,10 +98,31 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 	}
 
 	dispute, err := h.openDisputeUC.Execute(ctx, disputeReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to open dispute")
+		// 📊 MÉTRIQUES : Échec ouverture
+		metrics.DisputeOpenTotal.WithLabelValues("error", "customer").Inc()
+		metrics.DisputeOperationDuration.WithLabelValues("open").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("dispute_open", "dispute_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("order_id", orderID).
+			Float64("duration_seconds", duration).
+			Msg("Failed to open dispute")
+
 		return fmt.Errorf("failed to open dispute: %w", err)
 	}
+
+	// 📊 MÉTRIQUES : Succès ouverture
+	metrics.DisputeOpenTotal.WithLabelValues("success", "customer").Inc()
+	metrics.DisputeOperationDuration.WithLabelValues("open").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderID).
+		Str("dispute_id", dispute.ID.String()).
+		Float64("duration_seconds", duration).
+		Msg("✅ Dispute opened successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Dispute opened successfully",
@@ -112,6 +136,10 @@ func (h *DisputeHandler) OpenDispute(w http.ResponseWriter, r *http.Request) err
 // ============================================================
 
 func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) error {
+	start := time.Now()
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
 	status := r.URL.Query().Get("status")
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
@@ -132,10 +160,35 @@ func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) 
 		Offset: offset,
 	}
 
-	disputes, total, err := h.adminDisputeUC.GetAllDisputes(r.Context(), req)
+	disputes, total, err := h.adminDisputeUC.GetAllDisputes(ctx, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec listing
+		metrics.DisputeOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("dispute_list", "dispute_handler").Inc()
+
+		logger.Error().Err(err).
+			Int("limit", limit).
+			Int("offset", offset).
+			Float64("duration_seconds", duration).
+			Msg("Failed to fetch disputes")
+
 		return fmt.Errorf("failed to fetch disputes: %w", err)
 	}
+
+	// 📊 MÉTRIQUES : Succès listing
+	metrics.DisputeListTotal.Inc()
+	metrics.DisputeOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.DisputeListedCount.Observe(float64(len(disputes)))
+
+	logger.Info().
+		Int("disputes_returned", len(disputes)).
+		Int("total", total).
+		Int("limit", limit).
+		Int("offset", offset).
+		Float64("duration_seconds", duration).
+		Msg("✅ Disputes listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -148,12 +201,36 @@ func (h *DisputeHandler) GetAllDisputes(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *DisputeHandler) GetDisputeByID(w http.ResponseWriter, r *http.Request) error {
+	start := time.Now()
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
 	id := chi.URLParam(r, "id")
 
-	dispute, err := h.adminDisputeUC.GetDisputeByID(r.Context(), id)
+	dispute, err := h.adminDisputeUC.GetDisputeByID(ctx, id)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec get
+		metrics.DisputeOperationDuration.WithLabelValues("get").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("dispute_get", "dispute_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("dispute_id", id).
+			Float64("duration_seconds", duration).
+			Msg("Failed to get dispute by ID")
+
 		return fmt.Errorf("dispute not found: %w", err)
 	}
+
+	// 📊 MÉTRIQUES : Succès get
+	metrics.DisputeGetTotal.Inc()
+	metrics.DisputeOperationDuration.WithLabelValues("get").Observe(duration)
+
+	logger.Info().
+		Str("dispute_id", id).
+		Float64("duration_seconds", duration).
+		Msg("✅ Dispute retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -165,6 +242,9 @@ func (h *DisputeHandler) GetDisputeByID(w http.ResponseWriter, r *http.Request) 
 // ResolveDispute — admin tranche un litige par dispute ID
 func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
+
 	disputeIDStr := chi.URLParam(r, "id")
 
 	disputeID, err := uuid.Parse(disputeIDStr)
@@ -201,12 +281,47 @@ func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) 
 	}
 
 	dispute, err := h.resolveDisputeUC.Execute(ctx, disputeReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		if mapped := mapResolveErr(err); mapped != err {
+			// 📊 MÉTRIQUES : Conflit (409)
+			metrics.DisputeConflictTotal.WithLabelValues("resolve").Inc()
+			metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "conflict").Inc()
+			metrics.DisputeOperationDuration.WithLabelValues("resolve").Observe(duration)
+
+			logger.Warn().
+				Str("dispute_id", disputeIDStr).
+				Str("resolution", req.Resolution).
+				Float64("duration_seconds", duration).
+				Msg("⚠️ Dispute resolution conflict")
+
 			return mapped // 409 DISPUTE_CONFLICT
 		}
+
+		// 📊 MÉTRIQUES : Erreur
+		metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "error").Inc()
+		metrics.DisputeOperationDuration.WithLabelValues("resolve").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("dispute_resolve", "dispute_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("dispute_id", disputeIDStr).
+			Str("resolution", req.Resolution).
+			Float64("duration_seconds", duration).
+			Msg("Failed to resolve dispute")
+
 		return fmt.Errorf("failed to resolve dispute: %w", err)
 	}
+
+	// 📊 MÉTRIQUES : Succès résolution
+	metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "success").Inc()
+	metrics.DisputeOperationDuration.WithLabelValues("resolve").Observe(duration)
+
+	logger.Info().
+		Str("dispute_id", disputeIDStr).
+		Str("resolution", req.Resolution).
+		Float64("duration_seconds", duration).
+		Msg("✅ Dispute resolved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Dispute resolved successfully",
@@ -218,6 +333,7 @@ func (h *DisputeHandler) ResolveDispute(w http.ResponseWriter, r *http.Request) 
 // ResolveOrderByDispute — admin tranche via order ID
 func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderIDStr := chi.URLParam(r, "id")
@@ -272,13 +388,48 @@ func (h *DisputeHandler) ResolveOrderByDispute(w http.ResponseWriter, r *http.Re
 	}
 
 	updatedDispute, err := h.resolveDisputeUC.Execute(ctx, resolveReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to resolve dispute by order")
 		if mapped := mapResolveErr(err); mapped != err {
+			// 📊 MÉTRIQUES : Conflit (409)
+			metrics.DisputeConflictTotal.WithLabelValues("resolve_by_order").Inc()
+			metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "conflict").Inc()
+			metrics.DisputeOperationDuration.WithLabelValues("resolve_by_order").Observe(duration)
+
+			logger.Warn().
+				Str("order_id", orderIDStr).
+				Str("resolution", req.Resolution).
+				Float64("duration_seconds", duration).
+				Msg("⚠️ Dispute resolution conflict (by order)")
+
 			return mapped // 409
 		}
+
+		// 📊 MÉTRIQUES : Erreur
+		metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "error").Inc()
+		metrics.DisputeOperationDuration.WithLabelValues("resolve_by_order").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("dispute_resolve_by_order", "dispute_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("order_id", orderIDStr).
+			Str("resolution", req.Resolution).
+			Float64("duration_seconds", duration).
+			Msg("Failed to resolve dispute by order")
+
 		return fmt.Errorf("failed to resolve dispute by order: %w", err)
 	}
+
+	// 📊 MÉTRIQUES : Succès résolution
+	metrics.DisputeResolveTotal.WithLabelValues(req.Resolution, "success").Inc()
+	metrics.DisputeOperationDuration.WithLabelValues("resolve_by_order").Observe(duration)
+
+	logger.Info().
+		Str("order_id", orderIDStr).
+		Str("dispute_id", updatedDispute.ID.String()).
+		Str("resolution", req.Resolution).
+		Float64("duration_seconds", duration).
+		Msg("✅ Dispute resolved successfully (by order)")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Dispute resolved successfully",

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	shopdto "Goshop/application/dto/shop_dto"
+	"Goshop/application/metrics"
 	"Goshop/domain/entity"
 	"Goshop/interfaces/utils"
 
@@ -17,31 +19,26 @@ import (
 
 // ============ INTERFACES POUR LES USECASES ============
 
-// CreateShopUseCaseInterface définit le contrat pour la création de shop
 type CreateShopUseCaseInterface interface {
 	Execute(ctx context.Context, name, slug, customDomain string) (*entity.Shop, error)
 }
 
-// ListShopsUseCaseInterface définit le contrat pour la liste des shops
 type ListShopsUseCaseInterface interface {
 	Execute(ctx context.Context) ([]*entity.Shop, error)
 }
 
-// UpdateShopUseCaseInterface définit le contrat pour la mise à jour de shop
 type UpdateShopUseCaseInterface interface {
 	Execute(ctx context.Context, shopID string, name *string, customDomain *string, plan *string, isActive *bool) (*entity.Shop, error)
 }
 
 // ============ HANDLER ============
 
-// ShopHandler gère les requêtes HTTP pour les boutiques
 type ShopHandler struct {
 	createUsecase CreateShopUseCaseInterface
 	listUsecase   ListShopsUseCaseInterface
 	updateUsecase UpdateShopUseCaseInterface
 }
 
-// NewShopHandler crée une nouvelle instance du handler
 func NewShopHandler(
 	createUsecase CreateShopUseCaseInterface,
 	listUsecase ListShopsUseCaseInterface,
@@ -69,6 +66,7 @@ func NewShopHandler(
 // @Router /api/shops [post]
 func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	var req shopdto.CreateShopRequest
@@ -83,22 +81,35 @@ func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	shop, err := h.createUsecase.Execute(ctx, req.Name, req.Slug, req.CustomDomain)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec de création
+		metrics.ShopOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("shop_create", "shop_handler").Inc()
+
 		logger.Error().Err(err).
 			Str("shop_slug", req.Slug).
+			Float64("duration_seconds", duration).
 			Msg("Failed to create shop")
 
-		// Détecter le type d'erreur
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "already taken") && strings.Contains(errMsg, "slug") {
+			metrics.ShopCreationFailedTotal.WithLabelValues("slug_taken").Inc()
 			return utils.ErrShopSlugTaken
 		}
 		if strings.Contains(errMsg, "already taken") && strings.Contains(errMsg, "domain") {
+			metrics.ShopCreationFailedTotal.WithLabelValues("domain_taken").Inc()
 			return utils.ErrShopDomainTaken
 		}
 
+		metrics.ShopCreationFailedTotal.WithLabelValues("other").Inc()
 		return utils.ErrShopCreateFail
 	}
+
+	// 📊 MÉTRIQUES : Succès de création
+	metrics.ShopCreatedTotal.Inc()
+	metrics.ShopOperationDuration.WithLabelValues("create").Observe(duration)
 
 	response := shopdto.ShopResponse{
 		ID:        shop.ID.String(),
@@ -114,6 +125,12 @@ func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 	if shop.CustomDomain != nil {
 		response.CustomDomain = *shop.CustomDomain
 	}
+
+	logger.Info().
+		Str("shop_id", shop.ID.String()).
+		Str("shop_slug", shop.Slug).
+		Float64("duration_seconds", duration).
+		Msg("Shop created successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, response)
 	return nil
@@ -131,13 +148,28 @@ func (h *ShopHandler) CreateShop(w http.ResponseWriter, r *http.Request) error {
 // @Router /api/shops [get]
 func (h *ShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	shops, err := h.listUsecase.Execute(ctx)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to list shops")
+		// 📊 MÉTRIQUES : Échec de listing
+		metrics.ShopOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("shop_list", "shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("Failed to list shops")
+
 		return utils.ErrInternalServer
 	}
+
+	// 📊 MÉTRIQUES : Succès de listing
+	metrics.ShopListedTotal.Inc()
+	metrics.ShopOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.ShopListedCount.Observe(float64(len(shops)))
 
 	response := make([]shopdto.ShopResponse, 0, len(shops))
 	for _, shop := range shops {
@@ -156,6 +188,11 @@ func (h *ShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 		}
 		response = append(response, sr)
 	}
+
+	logger.Info().
+		Int("shops_returned", len(response)).
+		Float64("duration_seconds", duration).
+		Msg("Shops listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -179,6 +216,7 @@ func (h *ShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
 // @Router /api/shops/{id} [put]
 func (h *ShopHandler) UpdateShop(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	shopID := chi.URLParam(r, "id")
@@ -198,12 +236,18 @@ func (h *ShopHandler) UpdateShop(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	shop, err := h.updateUsecase.Execute(ctx, shopID, req.Name, req.CustomDomain, req.Plan, req.IsActive)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec de mise à jour
+		metrics.ShopOperationDuration.WithLabelValues("update").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("shop_update", "shop_handler").Inc()
+
 		logger.Error().Err(err).
 			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
 			Msg("Failed to update shop")
 
-		// Détecter le type d'erreur
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
@@ -223,6 +267,10 @@ func (h *ShopHandler) UpdateShop(w http.ResponseWriter, r *http.Request) error {
 		return utils.ErrShopUpdateFail
 	}
 
+	// 📊 MÉTRIQUES : Succès de mise à jour
+	metrics.ShopUpdatedTotal.Inc()
+	metrics.ShopOperationDuration.WithLabelValues("update").Observe(duration)
+
 	response := shopdto.ShopResponse{
 		ID:        shop.ID.String(),
 		Name:      shop.Name,
@@ -236,6 +284,11 @@ func (h *ShopHandler) UpdateShop(w http.ResponseWriter, r *http.Request) error {
 	if shop.CustomDomain != nil {
 		response.CustomDomain = *shop.CustomDomain
 	}
+
+	logger.Info().
+		Str("shop_id", shopID).
+		Float64("duration_seconds", duration).
+		Msg("Shop updated successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
+	"Goshop/application/metrics"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/interfaces/utils"
@@ -18,49 +20,42 @@ import (
 
 // ============ INTERFACES POUR LES USECASES ============
 
-// InitiatePaymentUseCaseInterface définit le contrat
 type InitiatePaymentUseCaseInterface interface {
 	Execute(ctx context.Context, req *paymentdto.InitiatePaymentRequest) (*paymentdto.InitiatePaymentResponse, error)
 }
 
-// CheckPaymentStatusUseCaseInterface définit le contrat
 type CheckPaymentStatusUseCaseInterface interface {
 	Execute(ctx context.Context, paymentID string) (*paymentdto.PaymentResponse, error)
 }
 
-// ListPaymentsUseCaseInterface définit le contrat
 type ListPaymentsUseCaseInterface interface {
 	Execute(ctx context.Context, req *paymentusecase.ListPaymentsRequest) ([]*paymentdto.PaymentResponse, error)
 }
 
-// RefundPaymentUseCaseInterface définit le contrat
 type RefundPaymentUseCaseInterface interface {
 	Execute(ctx context.Context, req *paymentdto.RefundPaymentRequest) (*paymentdto.PaymentResponse, error)
 }
 
-// CompletePaymentUseCaseInterface définit le contrat
 type CompletePaymentUseCaseInterface interface {
 	Execute(ctx context.Context, req *paymentdto.CompletePaymentRequest) (*paymentdto.PaymentResponse, error)
 }
 
 // ============ HANDLER ============
 
-// PaymentHandler gère les requêtes HTTP pour les paiements
 type PaymentHandler struct {
 	initiateUC InitiatePaymentUseCaseInterface
 	checkUC    CheckPaymentStatusUseCaseInterface
 	listUC     ListPaymentsUseCaseInterface
 	refundUC   RefundPaymentUseCaseInterface
-	completeUC CompletePaymentUseCaseInterface // 🆕 Ajouté
+	completeUC CompletePaymentUseCaseInterface
 }
 
-// NewPaymentHandler crée une nouvelle instance
 func NewPaymentHandler(
 	initiateUC InitiatePaymentUseCaseInterface,
 	checkUC CheckPaymentStatusUseCaseInterface,
 	listUC ListPaymentsUseCaseInterface,
 	refundUC RefundPaymentUseCaseInterface,
-	completeUC CompletePaymentUseCaseInterface, // 🆕 Ajouté
+	completeUC CompletePaymentUseCaseInterface,
 ) *PaymentHandler {
 	return &PaymentHandler{
 		initiateUC: initiateUC,
@@ -88,6 +83,7 @@ func NewPaymentHandler(
 // @Router /api/orders/{id}/pay [post]
 func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	orderID := chi.URLParam(r, "id")
@@ -108,8 +104,18 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 		return utils.ErrValidationFailed
 	}
 
+	// ✅ Cast du provider pour les métriques
+	providerStr := string(req.Provider)
+
 	resp, err := h.initiateUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUE : Échec du paiement
+		metrics.PaymentFailedTotal.WithLabelValues(providerStr, "initiation_error").Inc()
+		metrics.PaymentDuration.WithLabelValues(providerStr).Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("payment_initiation", "payment_handler").Inc()
+
 		logger.Error().Err(err).Msg("Failed to initiate payment")
 
 		errMsg := err.Error()
@@ -126,6 +132,18 @@ func (h *PaymentHandler) InitiatePayment(w http.ResponseWriter, r *http.Request)
 			return utils.NewAppError("PAYMENT_INITIATION_FAILED", errMsg, http.StatusBadRequest)
 		}
 	}
+
+	// 📊 MÉTRIQUES : Succès du paiement
+	// Note: ShopID et AmountCents ne sont pas dans InitiatePaymentResponse
+	// On utilise "unknown" comme valeur par défaut
+	metrics.PaymentSuccessTotal.WithLabelValues(providerStr, "unknown").Inc()
+	metrics.PaymentDuration.WithLabelValues(providerStr).Observe(duration)
+
+	logger.Info().
+		Str("provider", providerStr).
+		Str("payment_id", resp.PaymentID).
+		Float64("duration_seconds", duration).
+		Msg("Payment initiated successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, resp)
 	return nil

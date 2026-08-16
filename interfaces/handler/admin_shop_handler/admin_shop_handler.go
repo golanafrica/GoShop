@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"Goshop/application/metrics"
 	adminshopusecase "Goshop/application/usecase/admin_shop_usecase"
 	"Goshop/domain/entity"
 	"Goshop/interfaces/middl"
@@ -18,29 +20,6 @@ import (
 
 // ============================================================
 // 🆕 v4.2.0 : ADMIN SHOP HANDLER
-// ============================================================
-//
-// 🎯 Objectif :
-//   Exposer les endpoints HTTP pour la gestion admin des shops.
-//   Inspiré d'Amazon Seller Central > Admin Dashboard.
-//
-// 📋 Endpoints :
-//   - GET    /api/admin/shops              → Liste cross-tenant
-//   - GET    /api/admin/shops/{id}         → Détails complets
-//   - GET    /api/admin/shops/{id}/health  → Health Score détaillé
-//   - PUT    /api/admin/shops/{id}/suspend → Suspendre
-//   - PUT    /api/admin/shops/{id}/activate → Réactiver
-//
-// 🔐 Sécurité :
-//   - Protégé par middleware RBAC (super_admin, admin)
-//   - AdminContext extrait automatiquement du JWT
-//   - Audit trail automatique pour toutes les actions
-//
-// 🐛 v4.2.1 : Correction parsing IP pour audit trail
-//   - parseIP() extrait l'IP depuis RemoteAddr (enlève le port)
-//   - Support IPv4 (192.168.1.1:8080 → 192.168.1.1)
-//   - Support IPv6 ([::1]:8080 → ::1)
-//
 // ============================================================
 
 // AdminShopHandler gère les endpoints admin pour les shops
@@ -74,27 +53,10 @@ func NewAdminShopHandler(
 // ============================================================
 
 // @Summary Liste cross-tenant des boutiques
-// @Description Récupère une liste paginée et filtrée de toutes les boutiques de la plateforme. Réservé aux administrateurs.
-// @Tags Admin Shop Management
-// @Accept json
-// @Produce json
-// @Param limit query int false "Nombre de résultats (défaut: 20)"
-// @Param offset query int false "Décalage (défaut: 0)"
-// @Param sort_by query string false "Colonne de tri (défaut: created_at)"
-// @Param sort_order query string false "Ordre de tri (ASC ou DESC, défaut: DESC)"
-// @Param search query string false "Recherche par nom, slug ou owner_id"
-// @Param kyc_status query string false "Filtrer par statut KYC (pending, verified, rejected)"
-// @Param plan query string false "Filtrer par plan (free, pro, business)"
-// @Param is_active query boolean false "Filtrer par statut actif (true/false)"
-// @Param health_level query string false "Filtrer par niveau de santé (excellent, good, warning, critical)"
-// @Success 200 {object} adminshopusecase.ListShopsResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/shops [get]
 func (h *AdminShopHandler) ListShops(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire AdminContext
 	admin, err := extractAdminContext(r)
@@ -137,11 +99,33 @@ func (h *AdminShopHandler) ListShops(w http.ResponseWriter, r *http.Request) err
 		Msg("📋 Liste cross-tenant des shops")
 
 	// 3. Exécuter le usecase
-	response, err := h.listUC.Execute(r.Context(), admin, req)
+	response, err := h.listUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur liste shops")
+		// 📊 MÉTRIQUES : Échec listing
+		metrics.AdminShopOperationTotal.WithLabelValues("list", "error").Inc()
+		metrics.AdminShopOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("admin_shop_list", "admin_shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur liste shops")
+
 		return err
 	}
+
+	// 📊 MÉTRIQUES : Succès listing
+	metrics.AdminShopOperationTotal.WithLabelValues("list", "success").Inc()
+	metrics.AdminShopOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.AdminShopListedCount.Observe(float64(len(response.Shops)))
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Int("shops_returned", len(response.Shops)).
+		Int("total", response.Total).
+		Float64("duration_seconds", duration).
+		Msg("✅ Shops listed successfully")
 
 	// 4. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -149,21 +133,10 @@ func (h *AdminShopHandler) ListShops(w http.ResponseWriter, r *http.Request) err
 }
 
 // @Summary Détails complets d'une boutique
-// @Description Récupère toutes les informations d'une boutique spécifique, y compris les métadonnées KYC et d'administration.
-// @Tags Admin Shop Management
-// @Accept json
-// @Produce json
-// @Param id path string true "ID de la boutique (UUID)"
-// @Success 200 {object} adminshopusecase.GetShopDetailsResponse
-// @Failure 400 {object} utils.AppError "ID de boutique invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 404 {object} utils.AppError "Boutique introuvable"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/shops/{id} [get]
 func (h *AdminShopHandler) GetShopDetails(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire AdminContext
 	admin, err := extractAdminContext(r)
@@ -185,11 +158,32 @@ func (h *AdminShopHandler) GetShopDetails(w http.ResponseWriter, r *http.Request
 
 	// 3. Exécuter le usecase
 	req := &adminshopusecase.GetShopDetailsRequest{ShopID: shopID}
-	response, err := h.detailsUC.Execute(r.Context(), admin, req)
+	response, err := h.detailsUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur récupération détails")
+		// 📊 MÉTRIQUES : Échec get details
+		metrics.AdminShopOperationTotal.WithLabelValues("get_details", "error").Inc()
+		metrics.AdminShopOperationDuration.WithLabelValues("get_details").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("admin_shop_get_details", "admin_shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur récupération détails")
+
 		return handleShopError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès get details
+	metrics.AdminShopOperationTotal.WithLabelValues("get_details", "success").Inc()
+	metrics.AdminShopOperationDuration.WithLabelValues("get_details").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("shop_id", shopID).
+		Float64("duration_seconds", duration).
+		Msg("✅ Shop details retrieved successfully")
 
 	// 4. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -197,21 +191,10 @@ func (h *AdminShopHandler) GetShopDetails(w http.ResponseWriter, r *http.Request
 }
 
 // @Summary Score de santé détaillé d'une boutique
-// @Description Récupère le score de santé, le niveau et l'historique des actions administratives pour une boutique donnée.
-// @Tags Admin Shop Management
-// @Accept json
-// @Produce json
-// @Param id path string true "ID de la boutique (UUID)"
-// @Success 200 {object} adminshopusecase.GetShopHealthResponse
-// @Failure 400 {object} utils.AppError "ID de boutique invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 404 {object} utils.AppError "Boutique introuvable"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/shops/{id}/health [get]
 func (h *AdminShopHandler) GetShopHealth(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire AdminContext
 	admin, err := extractAdminContext(r)
@@ -233,11 +216,33 @@ func (h *AdminShopHandler) GetShopHealth(w http.ResponseWriter, r *http.Request)
 
 	// 3. Exécuter le usecase
 	req := &adminshopusecase.GetShopHealthRequest{ShopID: shopID}
-	response, err := h.healthUC.Execute(r.Context(), admin, req)
+	response, err := h.healthUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur récupération health score")
+		// 📊 MÉTRIQUES : Échec health check
+		metrics.AdminShopOperationTotal.WithLabelValues("get_health", "error").Inc()
+		metrics.AdminShopOperationDuration.WithLabelValues("get_health").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("admin_shop_get_health", "admin_shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur récupération health score")
+
 		return handleShopError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès health check
+	metrics.AdminShopOperationTotal.WithLabelValues("get_health", "success").Inc()
+	metrics.AdminShopOperationDuration.WithLabelValues("get_health").Observe(duration)
+	metrics.AdminShopHealthChecksTotal.Inc()
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("shop_id", shopID).
+		Float64("duration_seconds", duration).
+		Msg("✅ Shop health score retrieved successfully")
 
 	// 4. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -246,27 +251,14 @@ func (h *AdminShopHandler) GetShopHealth(w http.ResponseWriter, r *http.Request)
 
 // SuspendShopRequest représente la requête de suspension
 type SuspendShopRequest struct {
-	Reason string `json:"reason"` // Obligatoire, min 10 caractères
+	Reason string `json:"reason"`
 }
 
 // @Summary Suspendre une boutique
-// @Description Suspend l'activité d'une boutique avec un motif obligatoire. Désactive automatiquement l'accès.
-// @Tags Admin Shop Management
-// @Accept json
-// @Produce json
-// @Param id path string true "ID de la boutique (UUID)"
-// @Param request body adminshophandler.SuspendShopRequest true "Motif de la suspension"
-// @Success 200 {object} adminshopusecase.SuspendShopResponse
-// @Failure 400 {object} utils.AppError "Payload invalide ou motif manquant"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 404 {object} utils.AppError "Boutique introuvable"
-// @Failure 409 {object} utils.AppError "Boutique déjà suspendue"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/shops/{id}/suspend [put]
 func (h *AdminShopHandler) SuspendShop(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire AdminContext
 	admin, err := extractAdminContext(r)
@@ -300,11 +292,34 @@ func (h *AdminShopHandler) SuspendShop(w http.ResponseWriter, r *http.Request) e
 		ShopID: shopID,
 		Reason: reqBody.Reason,
 	}
-	response, err := h.suspendUC.Execute(r.Context(), admin, req)
+	response, err := h.suspendUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur suspension shop")
+		// 📊 MÉTRIQUES : Échec suspension
+		metrics.AdminShopOperationTotal.WithLabelValues("suspend", "error").Inc()
+		metrics.AdminShopOperationDuration.WithLabelValues("suspend").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("admin_shop_suspend", "admin_shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur suspension shop")
+
 		return handleShopError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès suspension
+	metrics.AdminShopOperationTotal.WithLabelValues("suspend", "success").Inc()
+	metrics.AdminShopOperationDuration.WithLabelValues("suspend").Observe(duration)
+	metrics.AdminShopSuspendTotal.Inc()
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("shop_id", shopID).
+		Str("reason", reqBody.Reason).
+		Float64("duration_seconds", duration).
+		Msg("✅ Shop suspended successfully")
 
 	// 5. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -313,27 +328,14 @@ func (h *AdminShopHandler) SuspendShop(w http.ResponseWriter, r *http.Request) e
 
 // ActivateShopRequest représente la requête de réactivation
 type ActivateShopRequest struct {
-	Reason *string `json:"reason,omitempty"` // Optionnel
+	Reason *string `json:"reason,omitempty"`
 }
 
 // @Summary Réactiver une boutique suspendue
-// @Description Réactive une boutique précédemment suspendue. Le motif est optionnel.
-// @Tags Admin Shop Management
-// @Accept json
-// @Produce json
-// @Param id path string true "ID de la boutique (UUID)"
-// @Param request body adminshophandler.ActivateShopRequest false "Motif optionnel de la réactivation"
-// @Success 200 {object} adminshopusecase.ActivateShopResponse
-// @Failure 400 {object} utils.AppError "Payload invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 404 {object} utils.AppError "Boutique introuvable"
-// @Failure 409 {object} utils.AppError "La boutique n'est pas suspendue"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/shops/{id}/activate [put]
 func (h *AdminShopHandler) ActivateShop(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire AdminContext
 	admin, err := extractAdminContext(r)
@@ -367,11 +369,33 @@ func (h *AdminShopHandler) ActivateShop(w http.ResponseWriter, r *http.Request) 
 		ShopID: shopID,
 		Reason: reqBody.Reason,
 	}
-	response, err := h.activateUC.Execute(r.Context(), admin, req)
+	response, err := h.activateUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur réactivation shop")
+		// 📊 MÉTRIQUES : Échec activation
+		metrics.AdminShopOperationTotal.WithLabelValues("activate", "error").Inc()
+		metrics.AdminShopOperationDuration.WithLabelValues("activate").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("admin_shop_activate", "admin_shop_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur réactivation shop")
+
 		return handleShopError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès activation
+	metrics.AdminShopOperationTotal.WithLabelValues("activate", "success").Inc()
+	metrics.AdminShopOperationDuration.WithLabelValues("activate").Observe(duration)
+	metrics.AdminShopActivateTotal.Inc()
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("shop_id", shopID).
+		Float64("duration_seconds", duration).
+		Msg("✅ Shop activated successfully")
 
 	// 5. Retourner la réponse
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -384,7 +408,6 @@ func (h *AdminShopHandler) ActivateShop(w http.ResponseWriter, r *http.Request) 
 
 // extractAdminContext extrait AdminContext depuis le contexte HTTP
 func extractAdminContext(r *http.Request) (*adminshopusecase.AdminContext, error) {
-	// Extraire depuis le contexte (injecté par middleware)
 	adminID, ok := utils.UserIDFromContext(r.Context())
 	if !ok || adminID == "" {
 		return nil, errors.New("admin_id not found in context")
@@ -392,12 +415,11 @@ func extractAdminContext(r *http.Request) (*adminshopusecase.AdminContext, error
 
 	adminRole, _ := utils.UserRoleFromContext(r.Context())
 
-	// 🆕 v4.2.1 : Parser l'IP pour enlever le port (format INET PostgreSQL)
 	ipAddress := parseIP(r.RemoteAddr)
 
 	return &adminshopusecase.AdminContext{
 		AdminID:    adminID,
-		AdminEmail: "", // Non disponible dans le contexte JWT
+		AdminEmail: "",
 		AdminRole:  adminRole,
 		IPAddress:  ipAddress,
 		UserAgent:  r.UserAgent(),
@@ -406,33 +428,20 @@ func extractAdminContext(r *http.Request) (*adminshopusecase.AdminContext, error
 }
 
 // parseIP extrait l'IP depuis RemoteAddr (enlève le port)
-// 🆕 v4.2.1 : Correction pour audit trail PostgreSQL INET
-//
-// Exemples :
-//   - "192.168.1.1:8080"      → "192.168.1.1"
-//   - "[::1]:8080"            → "::1"
-//   - "127.0.0.1:12345"       → "127.0.0.1"
-//   - "[2001:db8::1]:443"     → "2001:db8::1"
-//   - "::1"                   → "::1" (IPv6 sans port)
-//   - ""                      → "" (vide)
 func parseIP(remoteAddr string) string {
 	if remoteAddr == "" {
 		return ""
 	}
 
-	// Cas IPv6 avec crochets : [::1]:8080 ou [2001:db8::1]:443
 	if strings.HasPrefix(remoteAddr, "[") {
 		endBracket := strings.Index(remoteAddr, "]")
 		if endBracket > 0 {
-			return remoteAddr[1:endBracket] // Enlève [ et ]
+			return remoteAddr[1:endBracket]
 		}
 	}
 
-	// Cas IPv4 avec port : 192.168.1.1:8080
 	lastColon := strings.LastIndex(remoteAddr, ":")
 	if lastColon > 0 {
-		// Vérifier que ce n'est pas une IPv6 sans port (::1)
-		// Une IPv6 sans port a plusieurs ":" mais pas de crochets
 		if strings.Count(remoteAddr, ":") == 1 {
 			return remoteAddr[:lastColon]
 		}
@@ -442,12 +451,10 @@ func parseIP(remoteAddr string) string {
 }
 
 // handleShopError convertit les erreurs usecase en AppError HTTP
-// 🆕 v4.2.1 : Support erreurs string (validation raison)
 func handleShopError(err error) error {
 	errMsg := err.Error()
 
 	switch {
-	// Erreurs typées (entity)
 	case errors.Is(err, entity.ErrShopAlreadySuspended):
 		return utils.NewAppError("SHOP_ALREADY_SUSPENDED", errMsg, http.StatusConflict)
 	case errors.Is(err, entity.ErrShopNotSuspended):
@@ -455,7 +462,6 @@ func handleShopError(err error) error {
 	case errors.Is(err, entity.ErrSuspensionReasonRequired):
 		return utils.NewAppError("REASON_REQUIRED", errMsg, http.StatusBadRequest)
 
-	// 🆕 v4.2.1 : Erreurs string (validation)
 	case errMsg == "shop not found":
 		return utils.NewAppError("SHOP_NOT_FOUND", errMsg, http.StatusNotFound)
 	case errMsg == "invalid shop_id format":
@@ -492,8 +498,6 @@ func parseIntParam(r *http.Request, key string, defaultValue int) int {
 // ROUTES REGISTRATION
 // ============================================================
 
-// RegisterRoutes enregistre toutes les routes admin shops
-// Les handlers sont enveloppés avec middl.ErrorHandler() pour gérer les erreurs
 func (h *AdminShopHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", middl.ErrorHandler(h.ListShops))
 	r.Get("/{id}", middl.ErrorHandler(h.GetShopDetails))

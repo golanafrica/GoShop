@@ -252,3 +252,11 @@ func FromContext(ctx context.Context) *Logger {
 func (l *Logger) Zerolog() zerolog.Logger {
 	return l.Logger
 }
+
+// Ajouter après les autres helpers (ligne ~190)
+
+// WithShopID ajoute un shop ID au logger
+func (l *Logger) WithShopID(shopID string) *Logger {
+	logger := l.With().Str("shop_id", shopID).Logger()
+	return &Logger{Logger: logger, config: l.config}
+}

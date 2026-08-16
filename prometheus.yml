@@ -1,9 +1,23 @@
-# prometheus.yml
+# prometheus.yml - Configuration pour Windows LOCAL (sans Docker)
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  scrape_timeout: 10s
+
+# Règles d'alertes (optionnel pour le début)
+rule_files:
+  # - "alert_rules.yml"
 
 scrape_configs:
-  - job_name: 'goshop'
+  # Scrape l'application GoShop en local
+  - job_name: 'goshop-api'
     static_configs:
-      - targets: ['goshop:8080']  # Nom du service dans Docker Compose
+      - targets: ['localhost:8081']  # ⚠️ localhost:8081 (pas Docker !)
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Prometheus se scrape lui-même
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

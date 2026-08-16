@@ -10,6 +10,7 @@ import (
 
 	orderdto "Goshop/application/dto/order_dto"
 	"Goshop/application/mapper"
+	"Goshop/application/metrics"
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -202,6 +203,10 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 				"payment_method": orderEntity.PaymentMethod,
 			}).
 			Msg("Failed to create order")
+
+		// 📊 MÉTRIQUE : Échec de création
+		metrics.ApplicationErrorsTotal.WithLabelValues("order_creation", "order_handler").Inc()
+
 		return utils.ErrOrderCreateFail
 	}
 
@@ -224,6 +229,12 @@ func (h *OrderHandler) CreateOrderHandler(w http.ResponseWriter, r *http.Request
 		Dur("total_duration", time.Since(start)).
 		Int("http_status", http.StatusCreated).
 		Msg("Order creation completed successfully")
+
+	// 📊 MÉTRIQUES : Succès de création
+	duration := time.Since(start).Seconds()
+	metrics.OrdersCreatedTotal.Inc()
+	metrics.OrdersRevenueCentsTotal.Add(float64(response.TotalCents))
+	metrics.OrdersCreateDuration.Observe(duration)
 
 	// Réponse HTTP
 	utils.WriteJSON(w, http.StatusCreated, response)
@@ -298,6 +309,9 @@ func (h *OrderHandler) GetOrderByIdHandler(w http.ResponseWriter, r *http.Reques
 		Int("http_status", http.StatusOK).
 		Msg("Order retrieved successfully")
 
+	// 📊 MÉTRIQUE : Durée de récupération
+	metrics.OrdersGetDuration.Observe(time.Since(start).Seconds())
+
 	// Réponse HTTP
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -358,6 +372,7 @@ func (h *OrderHandler) GetAllOrderHandler(w http.ResponseWriter, r *http.Request
 
 	if len(orders) == 0 {
 		logger.Info().Msg("No orders found")
+		metrics.OrdersListDuration.Observe(time.Since(start).Seconds())
 		utils.WriteJSON(w, http.StatusOK, []interface{}{})
 		return nil
 	}
@@ -375,6 +390,9 @@ func (h *OrderHandler) GetAllOrderHandler(w http.ResponseWriter, r *http.Request
 		Dur("total_duration", time.Since(start)).
 		Int("http_status", http.StatusOK).
 		Msg("All orders retrieved successfully")
+
+	// 📊 MÉTRIQUE : Durée de listing
+	metrics.OrdersListDuration.Observe(time.Since(start).Seconds())
 
 	// Réponse HTTP
 	utils.WriteJSON(w, http.StatusOK, response)

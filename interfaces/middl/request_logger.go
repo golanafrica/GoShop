@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// responseWriter wrapper pour capturer le status et la taille
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -28,15 +27,20 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// RequestLoggerMiddleware logue le début et la fin de chaque requête
 func RequestLoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		logger := zerolog.Ctx(r.Context())
+
+		// 🆕 Amélioration : Ajouter request_id et query params
+		requestID := GetRequestID(r.Context())
+
 		logger.Info().
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
+			Str("query", r.URL.RawQuery). // 🆕 Query params
+			Str("request_id", requestID). // 🆕 Request ID
 			Str("remote_ip", r.RemoteAddr).
 			Str("user_agent", r.UserAgent()).
 			Msg("request_started")
@@ -54,12 +58,12 @@ func RequestLoggerMiddleware(next http.Handler) http.Handler {
 			Int("status", rw.statusCode).
 			Dur("duration_ms", duration).
 			Int64("response_size_bytes", int64(rw.bodySize)).
+			Str("request_id", requestID). // 🆕 Request ID
 			Str("warning", slowRequestWarning(duration)).
 			Msg("request_completed")
 	})
 }
 
-// determineLogLevel détermine le niveau de log selon le statut et la durée
 func determineLogLevel(status int, duration time.Duration) zerolog.Level {
 	switch {
 	case status >= 500:
@@ -73,7 +77,6 @@ func determineLogLevel(status int, duration time.Duration) zerolog.Level {
 	}
 }
 
-// slowRequestWarning retourne un warning si la requête est lente
 func slowRequestWarning(duration time.Duration) string {
 	if duration > 2*time.Second {
 		return "slow_request"
@@ -81,7 +84,6 @@ func slowRequestWarning(duration time.Duration) string {
 	return ""
 }
 
-// ✅ AJOUTER CETTE MÉTHODE pour supporter les WebSockets
 func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hijacker, ok := rw.ResponseWriter.(http.Hijacker); ok {
 		return hijacker.Hijack()

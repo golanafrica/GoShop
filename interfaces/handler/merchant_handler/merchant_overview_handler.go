@@ -2,7 +2,9 @@ package merchanthandler
 
 import (
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	merchantusecase "Goshop/application/usecase/merchant_usecase"
 	"Goshop/interfaces/utils"
 
@@ -29,15 +31,34 @@ func NewMerchantOverviewHandler(getOverviewUC *merchantusecase.GetMerchantOvervi
 // @Router /api/merchant/overview [get]
 func (h *MerchantOverviewHandler) GetOverview(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Msg("Handling merchant overview request")
 
 	response, err := h.getOverviewUC.Execute(ctx)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to get merchant overview")
+		// 📊 MÉTRIQUES : Échec overview
+		metrics.MerchantOverviewRequestTotal.WithLabelValues("error").Inc()
+		metrics.MerchantOverviewDuration.Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_overview", "merchant_overview_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("Failed to get merchant overview")
+
 		return utils.NewAppError("MERCHANT_OVERVIEW_FAILED", err.Error(), http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès overview
+	metrics.MerchantOverviewRequestTotal.WithLabelValues("success").Inc()
+	metrics.MerchantOverviewDuration.Observe(duration)
+
+	logger.Info().
+		Float64("duration_seconds", duration).
+		Msg("✅ Merchant overview retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil

@@ -13,9 +13,10 @@ import (
 	"time"
 
 	dto "Goshop/application/dto/customer_dto"
+	"Goshop/application/metrics"
 	customerusecase "Goshop/application/usecase/customer_usecase"
 	"Goshop/domain/repository"
-	userrepository "Goshop/domain/repository/user_repository" // ✅ AJOUTÉ
+	userrepository "Goshop/domain/repository/user_repository"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
@@ -32,11 +33,11 @@ type CustomerHandler struct {
 
 func NewCustomerHandler(
 	repo repository.CustomerRepositoryInterface,
-	userRepo userrepository.UserRepository, // ✅ AJOUTÉ
+	userRepo userrepository.UserRepository,
 	txManager repository.TxManager,
 ) *CustomerHandler {
 	return &CustomerHandler{
-		createCustomerUsecase:  customerusecase.NewCreateCustomerUsecase(repo, userRepo, txManager), // ✅ MODIFIÉ
+		createCustomerUsecase:  customerusecase.NewCreateCustomerUsecase(repo, userRepo, txManager),
 		getAllCustomersUsecase: customerusecase.NewGetAllCustomersUsecase(repo, txManager),
 		getCustomerByIdUsecase: customerusecase.NewGetCustomerByIdUsecase(repo, txManager),
 		updateCustomerUsecase:  customerusecase.NewUpdateCustomerUsecase(repo, txManager),
@@ -104,12 +105,20 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 		Msg("Executing create customer usecase")
 
 	created, err := h.createCustomerUsecase.Execute(ctx, customer)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec création
+		metrics.CustomerOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.CustomerOperationErrors.WithLabelValues("create", "business_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_create", "customer_handler").Inc()
+
 		logger.Error().
 			Err(err).
 			Stack().
 			Str("error_type", fmt.Sprintf("%T", err)).
 			Str("error_message", err.Error()).
+			Float64("duration_seconds", duration).
 			Interface("customer_details", map[string]interface{}{
 				"email":      customer.Email,
 				"first_name": customer.FirstName,
@@ -119,6 +128,10 @@ func (h *CustomerHandler) CreateCustomerHandler(w http.ResponseWriter, r *http.R
 			Msg("Failed to create customer")
 		return utils.ErrCustomerCreateFail
 	}
+
+	// 📊 MÉTRIQUES : Succès création
+	metrics.CustomerCreatedTotal.Inc()
+	metrics.CustomerOperationDuration.WithLabelValues("create").Observe(duration)
 
 	logger.Info().
 		Str("customer_id", created.ID).
@@ -169,22 +182,36 @@ func (h *CustomerHandler) GetCustomerByIdHandler(w http.ResponseWriter, r *http.
 
 	logger.Debug().Msg("Executing get customer by ID usecase")
 	customer, err := h.getCustomerByIdUsecase.Execute(ctx, id)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			// 📊 MÉTRIQUE : Not found (pas une erreur applicative)
+			metrics.CustomerOperationErrors.WithLabelValues("get", "not_found").Inc()
+			metrics.CustomerOperationDuration.WithLabelValues("get").Observe(duration)
+
 			logger.Warn().
 				Err(err).
-				Dur("duration_before_error", time.Since(start)).
+				Float64("duration_seconds", duration).
 				Msg("Customer not found")
 			return utils.ErrCustomerNotFound
 		}
 
+		// 📊 MÉTRIQUES : Erreur applicative
+		metrics.CustomerOperationErrors.WithLabelValues("get", "business_error").Inc()
+		metrics.CustomerOperationDuration.WithLabelValues("get").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_get", "customer_handler").Inc()
+
 		logger.Error().
 			Err(err).
 			Stack().
-			Dur("duration_before_error", time.Since(start)).
+			Float64("duration_seconds", duration).
 			Msg("Failed to retrieve customer")
 		return utils.ErrInternalServer
 	}
+
+	// 📊 MÉTRIQUES : Succès get
+	metrics.CustomerOperationDuration.WithLabelValues("get").Observe(duration)
 
 	logger.Debug().
 		Str("customer_email", customer.Email).
@@ -226,10 +253,18 @@ func (h *CustomerHandler) GetAllCustomersHandler(w http.ResponseWriter, r *http.
 
 	logger.Debug().Msg("Executing get all customers usecase")
 	customers, err := h.getAllCustomersUsecase.Execute(ctx)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec listing
+		metrics.CustomerOperationErrors.WithLabelValues("list", "query_error").Inc()
+		metrics.CustomerOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_list", "customer_handler").Inc()
+
 		logger.Error().
 			Err(err).
 			Stack().
+			Float64("duration_seconds", duration).
 			Msg("Failed to retrieve customers")
 		return utils.ErrInternalServer
 	}
@@ -238,11 +273,17 @@ func (h *CustomerHandler) GetAllCustomersHandler(w http.ResponseWriter, r *http.
 
 	if len(customers) == 0 {
 		logger.Info().Msg("No customers found")
+		metrics.CustomerOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.CustomerListedCount.Observe(0)
 		utils.WriteJSON(w, http.StatusOK, []interface{}{})
 		return nil
 	}
 
 	responses := dto.ToCustomerResponses(customers)
+
+	// 📊 MÉTRIQUES : Succès listing
+	metrics.CustomerOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.CustomerListedCount.Observe(float64(len(responses)))
 
 	logger.Info().
 		Int("customers_returned", len(responses)).
@@ -311,15 +352,29 @@ func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.R
 
 	logger.Info().Msg("Executing update customer usecase")
 	updated, err := h.updateCustomerUsecase.Execute(ctx, customer)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
-			logger.Warn().Err(err).Msg("Customer not found for update")
+			// 📊 MÉTRIQUE : Not found
+			metrics.CustomerOperationErrors.WithLabelValues("update", "not_found").Inc()
+			metrics.CustomerOperationDuration.WithLabelValues("update").Observe(duration)
+
+			logger.Warn().Err(err).
+				Float64("duration_seconds", duration).
+				Msg("Customer not found for update")
 			return utils.ErrCustomerNotFound
 		}
+
+		// 📊 MÉTRIQUES : Erreur applicative
+		metrics.CustomerOperationErrors.WithLabelValues("update", "business_error").Inc()
+		metrics.CustomerOperationDuration.WithLabelValues("update").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_update", "customer_handler").Inc()
 
 		logger.Error().
 			Err(err).
 			Stack().
+			Float64("duration_seconds", duration).
 			Interface("update_data", map[string]interface{}{
 				"id":         customer.ID,
 				"email":      customer.Email,
@@ -329,6 +384,10 @@ func (h *CustomerHandler) UpdateCustomerHandler(w http.ResponseWriter, r *http.R
 			Msg("Failed to update customer")
 		return utils.ErrCustomerUpdateFail
 	}
+
+	// 📊 MÉTRIQUES : Succès update
+	metrics.CustomerUpdatedTotal.Inc()
+	metrics.CustomerOperationDuration.WithLabelValues("update").Observe(duration)
 
 	logger.Info().
 		Str("customer_id", updated.ID).
@@ -379,26 +438,41 @@ func (h *CustomerHandler) DeleteCustomerHandler(w http.ResponseWriter, r *http.R
 
 	logger.Debug().Msg("Executing delete customer usecase")
 	err := h.deleteCustomerUsecase.Execute(ctx, id)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			// 📊 MÉTRIQUE : Not found
+			metrics.CustomerOperationErrors.WithLabelValues("delete", "not_found").Inc()
+			metrics.CustomerOperationDuration.WithLabelValues("delete").Observe(duration)
+
 			logger.Warn().
 				Err(err).
-				Dur("duration_before_error", time.Since(start)).
+				Float64("duration_seconds", duration).
 				Msg("Customer not found for deletion")
 			return utils.ErrCustomerNotFound
 		}
 
+		// 📊 MÉTRIQUES : Erreur applicative
+		metrics.CustomerOperationErrors.WithLabelValues("delete", "business_error").Inc()
+		metrics.CustomerOperationDuration.WithLabelValues("delete").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("customer_delete", "customer_handler").Inc()
+
 		logger.Error().
 			Err(err).
 			Stack().
-			Dur("duration_before_error", time.Since(start)).
+			Float64("duration_seconds", duration).
 			Msg("Failed to delete customer")
 		return utils.ErrCustomerDeleteFail
 	}
 
+	// 📊 MÉTRIQUES : Succès deletion
+	metrics.CustomerDeletedTotal.Inc()
+	metrics.CustomerOperationDuration.WithLabelValues("delete").Observe(duration)
+
 	logger.Info().
 		Str("customer_id", id).
-		Dur("duration", time.Since(start)).
+		Float64("duration_seconds", duration).
 		Int("http_status", http.StatusNoContent).
 		Msg("Customer deletion completed")
 

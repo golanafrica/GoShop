@@ -6,7 +6,9 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
+	"Goshop/application/metrics"
 	sessionusecase "Goshop/application/usecase/session_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -19,23 +21,6 @@ import (
 
 // ============================================================
 // 🆕 v4.4.2 : SESSION MANAGEMENT HANDLER
-// ============================================================
-//
-// 🎯 Objectif :
-//   Exposer les endpoints HTTP pour la gestion des sessions.
-//
-// 📋 Endpoints :
-//   - GET    /api/admin/sessions         - Lister les sessions
-//   - GET    /api/admin/sessions/stats   - Statistiques globales
-//   - POST   /api/admin/sessions/revoke  - Révoquer une session
-//   - POST   /api/admin/sessions/revoke-all - Révoquer toutes
-//   - POST   /api/admin/sessions/cleanup - Nettoyage (super_admin)
-//
-// 🔐 Sécurité :
-//   - Tous les endpoints nécessitent une authentification admin
-//   - RBAC : super_admin / admin
-//   - Protection contre auto-revocation de la session courante
-//
 // ============================================================
 
 // SessionHandler gère les endpoints de gestion des sessions
@@ -68,30 +53,16 @@ func NewSessionHandler(
 // ENDPOINT 1 : LIST SESSIONS
 // ============================================================
 
-// @Summary Lister les sessions utilisateur
-// @Description Récupère la liste paginée et filtrée des sessions actives ou passées d'un utilisateur.
-// @Tags Session Management
-// @Accept json
-// @Produce json
-// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
-// @Param active_only query boolean false "Ne retourner que les sessions actives (défaut: true)"
-// @Param limit query int false "Nombre de résultats (défaut: 50, max: 100)"
-// @Param offset query int false "Décalage (défaut: 0)"
-// @Success 200 {object} sessionusecase.ListSessionsResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/sessions [get]
 func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
 		return utils.ErrUnauthorized
 	}
 
-	// Paramètres optionnels
 	userID := r.URL.Query().Get("user_id")
 	activeOnlyStr := r.URL.Query().Get("active_only")
 	limitStr := r.URL.Query().Get("limit")
@@ -121,10 +92,32 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) er
 		Bool("active_only", activeOnly).
 		Msg("📋 List sessions request")
 
-	response, err := h.listSessionsUC.Execute(r.Context(), admin, req)
+	response, err := h.listSessionsUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.SessionOperationTotal.WithLabelValues("list", "error").Inc()
+		metrics.SessionOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("session_list", "session_handler").Inc()
 		return handleSessionError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès
+	metrics.SessionOperationTotal.WithLabelValues("list", "success").Inc()
+	metrics.SessionOperationDuration.WithLabelValues("list").Observe(duration)
+
+	// ✅ Utilisation du vrai champ Total
+	totalSessions := 0
+	if response != nil {
+		totalSessions = response.Total
+	}
+	metrics.SessionsListedCount.Observe(float64(totalSessions))
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Int("total_sessions", totalSessions).
+		Float64("duration_seconds", duration).
+		Msg("Sessions listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -134,20 +127,10 @@ func (h *SessionHandler) ListSessions(w http.ResponseWriter, r *http.Request) er
 // ENDPOINT 2 : GET STATISTICS
 // ============================================================
 
-// @Summary Obtenir les statistiques des sessions
-// @Description Retourne un résumé statistique des sessions actives, expirées et révoquées pour un utilisateur ou globalement.
-// @Tags Session Management
-// @Accept json
-// @Produce json
-// @Param user_id query string false "ID de l'utilisateur cible (admin seulement)"
-// @Success 200 {object} sessionusecase.GetSessionStatsResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/sessions/stats [get]
 func (h *SessionHandler) GetStatistics(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -165,10 +148,31 @@ func (h *SessionHandler) GetStatistics(w http.ResponseWriter, r *http.Request) e
 		Str("target_user_id", userID).
 		Msg("📊 Get session statistics request")
 
-	response, err := h.getStatsUC.Execute(r.Context(), admin, req)
+	response, err := h.getStatsUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.SessionOperationTotal.WithLabelValues("get_stats", "error").Inc()
+		metrics.SessionOperationDuration.WithLabelValues("get_stats").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("session_stats", "session_handler").Inc()
 		return handleSessionError(err)
 	}
+
+	metrics.SessionOperationTotal.WithLabelValues("get_stats", "success").Inc()
+	metrics.SessionOperationDuration.WithLabelValues("get_stats").Observe(duration)
+
+	// ✅ Utilisation du vrai champ Statistics (entity.SessionStatistics)
+	var topUsersCount int
+	if response != nil && response.TopActiveUsers != nil {
+		topUsersCount = len(response.TopActiveUsers)
+	}
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", userID).
+		Int("top_users_count", topUsersCount).
+		Float64("duration_seconds", duration).
+		Msg("Session statistics retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -178,23 +182,10 @@ func (h *SessionHandler) GetStatistics(w http.ResponseWriter, r *http.Request) e
 // ENDPOINT 3 : REVOKE SESSION
 // ============================================================
 
-// @Summary Révoquer une session spécifique
-// @Description Invalide une session active spécifique, forçant la déconnexion de l'appareil concerné.
-// @Tags Session Management
-// @Accept json
-// @Produce json
-// @Param request body sessionusecase.RevokeSessionRequest true "ID de la session cible et motif optionnel"
-// @Success 200 {object} sessionusecase.RevokeSessionResponse
-// @Failure 400 {object} utils.AppError "Payload invalide ou ID manquant"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC ou tentative de révocation de sa propre session)"
-// @Failure 404 {object} utils.AppError "Session introuvable"
-// @Failure 409 {object} utils.AppError "Session déjà révoquée"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/sessions/revoke [post]
 func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -207,7 +198,6 @@ func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) e
 	}
 	defer r.Body.Close()
 
-	// Validation
 	if req.TargetSessionID == "" {
 		return utils.NewAppError("MISSING_FIELD", "target_session_id is required", http.StatusBadRequest)
 	}
@@ -217,10 +207,31 @@ func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) e
 		Str("target_session_id", req.TargetSessionID).
 		Msg("🔐 Revoke session request")
 
-	response, err := h.revokeSessionUC.Execute(r.Context(), admin, &req)
+	response, err := h.revokeSessionUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.SessionOperationTotal.WithLabelValues("revoke", "error").Inc()
+		metrics.SessionOperationDuration.WithLabelValues("revoke").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("session_revoke", "session_handler").Inc()
 		return handleSessionError(err)
 	}
+
+	metrics.SessionOperationTotal.WithLabelValues("revoke", "success").Inc()
+	metrics.SessionOperationDuration.WithLabelValues("revoke").Observe(duration)
+	metrics.SessionRevokedTotal.WithLabelValues("single").Inc()
+
+	// ✅ Utilisation du vrai champ RevokedSessionID
+	var revokedID string
+	if response != nil {
+		revokedID = response.RevokedSessionID
+	}
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("revoked_session_id", revokedID).
+		Float64("duration_seconds", duration).
+		Msg("Session revoked successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -230,21 +241,10 @@ func (h *SessionHandler) RevokeSession(w http.ResponseWriter, r *http.Request) e
 // ENDPOINT 4 : REVOKE ALL SESSIONS
 // ============================================================
 
-// @Summary Révoquer toutes les sessions d'un utilisateur
-// @Description Invalide toutes les sessions actives d'un utilisateur (sauf la session courante de l'admin), forçant une déconnexion globale.
-// @Tags Session Management
-// @Accept json
-// @Produce json
-// @Param request body sessionusecase.RevokeAllSessionsRequest false "ID de l'utilisateur cible et motif optionnel"
-// @Success 200 {object} sessionusecase.RevokeAllSessionsResponse
-// @Failure 400 {object} utils.AppError "Payload invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (RBAC)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/sessions/revoke-all [post]
 func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -253,7 +253,6 @@ func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Reques
 
 	var req sessionusecase.RevokeAllSessionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Body optionnel, continuer avec valeurs par défaut
 		req = sessionusecase.RevokeAllSessionsRequest{}
 	}
 	defer r.Body.Close()
@@ -263,10 +262,32 @@ func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Reques
 		Str("target_user_id", req.UserID).
 		Msg("🔐 Revoke all sessions request")
 
-	response, err := h.revokeAllSessionsUC.Execute(r.Context(), admin, &req)
+	response, err := h.revokeAllSessionsUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.SessionOperationTotal.WithLabelValues("revoke_all", "error").Inc()
+		metrics.SessionOperationDuration.WithLabelValues("revoke_all").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("session_revoke_all", "session_handler").Inc()
 		return handleSessionError(err)
 	}
+
+	metrics.SessionOperationTotal.WithLabelValues("revoke_all", "success").Inc()
+	metrics.SessionOperationDuration.WithLabelValues("revoke_all").Observe(duration)
+	metrics.SessionRevokedTotal.WithLabelValues("bulk").Inc()
+
+	// ✅ Utilisation du vrai champ RevokedCount
+	revokedCount := 0
+	if response != nil {
+		revokedCount = response.RevokedCount
+	}
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", req.UserID).
+		Int("revoked_count", revokedCount).
+		Float64("duration_seconds", duration).
+		Msg("All sessions revoked successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -276,20 +297,10 @@ func (h *SessionHandler) RevokeAllSessions(w http.ResponseWriter, r *http.Reques
 // ENDPOINT 5 : CLEANUP SESSIONS
 // ============================================================
 
-// @Summary Nettoyer les sessions expirées ou révoquées
-// @Description Supprime physiquement les sessions expirées ou révoquées de la base de données pour libérer de l'espace (réservé aux super_admin).
-// @Tags Session Management
-// @Accept json
-// @Produce json
-// @Param request body sessionusecase.CleanupSessionsRequest false "Inclure les sessions révoquées dans le nettoyage (défaut: false)"
-// @Success 200 {object} sessionusecase.CleanupSessionsResponse
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (super_admin requis)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/sessions/cleanup [post]
 func (h *SessionHandler) CleanupSessions(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -298,7 +309,6 @@ func (h *SessionHandler) CleanupSessions(w http.ResponseWriter, r *http.Request)
 
 	var req sessionusecase.CleanupSessionsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		// Body optionnel, utiliser valeurs par défaut
 		req = sessionusecase.CleanupSessionsRequest{
 			IncludeRevoked: false,
 		}
@@ -310,10 +320,32 @@ func (h *SessionHandler) CleanupSessions(w http.ResponseWriter, r *http.Request)
 		Bool("include_revoked", req.IncludeRevoked).
 		Msg("🧹 Cleanup sessions request")
 
-	response, err := h.cleanupUC.Execute(r.Context(), admin, &req)
+	response, err := h.cleanupUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		metrics.SessionOperationTotal.WithLabelValues("cleanup", "error").Inc()
+		metrics.SessionOperationDuration.WithLabelValues("cleanup").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("session_cleanup", "session_handler").Inc()
 		return handleSessionError(err)
 	}
+
+	metrics.SessionOperationTotal.WithLabelValues("cleanup", "success").Inc()
+	metrics.SessionOperationDuration.WithLabelValues("cleanup").Observe(duration)
+
+	// ✅ Utilisation du vrai champ DeletedCount
+	deletedCount := 0
+	if response != nil {
+		deletedCount = response.DeletedCount
+	}
+	metrics.SessionsCleanedTotal.Add(float64(deletedCount))
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Bool("include_revoked", req.IncludeRevoked).
+		Int("deleted_count", deletedCount).
+		Float64("duration_seconds", duration).
+		Msg("Sessions cleaned up successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -323,8 +355,6 @@ func (h *SessionHandler) CleanupSessions(w http.ResponseWriter, r *http.Request)
 // ROUTES REGISTRATION
 // ============================================================
 
-// RegisterRoutes enregistre toutes les routes de gestion des sessions
-// Routes accessibles aux admins (super_admin + admin)
 func (h *SessionHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", middl.ErrorHandler(h.ListSessions))
 	r.Get("/stats", middl.ErrorHandler(h.GetStatistics))
@@ -337,7 +367,6 @@ func (h *SessionHandler) RegisterRoutes(r chi.Router) {
 // HELPERS
 // ============================================================
 
-// extractAdminContext extrait le contexte admin depuis la requête
 func extractAdminContext(r *http.Request) (*sessionusecase.AdminContext, error) {
 	adminID, ok := utils.UserIDFromContext(r.Context())
 	if !ok || adminID == "" {
@@ -358,7 +387,6 @@ func extractAdminContext(r *http.Request) (*sessionusecase.AdminContext, error) 
 	}, nil
 }
 
-// extractIPWithoutPort extrait l'IP sans le port
 func extractIPWithoutPort(addr string) string {
 	if addr == "" {
 		return ""
@@ -372,12 +400,10 @@ func extractIPWithoutPort(addr string) string {
 	return host
 }
 
-// handleSessionError convertit les erreurs usecase en AppError HTTP
 func handleSessionError(err error) error {
 	errMsg := err.Error()
 
 	switch {
-	// Erreurs entité
 	case errors.Is(err, entity.ErrSessionNotFound):
 		return utils.NewAppError("SESSION_NOT_FOUND", errMsg, http.StatusNotFound)
 	case errors.Is(err, entity.ErrSessionExpired):
@@ -389,7 +415,6 @@ func handleSessionError(err error) error {
 	case errors.Is(err, entity.ErrSessionAlreadyActive):
 		return utils.NewAppError("SESSION_ALREADY_ACTIVE", errMsg, http.StatusConflict)
 
-	// Erreurs repository
 	case errors.Is(err, repository.ErrSessionNotFound):
 		return utils.NewAppError("SESSION_NOT_FOUND", errMsg, http.StatusNotFound)
 	case errors.Is(err, repository.ErrSessionAlreadyExists):
@@ -399,7 +424,6 @@ func handleSessionError(err error) error {
 	case errors.Is(err, repository.ErrSessionTokenMismatch):
 		return utils.NewAppError("SESSION_TOKEN_MISMATCH", errMsg, http.StatusUnauthorized)
 
-	// Erreurs de permissions (strings)
 	case errMsg == "insufficient permissions: can only view own sessions":
 		return utils.NewAppError("PERMISSION_DENIED", errMsg, http.StatusForbidden)
 	case errMsg == "insufficient permissions: can only revoke own sessions":

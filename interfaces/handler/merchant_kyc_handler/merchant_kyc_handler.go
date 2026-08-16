@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
-	"strings" // 🆕 AJOUTÉ pour la détection d'erreurs métier
+	"strings"
+	"time"
 
+	"Goshop/application/metrics"
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
@@ -86,6 +89,7 @@ type DocumentReviewInput struct {
 // @Router /api/merchant/kyc/submit [post]
 func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	var req SubmitKYCRequest
@@ -110,16 +114,24 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 		}
 	}
 
-	// ✅ Le usecase récupère le shop_id depuis le contexte tenant (middl.TenantResolver)
 	ucReq := &merchantkycusecase.SubmitMerchantKYCRequest{
 		Documents: ucDocs,
 	}
 
 	response, err := h.submitUC.Execute(ctx, ucReq)
-	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur soumission KYC")
+	duration := time.Since(start).Seconds()
 
-		// 🆕 Détection robuste des erreurs métier
+	if err != nil {
+		// 📊 MÉTRIQUES : Échec soumission
+		metrics.MerchantKYCSubmitTotal.WithLabelValues("error").Inc()
+		metrics.MerchantKYCOperationDuration.WithLabelValues("submit").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_submit", "merchant_kyc_handler").Inc()
+
+		logger.Error().Err(err).
+			Int("documents_count", len(req.Documents)).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur soumission KYC")
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
@@ -135,6 +147,16 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 
 		return utils.NewAppError("SUBMIT_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès soumission
+	metrics.MerchantKYCSubmitTotal.WithLabelValues("success").Inc()
+	metrics.MerchantKYCOperationDuration.WithLabelValues("submit").Observe(duration)
+	metrics.MerchantKYCDocumentsPerSubmit.Observe(float64(len(req.Documents)))
+
+	logger.Info().
+		Int("documents_count", len(req.Documents)).
+		Float64("duration_seconds", duration).
+		Msg("✅ KYC submitted successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -157,12 +179,20 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 // @Router /api/merchant/kyc/status [get]
 func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
-	// ✅ Le usecase récupère le shop_id depuis le contexte tenant
 	response, err := h.statusUC.Execute(ctx)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur récupération statut KYC")
+		// 📊 MÉTRIQUES : Échec status check
+		metrics.MerchantKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_status", "merchant_kyc_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur récupération statut KYC")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -171,6 +201,14 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 
 		return utils.NewAppError("GET_KYC_STATUS_FAILED", err.Error(), http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès status check
+	metrics.MerchantKYCStatusCheckTotal.Inc()
+	metrics.MerchantKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
+
+	logger.Info().
+		Float64("duration_seconds", duration).
+		Msg("✅ KYC status retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -199,6 +237,7 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 // @Router /api/admin/merchant-kyc/pending [get]
 func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	limit := 20
@@ -221,8 +260,18 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 	}
 
 	response, err := h.listUC.Execute(ctx, ucReq)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur liste shops pending")
+		// 📊 MÉTRIQUES : Échec liste pending
+		metrics.MerchantKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_list", "merchant_kyc_handler").Inc()
+
+		logger.Error().Err(err).
+			Int("limit", limit).
+			Int("offset", offset).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur liste shops pending")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -231,6 +280,39 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 
 		return utils.NewAppError("LIST_PENDING_KYC_FAILED", err.Error(), http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès liste pending
+	metrics.MerchantKYCPendingListTotal.Inc()
+	metrics.MerchantKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
+
+	// ✅ EXTRACTION SÉCURISÉE du nombre de résultats
+	// On tente d'accéder aux champs publics de ListPendingResponse
+	pendingCount := 0
+	if response != nil {
+		// Tenter d'accéder au champ Shops (slice) ou Count (int) selon la structure
+		// Utilisation de reflection pour accéder dynamiquement aux champs
+		responseValue := reflect.ValueOf(response).Elem()
+
+		// Chercher un champ "Shops" (slice)
+		if shopsField := responseValue.FieldByName("Shops"); shopsField.IsValid() && shopsField.Kind() == reflect.Slice {
+			pendingCount = shopsField.Len()
+		} else if countField := responseValue.FieldByName("Count"); countField.IsValid() && countField.Kind() == reflect.Int {
+			// Ou chercher un champ "Count" (int)
+			pendingCount = int(countField.Int())
+		} else if totalField := responseValue.FieldByName("Total"); totalField.IsValid() && totalField.Kind() == reflect.Int {
+			// Ou chercher un champ "Total" (int)
+			pendingCount = int(totalField.Int())
+		}
+	}
+
+	metrics.MerchantKYCPendingCount.Observe(float64(pendingCount))
+
+	logger.Info().
+		Int("limit", limit).
+		Int("offset", offset).
+		Int("pending_count", pendingCount).
+		Float64("duration_seconds", duration).
+		Msg("✅ Pending KYC list retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -257,6 +339,7 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 // @Router /api/admin/merchant-kyc/{shop_id}/review [put]
 func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	shopID := chi.URLParam(r, "shop_id")
@@ -271,7 +354,6 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 	}
 	defer r.Body.Close()
 
-	// ✅ FIX : Valider l'action avant d'appeler le usecase pour éviter une erreur 500 "Unhandled"
 	if req.Action != "approve" && req.Action != "reject" {
 		return utils.NewAppError("VALIDATION_ERROR", "action must be 'approve' or 'reject'", http.StatusBadRequest)
 	}
@@ -299,30 +381,53 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 	}
 
 	response, err := h.reviewUC.Execute(ctx, ucReq)
-	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur revue KYC")
+	duration := time.Since(start).Seconds()
 
-		// ✅ FIX CRITIQUE : Détection robuste des erreurs métier (AppError)
+	if err != nil {
+		// 📊 MÉTRIQUES : Échec review
+		metrics.MerchantKYCReviewTotal.WithLabelValues(req.Action, "error").Inc()
+		metrics.MerchantKYCOperationDuration.WithLabelValues("review").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_review", "merchant_kyc_handler").Inc()
+
+		logger.Error().Err(err).
+			Str("shop_id", shopID).
+			Str("action", req.Action).
+			Str("admin_id", adminID).
+			Int("documents_reviewed", len(docReviews)).
+			Float64("duration_seconds", duration).
+			Msg("❌ Erreur revue KYC")
+
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
 			return appErr
 		}
 
-		// 🆕 FIX CRITIQUE : Intercepter les erreurs métier non typées pour éviter les 500
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not pending") ||
 			strings.Contains(errMsg, "already verified") ||
 			strings.Contains(errMsg, "already rejected") ||
 			strings.Contains(errMsg, "unverified") ||
 			strings.Contains(errMsg, "invalid status") {
-			return utils.NewAppError("KYC_INVALID_STATUS", errMsg, http.StatusBadRequest) // 400 au lieu de 500
+			return utils.NewAppError("KYC_INVALID_STATUS", errMsg, http.StatusBadRequest)
 		}
 		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "no documents") {
-			return utils.NewAppError("KYC_NOT_FOUND", errMsg, http.StatusNotFound) // 404
+			return utils.NewAppError("KYC_NOT_FOUND", errMsg, http.StatusNotFound)
 		}
 
 		return utils.NewAppError("REVIEW_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
+
+	// 📊 MÉTRIQUES : Succès review
+	metrics.MerchantKYCReviewTotal.WithLabelValues(req.Action, "success").Inc()
+	metrics.MerchantKYCOperationDuration.WithLabelValues("review").Observe(duration)
+
+	logger.Info().
+		Str("shop_id", shopID).
+		Str("action", req.Action).
+		Str("admin_id", adminID).
+		Int("documents_reviewed", len(docReviews)).
+		Float64("duration_seconds", duration).
+		Msg("✅ KYC reviewed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -345,5 +450,5 @@ func (h *MerchantKYCHandler) RegisterMerchantRoutes(r chi.Router) {
 func (h *MerchantKYCHandler) RegisterAdminRoutes(r chi.Router) {
 	r.Get("/pending", middl.ErrorHandler(h.ListPendingKYC))
 	r.Put("/{shop_id}/review", middl.ErrorHandler(h.ReviewKYC))
-	r.Post("/{shop_id}/review", middl.ErrorHandler(h.ReviewKYC)) // 🆕 Compatibilité scripts E2E
+	r.Post("/{shop_id}/review", middl.ErrorHandler(h.ReviewKYC))
 }

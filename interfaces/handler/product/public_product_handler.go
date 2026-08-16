@@ -3,8 +3,10 @@ package producthandler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	dto "Goshop/application/dto/product_dto"
+	"Goshop/application/metrics"
 	productuscase "Goshop/application/usecase/product_uscase"
 	"Goshop/interfaces/utils"
 
@@ -36,11 +38,11 @@ func NewPublicProductHandler(uc *productuscase.ListPublicProductsUsecase) *Publi
 // @Router /api/public/products [get]
 func (ph *PublicProductHandler) GetPublicProducts(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Msg("Fetching public product catalog with filters")
 
-	// Parsing des paramètres pour le catalogue public
 	req := &dto.ListProductsRequest{
 		Search: r.URL.Query().Get("search"),
 		Limit:  50,
@@ -60,10 +62,33 @@ func (ph *PublicProductHandler) GetPublicProducts(w http.ResponseWriter, r *http
 	}
 
 	products, err := ph.listPublicProductsUsecase.Execute(ctx, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to list public products")
+		// 📊 MÉTRIQUES : Échec catalogue public
+		metrics.ProductsOperationDuration.WithLabelValues("public_list").Observe(duration)
+		metrics.ProductsOperationErrors.WithLabelValues("public_list", "query_error").Inc()
+		metrics.ApplicationErrorsTotal.WithLabelValues("public_product_list", "public_product_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("Failed to list public products")
+
 		return utils.ErrInternalServer
 	}
+
+	// 📊 MÉTRIQUES : Succès catalogue public
+	metrics.PublicProductsListedTotal.Inc()
+	metrics.PublicProductsListedCount.Observe(float64(len(products)))
+	metrics.ProductsOperationDuration.WithLabelValues("public_list").Observe(duration)
+
+	logger.Info().
+		Int("count", len(products)).
+		Int("limit", req.Limit).
+		Int("offset", req.Offset).
+		Str("search", req.Search).
+		Float64("duration_seconds", duration).
+		Msg("Public products listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
