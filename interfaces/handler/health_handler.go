@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"Goshop/application/metrics"
 	"Goshop/config/setupLogging"
 
 	"github.com/redis/go-redis/v9"
@@ -34,6 +35,8 @@ type HealthResponse struct {
 // @Success 200 {object} map[string]string
 // @Router /health/live [get]
 func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.Logger != nil {
 		h.Logger.Debug().Msg("Liveness probe received")
 	}
@@ -42,6 +45,13 @@ func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
 		"status":    "alive",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
+
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Liveness check
+	metrics.HealthCheckTotal.WithLabelValues("liveness", "success").Inc()
+	metrics.HealthCheckDuration.WithLabelValues("liveness").Observe(duration)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(res)
@@ -55,6 +65,7 @@ func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
 // @Failure 503 {object} handler.HealthResponse "Service indisponible (dépendances non prêtes)"
 // @Router /health/ready [get]
 func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -66,26 +77,40 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	// Test PostgreSQL - CRITIQUE
 	if h.DB != nil {
+		dbStart := time.Now()
 		if err := h.DB.PingContext(ctx); err == nil {
 			postgresOK = true
-		} else if h.Logger != nil {
-			h.Logger.Error().Err(err).Msg("PostgreSQL readiness check failed")
+			metrics.HealthDependenciesStatus.WithLabelValues("postgres").Set(1)
+		} else {
+			metrics.HealthDependenciesStatus.WithLabelValues("postgres").Set(0)
+			if h.Logger != nil {
+				h.Logger.Error().Err(err).Msg("PostgreSQL readiness check failed")
+			}
 			message = "Database connection failed"
 		}
+		metrics.HealthDatabasePingDuration.Observe(time.Since(dbStart).Seconds())
 	} else {
+		metrics.HealthDependenciesStatus.WithLabelValues("postgres").Set(0)
 		message = "Database connection not initialized"
 	}
 
 	// Test Redis (optionnel)
 	if h.Rdb != nil {
+		redisStart := time.Now()
 		if _, err := h.Rdb.Ping(ctx).Result(); err == nil {
 			redisOK = true
-		} else if h.Logger != nil {
-			h.Logger.Warn().Err(err).Msg("Redis readiness check failed")
+			metrics.HealthDependenciesStatus.WithLabelValues("redis").Set(1)
+		} else {
+			metrics.HealthDependenciesStatus.WithLabelValues("redis").Set(0)
+			if h.Logger != nil {
+				h.Logger.Warn().Err(err).Msg("Redis readiness check failed")
+			}
 		}
+		metrics.HealthRedisPingDuration.Observe(time.Since(redisStart).Seconds())
 	} else {
 		// Redis non configuré = OK pour les tests
 		redisOK = true
+		metrics.HealthDependenciesStatus.WithLabelValues("redis").Set(1)
 	}
 
 	// Déterminer le statut final
@@ -96,6 +121,16 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 			message = "All systems operational"
 		}
 	}
+
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Readiness check
+	if httpStatus == http.StatusOK {
+		metrics.HealthCheckTotal.WithLabelValues("readiness", "success").Inc()
+	} else {
+		metrics.HealthCheckTotal.WithLabelValues("readiness", "error").Inc()
+	}
+	metrics.HealthCheckDuration.WithLabelValues("readiness").Observe(duration)
 
 	resp := HealthResponse{
 		Status:    status,
@@ -117,11 +152,20 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Router /health [get]
 func (h *HealthHandler) SimpleHealth(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	resp := map[string]string{
 		"status":    "ok",
 		"message":   "API is running",
 		"timestamp": time.Now().Format(time.RFC3339),
 	}
+
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Simple health check
+	metrics.HealthCheckTotal.WithLabelValues("simple", "success").Inc()
+	metrics.HealthCheckDuration.WithLabelValues("simple").Observe(duration)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)

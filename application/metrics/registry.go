@@ -201,4 +201,28 @@ func RegisterMetrics() {
 	prometheus.MustRegister(AdminShopListedCount)
 	prometheus.MustRegister(AdminShopHealthChecksTotal)
 
+	// ========== WebSocket (6) ==========
+	prometheus.MustRegister(WebSocketConnectionsTotal)
+	prometheus.MustRegister(WebSocketConnectionsActive)
+	prometheus.MustRegister(WebSocketConnectionDuration)
+	prometheus.MustRegister(WebSocketMessagesReceived)
+	prometheus.MustRegister(WebSocketUpgradeErrors)
+	prometheus.MustRegister(WebSocketUnexpectedCloses)
+
+	// ========== Health Checks (5) ==========
+	prometheus.MustRegister(HealthCheckTotal)
+	prometheus.MustRegister(HealthCheckDuration)
+	prometheus.MustRegister(HealthDependenciesStatus)
+	prometheus.MustRegister(HealthDatabasePingDuration)
+	prometheus.MustRegister(HealthRedisPingDuration)
+
+	// ========== Withdrawals (7) ==========
+	prometheus.MustRegister(WithdrawalCreateTotal)
+	prometheus.MustRegister(WithdrawalListTotal)
+	prometheus.MustRegister(WithdrawalGetTotal)
+	prometheus.MustRegister(WithdrawalOperationDuration)
+	prometheus.MustRegister(WithdrawalAmountCents)
+	prometheus.MustRegister(WithdrawalHeldCentsRejections)
+	prometheus.MustRegister(WithdrawalListedCount)
+
 }

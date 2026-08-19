@@ -845,3 +845,136 @@ var (
 		Help: "Total number of shop health score checks",
 	})
 )
+
+// ================================
+// 🆕 MÉTRIQUES WEBSOCKET
+// ================================
+
+var (
+	// WebSocketConnectionsTotal compte les connexions WebSocket
+	WebSocketConnectionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_websocket_connections_total",
+		Help: "Total number of WebSocket connections",
+	}, []string{"status"})
+
+	// WebSocketConnectionsActive gauge des connexions actives
+	WebSocketConnectionsActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goshop_websocket_connections_active",
+		Help: "Number of active WebSocket connections",
+	})
+
+	// WebSocketConnectionDuration mesure la durée des connexions
+	WebSocketConnectionDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_websocket_connection_duration_seconds",
+		Help:    "Duration of WebSocket connections in seconds",
+		Buckets: []float64{1, 5, 10, 30, 60, 300, 600, 1800, 3600},
+	})
+
+	// WebSocketMessagesReceived compte les messages reçus
+	WebSocketMessagesReceived = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_websocket_messages_received_total",
+		Help: "Total number of WebSocket messages received",
+	})
+
+	// WebSocketUpgradeErrors compte les erreurs d'upgrade
+	WebSocketUpgradeErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_websocket_upgrade_errors_total",
+		Help: "Total number of WebSocket upgrade failures",
+	})
+
+	// WebSocketUnexpectedCloses compte les fermetures inattendues
+	WebSocketUnexpectedCloses = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_websocket_unexpected_closes_total",
+		Help: "Total number of unexpected WebSocket disconnections",
+	})
+)
+
+// ================================
+// 🆕 MÉTRIQUES HEALTH CHECKS
+// ================================
+
+var (
+	// HealthCheckTotal compte les health checks par type
+	HealthCheckTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_health_check_total",
+		Help: "Total number of health checks by type",
+	}, []string{"type", "status"})
+
+	// HealthCheckDuration mesure la durée des health checks
+	HealthCheckDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "goshop_health_check_duration_seconds",
+		Help:    "Duration of health checks in seconds",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 3},
+	}, []string{"type"})
+
+	// HealthDependenciesStatus gauge du status des dépendances
+	HealthDependenciesStatus = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "goshop_health_dependencies_status",
+		Help: "Status of external dependencies (1=healthy, 0=unhealthy)",
+	}, []string{"dependency"})
+
+	// HealthDatabasePingDuration mesure la durée des pings DB
+	HealthDatabasePingDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_health_database_ping_duration_seconds",
+		Help:    "Duration of database ping in seconds",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 3},
+	})
+
+	// HealthRedisPingDuration mesure la durée des pings Redis
+	HealthRedisPingDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_health_redis_ping_duration_seconds",
+		Help:    "Duration of Redis ping in seconds",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 3},
+	})
+)
+
+// ================================
+// 🆕 MÉTRIQUES WITHDRAWALS
+// ================================
+
+var (
+	// WithdrawalCreateTotal compte les créations de retraits
+	WithdrawalCreateTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_withdrawal_create_total",
+		Help: "Total number of withdrawal creations by status",
+	}, []string{"status"})
+
+	// WithdrawalListTotal compte les listings de retraits
+	WithdrawalListTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_withdrawal_list_total",
+		Help: "Total number of withdrawal list operations by status",
+	}, []string{"status"})
+
+	// WithdrawalGetTotal compte les récupérations de retraits par ID
+	WithdrawalGetTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_withdrawal_get_total",
+		Help: "Total number of withdrawal get operations by status",
+	}, []string{"status"})
+
+	// WithdrawalOperationDuration mesure la durée des opérations de retrait
+	WithdrawalOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "goshop_withdrawal_operation_duration_seconds",
+		Help:    "Duration of withdrawal operations in seconds",
+		Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+	}, []string{"operation"})
+
+	// WithdrawalAmountCents observe les montants des retraits
+	WithdrawalAmountCents = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_withdrawal_amount_cents",
+		Help:    "Distribution of withdrawal amounts in cents",
+		Buckets: []float64{1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 5000000},
+	})
+
+	// WithdrawalHeldCentsRejections compte les rejets dus à held_cents
+	WithdrawalHeldCentsRejections = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_withdrawal_held_cents_rejections_total",
+		Help: "Total number of withdrawals rejected due to held_cents protection",
+	})
+
+	// WithdrawalListedCount distribution du nombre de retraits retournés
+	WithdrawalListedCount = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_withdrawal_listed_count",
+		Help:    "Distribution of withdrawals returned by list operation",
+		Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200},
+	})
+)

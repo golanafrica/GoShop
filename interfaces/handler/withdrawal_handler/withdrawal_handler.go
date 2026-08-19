@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	withdrawaldto "Goshop/application/dto/withdrawal_dto"
+	"Goshop/application/metrics"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
 	"Goshop/domain/tenant"
 	"Goshop/interfaces/utils"
@@ -31,14 +33,14 @@ type ListWithdrawalsUseCaseInterface interface {
 type WithdrawalHandler struct {
 	createUC CreateWithdrawalUseCaseInterface
 	listUC   ListWithdrawalsUseCaseInterface
-	debitUC  *walletusecase.DebitWalletUsecase // 🆕 Phase 2 : Pour vérification held_cents
+	debitUC  *walletusecase.DebitWalletUsecase
 }
 
 // NewWithdrawalHandler crée une nouvelle instance
 func NewWithdrawalHandler(
 	createUC CreateWithdrawalUseCaseInterface,
 	listUC ListWithdrawalsUseCaseInterface,
-	debitUC *walletusecase.DebitWalletUsecase, // 🆕 Phase 2
+	debitUC *walletusecase.DebitWalletUsecase,
 ) *WithdrawalHandler {
 	return &WithdrawalHandler{
 		createUC: createUC,
@@ -62,15 +64,24 @@ func NewWithdrawalHandler(
 // @Router /api/withdrawals [post]
 func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	var req withdrawaldto.CreateWithdrawalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.WithdrawalCreateTotal.WithLabelValues("validation_error").Inc()
+		metrics.WithdrawalOperationDuration.WithLabelValues("create").Observe(time.Since(start).Seconds())
+
 		logger.Error().Err(err).Msg("Invalid JSON payload")
 		return utils.ErrInvalidPayload
 	}
 
 	if err := req.Validate(); err != nil {
+		// 📊 MÉTRIQUE : Erreur validation
+		metrics.WithdrawalCreateTotal.WithLabelValues("validation_error").Inc()
+		metrics.WithdrawalOperationDuration.WithLabelValues("create").Observe(time.Since(start).Seconds())
+
 		logger.Warn().Err(err).Msg("Validation failed")
 		return utils.NewAppError("VALIDATION_FAILED", err.Error(), http.StatusBadRequest)
 	}
@@ -83,12 +94,18 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 		if err == nil {
 			availableCents := wallet.AvailableCents()
 			if req.AmountCents > availableCents {
+				// 📊 MÉTRIQUE : Rejet held_cents
+				metrics.WithdrawalHeldCentsRejections.Inc()
+				metrics.WithdrawalCreateTotal.WithLabelValues("held_cents_rejected").Inc()
+				metrics.WithdrawalOperationDuration.WithLabelValues("create").Observe(time.Since(start).Seconds())
+
 				logger.Warn().
 					Str("shop_id", shopID).
 					Int64("requested", req.AmountCents).
 					Int64("available", availableCents).
 					Int64("held_cents", wallet.HeldCents).
 					Int64("balance_cents", wallet.BalanceCents).
+					Float64("duration_seconds", time.Since(start).Seconds()).
 					Msg("❌ Withdrawal rejected: insufficient available balance (held_cents protection)")
 
 				return utils.NewAppError(
@@ -102,10 +119,32 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 	}
 
 	resp, err := h.createUC.Execute(ctx, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to create withdrawal")
+		// 📊 MÉTRIQUES : Échec création
+		metrics.WithdrawalCreateTotal.WithLabelValues("error").Inc()
+		metrics.WithdrawalOperationDuration.WithLabelValues("create").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("withdrawal_create", "withdrawal_handler").Inc()
+
+		logger.Error().Err(err).
+			Int64("amount_cents", req.AmountCents).
+			Float64("duration_seconds", duration).
+			Msg("Failed to create withdrawal")
+
 		return utils.NewAppError("WITHDRAWAL_FAILED", err.Error(), http.StatusBadRequest)
 	}
+
+	// 📊 MÉTRIQUES : Succès création
+	metrics.WithdrawalCreateTotal.WithLabelValues("success").Inc()
+	metrics.WithdrawalOperationDuration.WithLabelValues("create").Observe(duration)
+	metrics.WithdrawalAmountCents.Observe(float64(req.AmountCents))
+
+	// ✅ CORRECTION : Retiré req.Method qui n'existe pas
+	logger.Info().
+		Int64("amount_cents", req.AmountCents).
+		Float64("duration_seconds", duration).
+		Msg("✅ Withdrawal created successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, resp)
 	return nil
@@ -125,6 +164,7 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 // @Router /api/withdrawals [get]
 func (h *WithdrawalHandler) ListWithdrawals(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	limit := 50
@@ -142,10 +182,34 @@ func (h *WithdrawalHandler) ListWithdrawals(w http.ResponseWriter, r *http.Reque
 	}
 
 	responses, err := h.listUC.Execute(ctx, limit, offset)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to list withdrawals")
+		// 📊 MÉTRIQUES : Échec listing
+		metrics.WithdrawalListTotal.WithLabelValues("error").Inc()
+		metrics.WithdrawalOperationDuration.WithLabelValues("list").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("withdrawal_list", "withdrawal_handler").Inc()
+
+		logger.Error().Err(err).
+			Int("limit", limit).
+			Int("offset", offset).
+			Float64("duration_seconds", duration).
+			Msg("Failed to list withdrawals")
+
 		return utils.ErrInternalServer
 	}
+
+	// 📊 MÉTRIQUES : Succès listing
+	metrics.WithdrawalListTotal.WithLabelValues("success").Inc()
+	metrics.WithdrawalOperationDuration.WithLabelValues("list").Observe(duration)
+	metrics.WithdrawalListedCount.Observe(float64(len(responses)))
+
+	logger.Info().
+		Int("withdrawals_count", len(responses)).
+		Int("limit", limit).
+		Int("offset", offset).
+		Float64("duration_seconds", duration).
+		Msg("✅ Withdrawals listed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, responses)
 	return nil
@@ -167,26 +231,69 @@ func (h *WithdrawalHandler) ListWithdrawals(w http.ResponseWriter, r *http.Reque
 // @Router /api/withdrawals/{id} [get]
 func (h *WithdrawalHandler) GetWithdrawal(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	id := chi.URLParam(r, "id")
 	if id == "" {
+		// 📊 MÉTRIQUE : ID manquant
+		metrics.WithdrawalGetTotal.WithLabelValues("validation_error").Inc()
+		metrics.WithdrawalOperationDuration.WithLabelValues("get").Observe(time.Since(start).Seconds())
 		return utils.ErrInvalidPayload
 	}
 
 	resp, err := h.listUC.GetWithdrawal(ctx, id)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("Failed to get withdrawal")
 		errMsg := err.Error()
+
+		// 📊 MÉTRIQUES : Échecs spécifiques
 		switch {
 		case errMsg == "withdrawal not found":
+			metrics.WithdrawalGetTotal.WithLabelValues("not_found").Inc()
+			metrics.WithdrawalOperationDuration.WithLabelValues("get").Observe(duration)
+
+			logger.Warn().
+				Str("withdrawal_id", id).
+				Float64("duration_seconds", duration).
+				Msg("Withdrawal not found")
+
 			return utils.NewAppError("WITHDRAWAL_NOT_FOUND", errMsg, http.StatusNotFound)
+
 		case errMsg == "withdrawal does not belong to this shop":
+			metrics.WithdrawalGetTotal.WithLabelValues("forbidden").Inc()
+			metrics.WithdrawalOperationDuration.WithLabelValues("get").Observe(duration)
+
+			logger.Warn().
+				Str("withdrawal_id", id).
+				Float64("duration_seconds", duration).
+				Msg("Withdrawal access forbidden")
+
 			return utils.ErrForbidden
+
 		default:
+			metrics.WithdrawalGetTotal.WithLabelValues("error").Inc()
+			metrics.WithdrawalOperationDuration.WithLabelValues("get").Observe(duration)
+			metrics.ApplicationErrorsTotal.WithLabelValues("withdrawal_get", "withdrawal_handler").Inc()
+
+			logger.Error().Err(err).
+				Str("withdrawal_id", id).
+				Float64("duration_seconds", duration).
+				Msg("Failed to get withdrawal")
+
 			return utils.ErrInternalServer
 		}
 	}
+
+	// 📊 MÉTRIQUES : Succès get
+	metrics.WithdrawalGetTotal.WithLabelValues("success").Inc()
+	metrics.WithdrawalOperationDuration.WithLabelValues("get").Observe(duration)
+
+	logger.Info().
+		Str("withdrawal_id", id).
+		Float64("duration_seconds", duration).
+		Msg("✅ Withdrawal retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, resp)
 	return nil
