@@ -978,3 +978,121 @@ var (
 		Buckets: []float64{0, 1, 5, 10, 20, 50, 100, 200},
 	})
 )
+
+// ================================
+// 🆕 MÉTRIQUES 2FA (Two-Factor Authentication)
+// ================================
+
+var (
+	// TwoFAOperationTotal compte les opérations 2FA par type et statut
+	TwoFAOperationTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_2fa_operation_total",
+		Help: "Total number of 2FA operations by type and status",
+	}, []string{"operation", "status"})
+
+	// TwoFAOperationDuration mesure la durée des opérations 2FA
+	TwoFAOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "goshop_2fa_operation_duration_seconds",
+		Help:    "Duration of 2FA operations in seconds",
+		Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
+	}, []string{"operation"})
+
+	// TwoFAVerificationAttempts compte les tentatives de vérification
+	TwoFAVerificationAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_2fa_verification_attempts_total",
+		Help: "Total number of 2FA verification attempts",
+	}, []string{"status"})
+
+	// TwoFARecoveryCodesUsed compte les codes de récupération utilisés
+	TwoFARecoveryCodesUsed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_2fa_recovery_codes_used_total",
+		Help: "Total number of recovery codes used",
+	})
+
+	// TwoFAInvalidCodes compte les codes TOTP invalides
+	TwoFAInvalidCodes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_2fa_invalid_codes_total",
+		Help: "Total number of invalid TOTP codes",
+	})
+
+	// TwoFAEnabledUsers gauge des utilisateurs avec 2FA activée
+	TwoFAEnabledUsers = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goshop_2fa_enabled_users",
+		Help: "Number of users with 2FA enabled",
+	})
+)
+
+// ================================
+// 🆕 MÉTRIQUES SYNC ORDER
+// ================================
+
+var (
+	// SyncOrderTotal compte les synchronisations de paiement order
+	SyncOrderTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_sync_order_total",
+		Help: "Total number of order payment syncs",
+	}, []string{"status"})
+
+	// SyncOrderDuration mesure la durée des synchronisations
+	SyncOrderDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_sync_order_duration_seconds",
+		Help:    "Duration of order payment syncs in seconds",
+		Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+	})
+
+	// SyncOrderPaymentConfirmed compte les paiements confirmés via sync
+	SyncOrderPaymentConfirmed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_sync_order_payment_confirmed_total",
+		Help: "Total number of payments confirmed via sync",
+	})
+)
+
+// ================================
+// 🆕 MÉTRIQUES FILE HANDLER
+// ================================
+
+var (
+	// FilePresignedURLGenerated compte les URLs pré-signées générées
+	FilePresignedURLGenerated = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_file_presigned_url_generated_total",
+		Help: "Total number of presigned URLs generated",
+	}, []string{"status"})
+
+	// FileDownloadTotal compte les téléchargements de fichiers
+	FileDownloadTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_file_download_total",
+		Help: "Total number of file downloads",
+	}, []string{"status", "mime_type"})
+
+	// FileOperationDuration mesure la durée des opérations fichier
+	FileOperationDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "goshop_file_operation_duration_seconds",
+		Help:    "Duration of file operations in seconds",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5},
+	}, []string{"operation"})
+
+	// FileDownloadSizeBytes observe la taille des fichiers téléchargés
+	FileDownloadSizeBytes = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "goshop_file_download_size_bytes",
+		Help:    "Distribution of downloaded file sizes in bytes",
+		Buckets: []float64{1024, 10240, 102400, 1048576, 10485760, 104857600},
+	})
+
+	// FileSecurityViolations compte les violations de sécurité
+	FileSecurityViolations = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_file_security_violations_total",
+		Help: "Total number of file security violations",
+	}, []string{"type"})
+
+	// FileExpiredURLs compte les URLs expirées
+	FileExpiredURLs = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_file_expired_urls_total",
+		Help: "Total number of expired presigned URLs",
+	})
+
+	// FileInvalidSignatures compte les signatures invalides
+	FileInvalidSignatures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_file_invalid_signatures_total",
+		Help: "Total number of invalid file signatures",
+	})
+)

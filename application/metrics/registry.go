@@ -224,5 +224,26 @@ func RegisterMetrics() {
 	prometheus.MustRegister(WithdrawalAmountCents)
 	prometheus.MustRegister(WithdrawalHeldCentsRejections)
 	prometheus.MustRegister(WithdrawalListedCount)
+	// ========== 2FA (6) ==========
+	prometheus.MustRegister(TwoFAOperationTotal)
+	prometheus.MustRegister(TwoFAOperationDuration)
+	prometheus.MustRegister(TwoFAVerificationAttempts)
+	prometheus.MustRegister(TwoFARecoveryCodesUsed)
+	prometheus.MustRegister(TwoFAInvalidCodes)
+	prometheus.MustRegister(TwoFAEnabledUsers)
+
+	// ========== Sync Order (3) ==========
+	prometheus.MustRegister(SyncOrderTotal)
+	prometheus.MustRegister(SyncOrderDuration)
+	prometheus.MustRegister(SyncOrderPaymentConfirmed)
+
+	// ========== File Handler (7) ==========
+	prometheus.MustRegister(FilePresignedURLGenerated)
+	prometheus.MustRegister(FileDownloadTotal)
+	prometheus.MustRegister(FileOperationDuration)
+	prometheus.MustRegister(FileDownloadSizeBytes)
+	prometheus.MustRegister(FileSecurityViolations)
+	prometheus.MustRegister(FileExpiredURLs)
+	prometheus.MustRegister(FileInvalidSignatures)
 
 }

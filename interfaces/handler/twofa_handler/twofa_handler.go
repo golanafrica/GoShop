@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"time"
 
+	"Goshop/application/metrics"
 	twofausecase "Goshop/application/usecase/twofa_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -18,10 +20,8 @@ import (
 
 // ============================================================
 // 🆕 v4.4.0 : 2FA HANDLER
-// 🆕 v4.4.1 : + Gestion erreur Err2FACodeAlreadyUsed
 // ============================================================
 
-// TwoFAHandler gère les endpoints 2FA
 type TwoFAHandler struct {
 	setupUC           *twofausecase.Setup2FAUsecase
 	verifyEnableUC    *twofausecase.VerifyAndEnable2FAUsecase
@@ -30,7 +30,6 @@ type TwoFAHandler struct {
 	regenerateCodesUC *twofausecase.RegenerateRecoveryCodesUsecase
 }
 
-// NewTwoFAHandler crée une nouvelle instance
 func NewTwoFAHandler(
 	setupUC *twofausecase.Setup2FAUsecase,
 	verifyEnableUC *twofausecase.VerifyAndEnable2FAUsecase,
@@ -47,23 +46,11 @@ func NewTwoFAHandler(
 	}
 }
 
-// ============================================================
-// ENDPOINT 1 : SETUP 2FA
-// ============================================================
-
 // @Summary Initialiser la configuration 2FA
-// @Description Génère un secret TOTP et un QR code pour configurer une application d'authentification (Google Authenticator, Authy, etc.).
-// @Tags Two-Factor Authentication (2FA)
-// @Accept json
-// @Produce json
-// @Success 201 {object} map[string]interface{}
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 409 {object} utils.AppError "La 2FA est déjà activée"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/2fa/setup [post]
 func (h *TwoFAHandler) Setup2FA(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -80,33 +67,40 @@ func (h *TwoFAHandler) Setup2FA(w http.ResponseWriter, r *http.Request) error {
 		Str("admin_id", admin.AdminID).
 		Msg("🔐 Setup 2FA request")
 
-	response, err := h.setupUC.Execute(r.Context(), admin, &req)
+	response, err := h.setupUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec setup
+		metrics.TwoFAOperationTotal.WithLabelValues("setup", "error").Inc()
+		metrics.TwoFAOperationDuration.WithLabelValues("setup").Observe(duration)
+		metrics.ApplicationErrorsTotal.WithLabelValues("2fa_setup", "2fa_handler").Inc()
+
+		logger.Error().Err(err).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to setup 2FA")
+
 		return handle2FAError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès setup
+	metrics.TwoFAOperationTotal.WithLabelValues("setup", "success").Inc()
+	metrics.TwoFAOperationDuration.WithLabelValues("setup").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Float64("duration_seconds", duration).
+		Msg("✅ 2FA setup completed successfully")
 
 	utils.WriteJSON(w, http.StatusCreated, response)
 	return nil
 }
 
-// ============================================================
-// ENDPOINT 2 : VERIFY & ENABLE 2FA
-// ============================================================
-
 // @Summary Vérifier et activer la 2FA
-// @Description Valide le code TOTP à 6 chiffres pour activer définitivement la double authentification.
-// @Tags Two-Factor Authentication (2FA)
-// @Accept json
-// @Produce json
-// @Param request body twofausecase.VerifyAndEnable2FARequest true "Code TOTP à 6 chiffres"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Code invalide ou format incorrect"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/2fa/verify [post]
 func (h *TwoFAHandler) VerifyAndEnable2FA(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -127,34 +121,47 @@ func (h *TwoFAHandler) VerifyAndEnable2FA(w http.ResponseWriter, r *http.Request
 		Str("admin_id", admin.AdminID).
 		Msg("🔐 Verify & Enable 2FA request")
 
-	response, err := h.verifyEnableUC.Execute(r.Context(), admin, &req)
+	response, err := h.verifyEnableUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec vérification
+		metrics.TwoFAVerificationAttempts.WithLabelValues("error").Inc()
+		metrics.TwoFAOperationTotal.WithLabelValues("verify", "error").Inc()
+		metrics.TwoFAOperationDuration.WithLabelValues("verify").Observe(duration)
+
+		// Détecter les codes invalides
+		if errors.Is(err, entity.Err2FAInvalidCode) {
+			metrics.TwoFAInvalidCodes.Inc()
+		}
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to verify and enable 2FA")
+
 		return handle2FAError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès vérification
+	metrics.TwoFAVerificationAttempts.WithLabelValues("success").Inc()
+	metrics.TwoFAOperationTotal.WithLabelValues("verify", "success").Inc()
+	metrics.TwoFAOperationDuration.WithLabelValues("verify").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Float64("duration_seconds", duration).
+		Msg("✅ 2FA verified and enabled successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
 }
 
-// ============================================================
-// ENDPOINT 3 : DISABLE 2FA
-// ============================================================
-
 // @Summary Désactiver la 2FA
-// @Description Désactive la double authentification en utilisant soit le code TOTP actuel, soit un code de récupération.
-// @Tags Two-Factor Authentication (2FA)
-// @Accept json
-// @Produce json
-// @Param request body twofausecase.Disable2FARequest true "Code TOTP ou code de récupération"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Code invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 409 {object} utils.AppError "La 2FA n'est pas activée"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/2fa/disable [post]
 func (h *TwoFAHandler) Disable2FA(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -172,33 +179,51 @@ func (h *TwoFAHandler) Disable2FA(w http.ResponseWriter, r *http.Request) error 
 		Bool("is_recovery", req.IsRecovery).
 		Msg("🔐 Disable 2FA request")
 
-	response, err := h.disableUC.Execute(r.Context(), admin, &req)
+	response, err := h.disableUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec disable
+		metrics.TwoFAOperationTotal.WithLabelValues("disable", "error").Inc()
+		metrics.TwoFAOperationDuration.WithLabelValues("disable").Observe(duration)
+
+		// Détecter l'utilisation de codes de récupération
+		if req.IsRecovery && errors.Is(err, entity.Err2FARecoveryCodeUsed) {
+			metrics.TwoFARecoveryCodesUsed.Inc()
+		}
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Bool("is_recovery", req.IsRecovery).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to disable 2FA")
+
 		return handle2FAError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès disable
+	metrics.TwoFAOperationTotal.WithLabelValues("disable", "success").Inc()
+	metrics.TwoFAOperationDuration.WithLabelValues("disable").Observe(duration)
+
+	if req.IsRecovery {
+		metrics.TwoFARecoveryCodesUsed.Inc()
+	}
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Bool("is_recovery", req.IsRecovery).
+		Float64("duration_seconds", duration).
+		Msg("✅ 2FA disabled successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
 }
 
-// ============================================================
-// ENDPOINT 4 : GET 2FA STATUS
-// ============================================================
-
 // @Summary Obtenir le statut 2FA d'un utilisateur
-// @Description Vérifie si la double authentification est activée pour un utilisateur donné.
-// @Tags Two-Factor Authentication (2FA)
-// @Accept json
-// @Produce json
-// @Param user_id query string false "ID de l'utilisateur cible (défaut: utilisateur connecté)"
-// @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/2fa/status [get]
 func (h *TwoFAHandler) Get2FAStatus(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -219,35 +244,41 @@ func (h *TwoFAHandler) Get2FAStatus(w http.ResponseWriter, r *http.Request) erro
 		Str("target_user_id", userID).
 		Msg("🔐 Get 2FA status request")
 
-	response, err := h.getStatusUC.Execute(r.Context(), admin, req)
+	response, err := h.getStatusUC.Execute(ctx, admin, req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec get status
+		metrics.TwoFAOperationTotal.WithLabelValues("get_status", "error").Inc()
+		metrics.TwoFAOperationDuration.WithLabelValues("get_status").Observe(duration)
+
+		logger.Error().Err(err).
+			Str("target_user_id", userID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to get 2FA status")
+
 		return handle2FAError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès get status
+	metrics.TwoFAOperationTotal.WithLabelValues("get_status", "success").Inc()
+	metrics.TwoFAOperationDuration.WithLabelValues("get_status").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Str("target_user_id", userID).
+		Float64("duration_seconds", duration).
+		Msg("✅ 2FA status retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
 }
 
-// ============================================================
-// ENDPOINT 5 : REGENERATE RECOVERY CODES
-// ============================================================
-
 // @Summary Régénérer les codes de récupération 2FA
-// @Description Génère de nouveaux codes de récupération à usage unique, invalidant les anciens. Nécessite une validation TOTP.
-// @Tags Two-Factor Authentication (2FA)
-// @Accept json
-// @Produce json
-// @Param request body twofausecase.RegenerateRecoveryCodesRequest true "Code TOTP actuel pour validation"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Code invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 409 {object} utils.AppError "La 2FA n'est pas activée"
-// @Failure 429 {object} utils.AppError "Code déjà utilisé (protection anti-replay)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/2fa/regenerate-codes [post]
 func (h *TwoFAHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) error {
-	logger := zerolog.Ctx(r.Context())
+	ctx := r.Context()
+	start := time.Now()
+	logger := zerolog.Ctx(ctx)
 
 	admin, err := extractAdminContext(r)
 	if err != nil {
@@ -268,10 +299,34 @@ func (h *TwoFAHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		Str("admin_id", admin.AdminID).
 		Msg("🔐 Regenerate recovery codes request")
 
-	response, err := h.regenerateCodesUC.Execute(r.Context(), admin, &req)
+	response, err := h.regenerateCodesUC.Execute(ctx, admin, &req)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
+		// 📊 MÉTRIQUES : Échec regenerate
+		metrics.TwoFAOperationTotal.WithLabelValues("regenerate_codes", "error").Inc()
+		metrics.TwoFAOperationDuration.WithLabelValues("regenerate_codes").Observe(duration)
+
+		if errors.Is(err, entity.Err2FAInvalidCode) {
+			metrics.TwoFAInvalidCodes.Inc()
+		}
+
+		logger.Error().Err(err).
+			Str("admin_id", admin.AdminID).
+			Float64("duration_seconds", duration).
+			Msg("❌ Failed to regenerate recovery codes")
+
 		return handle2FAError(err)
 	}
+
+	// 📊 MÉTRIQUES : Succès regenerate
+	metrics.TwoFAOperationTotal.WithLabelValues("regenerate_codes", "success").Inc()
+	metrics.TwoFAOperationDuration.WithLabelValues("regenerate_codes").Observe(duration)
+
+	logger.Info().
+		Str("admin_id", admin.AdminID).
+		Float64("duration_seconds", duration).
+		Msg("✅ Recovery codes regenerated successfully")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 	return nil
@@ -322,12 +377,10 @@ func extractIPWithoutPort(addr string) string {
 	return host
 }
 
-// handle2FAError convertit les erreurs usecase en AppError HTTP
 func handle2FAError(err error) error {
 	errMsg := err.Error()
 
 	switch {
-	// Erreurs typées (entity)
 	case errors.Is(err, entity.Err2FANotEnabled):
 		return utils.NewAppError("2FA_NOT_ENABLED", errMsg, http.StatusBadRequest)
 	case errors.Is(err, entity.Err2FAAlreadyEnabled):
@@ -344,11 +397,9 @@ func handle2FAError(err error) error {
 		return utils.NewAppError("2FA_RECOVERY_CODE_NOT_FOUND", errMsg, http.StatusBadRequest)
 	case errors.Is(err, entity.Err2FASecretRequired):
 		return utils.NewAppError("2FA_SECRET_REQUIRED", errMsg, http.StatusBadRequest)
-	// 🆕 v4.4.1 : Protection anti-replay
 	case errors.Is(err, entity.Err2FACodeAlreadyUsed):
 		return utils.NewAppError("2FA_CODE_ALREADY_USED", errMsg, http.StatusTooManyRequests)
 
-	// Erreurs repository
 	case errors.Is(err, repository.ErrUser2FANotFound):
 		return utils.NewAppError("2FA_NOT_FOUND", errMsg, http.StatusNotFound)
 	case errors.Is(err, repository.ErrUser2FAAlreadyExists):
@@ -356,7 +407,6 @@ func handle2FAError(err error) error {
 	case errors.Is(err, repository.ErrUser2FAInvalidData):
 		return utils.NewAppError("2FA_INVALID_DATA", errMsg, http.StatusBadRequest)
 
-	// Erreurs string
 	case errMsg == "user not found":
 		return utils.NewAppError("USER_NOT_FOUND", errMsg, http.StatusNotFound)
 

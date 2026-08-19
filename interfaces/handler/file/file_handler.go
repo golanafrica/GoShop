@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"Goshop/application/metrics"
 	fileusecase "Goshop/application/usecase/file_usecase"
 	"Goshop/domain/entity"
 	storageinfra "Goshop/infrastructure/storage"
@@ -55,19 +56,9 @@ type GeneratePresignedURLResponse struct {
 }
 
 // @Summary Générer une URL pré-signée pour télécharger un fichier
-// @Description Génère une URL temporaire (15 min) pour télécharger un fichier KYC sécurisé
-// @Tags Files
-// @Accept json
-// @Produce json
-// @Param request body GeneratePresignedURLRequest true "Chemin du fichier"
-// @Success 200 {object} GeneratePresignedURLResponse
-// @Failure 400 {object} utils.AppError "Payload invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Accès refusé au fichier"
-// @Security ApiKeyAuth
-// @Router /api/files/presign [post]
 func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire le UserID du contexte
@@ -77,9 +68,13 @@ func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Reques
 		return utils.ErrUnauthorized
 	}
 
-	// 2. Parser la requête (pattern standard GoShop)
+	// 2. Parser la requête
 	var req GeneratePresignedURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// 📊 MÉTRIQUE : Erreur payload
+		metrics.FilePresignedURLGenerated.WithLabelValues("validation_error").Inc()
+		metrics.FileOperationDuration.WithLabelValues("presign").Observe(time.Since(start).Seconds())
+
 		logger.Error().Err(err).Msg("❌ Erreur décodage JSON")
 		return utils.ErrInvalidPayload
 	}
@@ -87,12 +82,19 @@ func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Reques
 
 	// 3. Valider le chemin
 	if req.FilePath == "" {
+		metrics.FilePresignedURLGenerated.WithLabelValues("validation_error").Inc()
+		metrics.FileOperationDuration.WithLabelValues("presign").Observe(time.Since(start).Seconds())
 		return utils.NewAppError("VALIDATION_ERROR", "file_path is required", http.StatusBadRequest)
 	}
 
 	// 4. Nettoyer le chemin (anti-path traversal)
 	cleanPath := filepath.Clean(req.FilePath)
 	if cleanPath == "." || cleanPath == "/" || filepath.IsAbs(cleanPath) {
+		// 📊 MÉTRIQUE : Tentative path traversal
+		metrics.FileSecurityViolations.WithLabelValues("path_traversal").Inc()
+		metrics.FilePresignedURLGenerated.WithLabelValues("security_violation").Inc()
+		metrics.FileOperationDuration.WithLabelValues("presign").Observe(time.Since(start).Seconds())
+
 		logger.Warn().
 			Str("file_path", req.FilePath).
 			Str("user_id", userID).
@@ -102,6 +104,9 @@ func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Reques
 
 	// 5. Vérifier que le fichier existe
 	if !h.fileStorage.Exists(cleanPath) {
+		metrics.FilePresignedURLGenerated.WithLabelValues("not_found").Inc()
+		metrics.FileOperationDuration.WithLabelValues("presign").Observe(time.Since(start).Seconds())
+
 		logger.Warn().
 			Str("file_path", cleanPath).
 			Str("user_id", userID).
@@ -128,10 +133,17 @@ func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Reques
 		presigned.ExpiresAt.Unix(),
 	)
 
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Succès
+	metrics.FilePresignedURLGenerated.WithLabelValues("success").Inc()
+	metrics.FileOperationDuration.WithLabelValues("presign").Observe(duration)
+
 	logger.Info().
 		Str("file_path", cleanPath).
 		Str("user_id", userID).
 		Int64("expires_at", presigned.ExpiresAt.Unix()).
+		Float64("duration_seconds", duration).
 		Msg("✅ URL pré-signée générée")
 
 	// 8. Retourner la réponse
@@ -145,20 +157,9 @@ func (h *FileHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Reques
 }
 
 // @Summary Télécharger un fichier avec URL pré-signée
-// @Description Télécharge un fichier en vérifiant la signature HMAC et l'expiration
-// @Tags Files
-// @Produce application/octet-stream
-// @Param path query string true "Chemin du fichier"
-// @Param sig query string true "Signature HMAC-SHA256"
-// @Param exp query int true "Timestamp d'expiration (Unix)"
-// @Success 200 {file} binary "Contenu du fichier"
-// @Failure 400 {object} utils.AppError "Paramètres manquants"
-// @Failure 401 {object} utils.AppError "Signature invalide ou expirée"
-// @Failure 404 {object} utils.AppError "Fichier introuvable"
-// @Security ApiKeyAuth
-// @Router /api/files/download [get]
 func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
 	// 1. Extraire les paramètres query
@@ -167,6 +168,9 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	expStr := r.URL.Query().Get("exp")
 
 	if filePath == "" || signature == "" || expStr == "" {
+		metrics.FileDownloadTotal.WithLabelValues("validation_error", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Warn().Msg("Missing required query parameters")
 		return utils.NewAppError("MISSING_PARAMS", "path, sig, and exp are required", http.StatusBadRequest)
 	}
@@ -174,6 +178,11 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	// 2. Nettoyer le chemin (anti-path traversal)
 	cleanPath := filepath.Clean(filePath)
 	if cleanPath == "." || cleanPath == "/" || filepath.IsAbs(cleanPath) {
+		// 📊 MÉTRIQUE : Tentative path traversal
+		metrics.FileSecurityViolations.WithLabelValues("path_traversal").Inc()
+		metrics.FileDownloadTotal.WithLabelValues("security_violation", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Warn().
 			Str("file_path", filePath).
 			Msg("❌ Chemin invalide (tentative path traversal)")
@@ -183,12 +192,20 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	// 3. Parser le timestamp
 	expiresAt, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil {
+		metrics.FileDownloadTotal.WithLabelValues("validation_error", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Error().Err(err).Msg("Invalid expiration timestamp")
 		return utils.NewAppError("INVALID_EXP", "Invalid expiration timestamp", http.StatusBadRequest)
 	}
 
 	// 4. Vérifier l'expiration
 	if time.Now().Unix() > expiresAt {
+		// 📊 MÉTRIQUE : URL expirée
+		metrics.FileExpiredURLs.Inc()
+		metrics.FileDownloadTotal.WithLabelValues("expired", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Warn().
 			Str("file_path", cleanPath).
 			Int64("expires_at", expiresAt).
@@ -203,6 +220,12 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	expectedSignature := hex.EncodeToString(mac.Sum(nil))
 
 	if !hmac.Equal([]byte(expectedSignature), []byte(signature)) {
+		// 📊 MÉTRIQUE : Signature invalide
+		metrics.FileInvalidSignatures.Inc()
+		metrics.FileSecurityViolations.WithLabelValues("invalid_signature").Inc()
+		metrics.FileDownloadTotal.WithLabelValues("invalid_signature", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Warn().
 			Str("file_path", cleanPath).
 			Msg("❌ Signature invalide")
@@ -211,6 +234,9 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 
 	// 6. Vérifier que le fichier existe
 	if !h.fileStorage.Exists(cleanPath) {
+		metrics.FileDownloadTotal.WithLabelValues("not_found", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+
 		logger.Error().
 			Str("file_path", cleanPath).
 			Msg("❌ Fichier introuvable")
@@ -221,6 +247,10 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	fullPath := h.fileStorage.GetFullPath(cleanPath)
 	file, err := os.Open(fullPath)
 	if err != nil {
+		metrics.FileDownloadTotal.WithLabelValues("error", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+		metrics.ApplicationErrorsTotal.WithLabelValues("file_download", "file_handler").Inc()
+
 		logger.Error().Err(err).Msg("❌ Erreur ouverture fichier")
 		return utils.ErrInternalServer
 	}
@@ -229,6 +259,10 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	// 8. Obtenir les métadonnées
 	stat, err := file.Stat()
 	if err != nil {
+		metrics.FileDownloadTotal.WithLabelValues("error", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+		metrics.ApplicationErrorsTotal.WithLabelValues("file_download", "file_handler").Inc()
+
 		logger.Error().Err(err).Msg("❌ Erreur stat fichier")
 		return utils.ErrInternalServer
 	}
@@ -245,13 +279,22 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
 	// 11. Streamer le fichier
+	duration := time.Since(start).Seconds()
+
+	// 📊 MÉTRIQUES : Succès
+	metrics.FileDownloadTotal.WithLabelValues("success", mimeType).Inc()
+	metrics.FileOperationDuration.WithLabelValues("download").Observe(duration)
+	metrics.FileDownloadSizeBytes.Observe(float64(stat.Size()))
+
 	logger.Info().
 		Str("file_path", cleanPath).
 		Str("mime_type", mimeType).
 		Int64("size", stat.Size()).
+		Float64("duration_seconds", duration).
 		Msg("✅ Fichier téléchargé avec succès")
 
 	if _, err := io.Copy(w, file); err != nil {
+		metrics.ApplicationErrorsTotal.WithLabelValues("file_stream", "file_handler").Inc()
 		logger.Error().Err(err).Msg("❌ Erreur streaming fichier")
 		return utils.ErrInternalServer
 	}
