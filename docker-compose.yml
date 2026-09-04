@@ -1,6 +1,4 @@
-version: '3.8'
-
-services:
+﻿services:
   # -------------------------------
   # SERVICE : API GoShop
   # -------------------------------
@@ -9,23 +7,27 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: goshop-api
+    # ðŸ†• Charge TOUTES les variables du .env (JWT_SECRET, SMTP, YENGA, etc.)
+    env_file:
+      - .env
     ports:
       - "8080:8080"
+    # ðŸ†• Override les valeurs spÃ©cifiques Docker (Ã©crase le .env)
     environment:
       - APP_ENV=development
       - LOG_LEVEL=debug
       - SERVICE_NAME=goshop-api
       - APP_VERSION=1.0.0
       - APP_PORT=8080
-      - DB_HOST=db
+      - DB_HOST=db                # ðŸ”„ Ã‰crase DB_HOST=127.0.0.1 du .env
       - DB_USER=postgres
       - DB_PORT=5432
       - DB_PASSWORD=root
       - DB_NAME=goshop_db
       - DB_SSLMODE=disable
-      - REDIS_HOST=redis
+      - REDIS_HOST=redis          # ðŸ”„ Ã‰crase REDIS_HOST=localhost du .env
       - REDIS_PORT=6379
-      # 🛡️ CORRECTION AUDIT 3.3 : Suppression de BCRYPT_COST=4 (trompeur, car le code Go force déjà un min. de 10)
+      - API_BASE_URL=http://localhost:8080  # ðŸ”„ Ã‰crase pour cohÃ©rence Docker
     depends_on:
       db:
         condition: service_healthy
@@ -50,10 +52,10 @@ services:
       POSTGRES_PASSWORD: root
       POSTGRES_DB: goshop_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d  
+      - ./migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d goshop_db"]
       interval: 10s
@@ -69,7 +71,7 @@ services:
     image: redis:7-alpine
     container_name: goshop-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -87,7 +89,13 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=30d'
     depends_on:
       goshop:
         condition: service_healthy
@@ -101,11 +109,14 @@ services:
     container_name: goshop-loki
     ports:
       - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     restart: unless-stopped
 
   # -------------------------------
-  # SERVICE : Grafana
+  # SERVICE : Grafana (AVEC PROVISIONING)
   # -------------------------------
   grafana:
     image: grafana/grafana:11.1.0
@@ -113,11 +124,16 @@ services:
     ports:
       - "3000:3000"
     environment:
+      - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_LOG_LEVEL=info
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
       - loki
@@ -131,7 +147,7 @@ services:
     container_name: goshop-promtail
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./promtail-config.yml:/etc/promtail/config.yml
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml
     depends_on:
       - loki
@@ -140,3 +156,5 @@ services:
 volumes:
   postgres_:
   grafana_data:
+  prometheus_data:
+  loki_data:

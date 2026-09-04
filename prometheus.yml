@@ -1,23 +1,41 @@
-# prometheus.yml - Configuration pour Windows LOCAL (sans Docker)
+﻿# prometheus.yml - Configuration pour Docker Compose
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   scrape_timeout: 10s
 
-# Règles d'alertes (optionnel pour le début)
-rule_files:
-  # - "alert_rules.yml"
+  external_labels:
+    cluster: 'goshop-local'
+    environment: 'development'
 
 scrape_configs:
-  # Scrape l'application GoShop en local
+  # ========================================
+  # GoShop API (dans Docker)
+  # ========================================
   - job_name: 'goshop-api'
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+    scheme: 'http'
+    
     static_configs:
-      - targets: ['localhost:8081']  # ⚠️ localhost:8081 (pas Docker !)
-    metrics_path: /metrics
-    scrape_interval: 10s
-    scrape_timeout: 5s
+      - targets: ['goshop:8080']  # ✅ Nom du service Docker
+        labels:
+          service: 'goshop-api'
+          environment: 'development'
+          version: '1.0.0'
 
-  # Prometheus se scrape lui-même
+  # ========================================
+  # Prometheus Self-Monitoring
+  # ========================================
   - job_name: 'prometheus'
+    scrape_interval: 10s
     static_configs:
       - targets: ['localhost:9090']
+
+  # ========================================
+  # Grafana Self-Monitoring
+  # ========================================
+  - job_name: 'grafana'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['grafana:3000']
