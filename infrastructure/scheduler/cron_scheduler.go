@@ -11,16 +11,18 @@ import (
 
 // CronScheduler gère les tâches planifiées avec cron
 type CronScheduler struct {
-	cron                      *cron.Cron
-	commissionSched           *appscheduler.CommissionScheduler
-	onlinePaymentSched        *appscheduler.OnlinePaymentScheduler
-	tontineSched              *appscheduler.TontineScheduler
-	escrowAutoReleaseSched    *appscheduler.EscrowAutoReleaseScheduler
-	logger                    zerolog.Logger
-	scheduleCron              string
-	onlinePaymentSchedule     string
-	tontineSchedule           string
-	escrowAutoReleaseSchedule string
+	cron                        *cron.Cron
+	commissionSched             *appscheduler.CommissionScheduler
+	onlinePaymentSched          *appscheduler.OnlinePaymentScheduler
+	tontineSched                *appscheduler.TontineScheduler
+	escrowAutoReleaseSched      *appscheduler.EscrowAutoReleaseScheduler
+	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler // 🆕 Ajouté
+	logger                      zerolog.Logger
+	scheduleCron                string
+	onlinePaymentSchedule       string
+	tontineSchedule             string
+	escrowAutoReleaseSchedule   string
+	installmentSchedule         string // 🆕 Ajouté
 }
 
 // NewCronScheduler crée une nouvelle instance
@@ -29,11 +31,13 @@ func NewCronScheduler(
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler,
 	tontineSched *appscheduler.TontineScheduler,
 	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler,
+	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler, // 🆕 Ajouté
 	logger zerolog.Logger,
 	scheduleCron string,
 	onlinePaymentSchedule string,
 	tontineSchedule string,
 	escrowAutoReleaseSchedule string,
+	installmentSchedule string, // 🆕 Ajouté
 ) *CronScheduler {
 
 	if scheduleCron == "" {
@@ -48,18 +52,23 @@ func NewCronScheduler(
 	if escrowAutoReleaseSchedule == "" {
 		escrowAutoReleaseSchedule = "0 */6 * * *"
 	}
+	if installmentSchedule == "" {
+		installmentSchedule = "0 */6 * * *" // 🆕 Par défaut toutes les 6 heures
+	}
 
 	return &CronScheduler{
-		cron:                      cron.New(),
-		commissionSched:           commissionSched,
-		onlinePaymentSched:        onlinePaymentSched,
-		tontineSched:              tontineSched,
-		escrowAutoReleaseSched:    escrowAutoReleaseSched,
-		logger:                    logger.With().Str("component", "cron_scheduler").Logger(),
-		scheduleCron:              scheduleCron,
-		onlinePaymentSchedule:     onlinePaymentSchedule,
-		tontineSchedule:           tontineSchedule,
-		escrowAutoReleaseSchedule: escrowAutoReleaseSchedule,
+		cron:                        cron.New(),
+		commissionSched:             commissionSched,
+		onlinePaymentSched:          onlinePaymentSched,
+		tontineSched:                tontineSched,
+		escrowAutoReleaseSched:      escrowAutoReleaseSched,
+		installmentAutoReleaseSched: installmentAutoReleaseSched, // 🆕 Ajouté
+		logger:                      logger.With().Str("component", "cron_scheduler").Logger(),
+		scheduleCron:                scheduleCron,
+		onlinePaymentSchedule:       onlinePaymentSchedule,
+		tontineSchedule:             tontineSchedule,
+		escrowAutoReleaseSchedule:   escrowAutoReleaseSchedule,
+		installmentSchedule:         installmentSchedule, // 🆕 Ajouté
 	}
 }
 
@@ -70,6 +79,7 @@ func (s *CronScheduler) Start() error {
 		Str("online_payment_schedule", s.onlinePaymentSchedule).
 		Str("tontine_schedule", s.tontineSchedule).
 		Str("escrow_auto_release_schedule", s.escrowAutoReleaseSchedule).
+		Str("installment_schedule", s.installmentSchedule). // 🆕 Ajouté
 		Msg("🕐 Starting cron scheduler")
 
 	// 1. COD (tous les jours à 2h)
@@ -119,6 +129,20 @@ func (s *CronScheduler) Start() error {
 			ctx := context.Background()
 			if err := s.escrowAutoReleaseSched.RunAutoRelease(ctx); err != nil {
 				s.logger.Error().Err(err).Msg("❌ Escrow auto-release failed")
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// 5. 🆕 Installment Auto-Release (toutes les 6 heures)
+	if s.installmentAutoReleaseSched != nil {
+		_, err = s.cron.AddFunc(s.installmentSchedule, func() {
+			s.logger.Info().Msg("⏰ Cron trigger: Installment auto-release")
+			ctx := context.Background()
+			if err := s.installmentAutoReleaseSched.RunAutoRelease(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("❌ Installment auto-release failed")
 			}
 		})
 		if err != nil {

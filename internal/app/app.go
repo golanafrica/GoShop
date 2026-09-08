@@ -950,6 +950,16 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.7.0 Escrow auto-release scheduler initialized")
 
+	// ============ 🆕 v5.1.0 : INSTALLMENT AUTO-RELEASE SCHEDULER ============
+	installmentAutoReleaseSched := appscheduler.NewInstallmentAutoReleaseScheduler(
+		postgresOrderRepo,
+		orderInstallmentRepo,
+		disputeRepo,
+		releaseEscrowFundsUC,
+		a.Logger.Logger,
+	)
+	a.Logger.Info().Msg("✅ v5.1.0 Installment auto-release scheduler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -1478,17 +1488,25 @@ func (a *App) setupRouter() {
 		escrowAutoReleaseSchedule = "0 */6 * * *"
 	}
 
-	// 🆕 v5.0.0 : creditSched and creditSchedule removed (passing 9 arguments)
+	// 🆕 v5.1.0 : Installment Auto-Release Schedule
+	installmentSchedule := os.Getenv("INSTALLMENT_RELEASE_SCHEDULE")
+	if installmentSchedule == "" {
+		installmentSchedule = "0 */6 * * *" // Toutes les 6 heures
+	}
+
+	// 🆕 v5.1.0 : Passing 11 arguments (added installmentAutoReleaseSched and installmentSchedule)
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
 		onlinePaymentSched,
 		tontineSched,
 		escrowAutoReleaseSched,
+		installmentAutoReleaseSched, // 🆕 Ajouté
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
 		tontineSchedule,
 		escrowAutoReleaseSchedule,
+		installmentSchedule, // 🆕 Ajouté
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1499,6 +1517,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
+			Str("installment_schedule", installmentSchedule). // 🆕 Ajouté
 			Msg("✅ v5.1.0 All schedulers started successfully")
 	}
 
