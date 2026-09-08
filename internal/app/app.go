@@ -113,6 +113,9 @@ import (
 	// 🆕 v5.0.0 : Installment Repositories
 	installmentpostgres "Goshop/infrastructure/postgres/installment"
 
+	// 🆕 v5.1.0 : Delivery Zone Infrastructure
+	deliveryzoneinfra "Goshop/infrastructure/postgres/delivery_zone"
+
 	"Goshop/domain/entity"
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
@@ -173,6 +176,11 @@ import (
 
 	// 🆕 v5.0.0 : Installment Handler
 	installmenthandler "Goshop/interfaces/handler/installment_handler"
+
+	// 🆕 v5.1.0 : Delivery Zone Handler & Usecase
+	deliveryzoneusecase "Goshop/application/usecase/delivery_zone_usecase"
+	deliveryzoneservice "Goshop/domain/service"
+	deliveryzonehandler "Goshop/interfaces/handler/delivery_zone_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -314,7 +322,11 @@ func (a *App) setupRouter() {
 	installmentPlanRepo := installmentpostgres.NewInstallmentPlanRepository(a.DB)
 	orderInstallmentRepo := installmentpostgres.NewOrderInstallmentRepository(a.DB)
 
-	a.Logger.Info().Msg("✅ v5.0.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute + delivery_proof + installments)")
+	// 🆕 v5.1.0 : Delivery Zone Repository & Service
+	deliveryZoneRepo := deliveryzoneinfra.NewDeliveryZoneRepository(a.DB)
+	deliveryZoneService := deliveryzoneservice.NewDeliveryZoneService(deliveryZoneRepo)
+
+	a.Logger.Info().Msg("✅ v5.1.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute + delivery_proof + installments + delivery_zones)")
 
 	// ============================================================
 	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
@@ -870,6 +882,9 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ v4.6.0 Dispute usecases initialized")
 
+	// ============ 🆕 v5.1.0 : ADMIN DELIVERY ZONE USECASE ============
+	adminDeliveryZoneUC := deliveryzoneusecase.NewAdminDeliveryZoneUsecase(deliveryZoneRepo, deliveryZoneService)
+
 	// ============ 🆕 CLIENT DASHBOARD USECASE ============
 	getDashboardUC := customerusecase.NewGetClientDashboardUsecase(postgresCustomerRepo)
 	a.Logger.Info().Msg("✅ Client Dashboard usecase initialized")
@@ -1130,6 +1145,9 @@ func (a *App) setupRouter() {
 		submitTontineDeliveryUC,
 	)
 
+	// ============ 🆕 v5.1.0 : ADMIN DELIVERY ZONE HANDLER ============
+	adminDeliveryZoneHandler := deliveryzonehandler.NewAdminDeliveryZoneHandler(adminDeliveryZoneUC)
+
 	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
 	var wsHandler *handlers.WSHandler
 	if wsHub != nil {
@@ -1160,7 +1178,7 @@ func (a *App) setupRouter() {
 	fileHandler := filehandler.NewFileHandler(downloadFileUC, uploadStorage, fileSecretKey)
 	a.Logger.Info().Msg("✅ v4.10.0 File download handler initialized")
 
-	a.Logger.Info().Msg("✅ v5.0.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments)")
+	a.Logger.Info().Msg("✅ v5.1.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments, delivery_zones)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1428,6 +1446,14 @@ func (a *App) setupRouter() {
 			r.Get("/disputes/{id}", middl.ErrorHandler(disputeHandler.GetDisputeByID))
 			r.Post("/disputes/{id}/resolve", middl.ErrorHandler(disputeHandler.ResolveDispute))
 			r.Post("/orders/{id}/dispute/resolve", middl.ErrorHandler(disputeHandler.ResolveOrderByDispute))
+
+			// ============ 🆕 v5.1.0 : ADMIN DELIVERY ZONES ROUTES ============
+			r.Route("/delivery-zones", func(r chi.Router) {
+				r.Post("/", middl.ErrorHandler(adminDeliveryZoneHandler.CreateZone))
+				r.Get("/", middl.ErrorHandler(adminDeliveryZoneHandler.ListZones))
+				r.Put("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.UpdateZone))
+				r.Delete("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.DeleteZone))
+			})
 		})
 	})
 
@@ -1473,7 +1499,7 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
-			Msg("✅ v5.0.0 All schedulers started successfully")
+			Msg("✅ v5.1.0 All schedulers started successfully")
 	}
 
 	a.Router = r
@@ -1481,7 +1507,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.0.0: Installment Escrow System, Credit fully removed)")
+		Msg("✅ Router configuré avec succès (v5.1.0: Delivery Zone Service integrated)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1546,7 +1572,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "5.0.0",
+		Version:     "5.1.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)
