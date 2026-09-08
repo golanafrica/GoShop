@@ -418,3 +418,33 @@ func TestCODWorkflow_Complete(t *testing.T) {
 	t.Logf("✅ Workflow COD complet validé : Order %s → Commission %d FCFA collectée",
 		orderID, collectResp.CommissionCents/100)
 }
+
+// ============================================================
+// HELPERS DE CRÉATION DE DONNÉES DE TEST (Spécifiques à COD)
+// ============================================================
+
+// createTestProduct crée un produit de test et retourne son ID
+func createTestProduct(t *testing.T, shopID string) string {
+	t.Helper()
+	productID := uuid.New().String()
+	_, err := sharedDB.Exec(`
+		INSERT INTO products (id, shop_id, name, description, price_cents, stock, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, productID, shopID, "Test Product", "Description du produit test", 5000000, 10)
+	require.NoError(t, err, "Failed to create test product")
+	return productID
+}
+
+// createTestCustomer crée un client de test et retourne son ID
+func createTestCustomer(t *testing.T, shopID string) string {
+	t.Helper()
+	customerID := uuid.New().String()
+	_, err := sharedDB.Exec(`
+		INSERT INTO customers (id, shop_id, first_name, last_name, phone, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, customerID, shopID, "Test", "Customer", "+22670000000")
+	require.NoError(t, err, "Failed to create test customer")
+	return customerID
+}

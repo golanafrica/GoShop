@@ -14,36 +14,30 @@ import (
 
 // GetMerchantOverviewUsecase retourne la vue d'ensemble d'un marchand
 type GetMerchantOverviewUsecase struct {
-	orderRepo       repository.OrderRepository
-	paymentRepo     repository.PaymentRepository
-	contractRepo    repository.CreditContractRepository
-	installmentRepo repository.CreditInstallmentRepository
-	walletRepo      repository.MerchantWalletRepository
-	freezeRepo      repository.AccountFreezeRepository
-	batchRepo       repository.CommissionBatchRepository
-	escrowRepo      repository.EscrowAccountRepository // 🆕 AJOUT pour le solde en attente
+	orderRepo   repository.OrderRepository
+	paymentRepo repository.PaymentRepository
+	walletRepo  repository.MerchantWalletRepository
+	freezeRepo  repository.AccountFreezeRepository
+	batchRepo   repository.CommissionBatchRepository
+	escrowRepo  repository.EscrowAccountRepository
 }
 
 // NewGetMerchantOverviewUsecase crée une nouvelle instance
 func NewGetMerchantOverviewUsecase(
 	orderRepo repository.OrderRepository,
 	paymentRepo repository.PaymentRepository,
-	contractRepo repository.CreditContractRepository,
-	installmentRepo repository.CreditInstallmentRepository,
 	walletRepo repository.MerchantWalletRepository,
 	freezeRepo repository.AccountFreezeRepository,
 	batchRepo repository.CommissionBatchRepository,
-	escrowRepo repository.EscrowAccountRepository, // 🆕 AJOUT
+	escrowRepo repository.EscrowAccountRepository,
 ) *GetMerchantOverviewUsecase {
 	return &GetMerchantOverviewUsecase{
-		orderRepo:       orderRepo,
-		paymentRepo:     paymentRepo,
-		contractRepo:    contractRepo,
-		installmentRepo: installmentRepo,
-		walletRepo:      walletRepo,
-		freezeRepo:      freezeRepo,
-		batchRepo:       batchRepo,
-		escrowRepo:      escrowRepo, // 🆕 AJOUT
+		orderRepo:   orderRepo,
+		paymentRepo: paymentRepo,
+		walletRepo:  walletRepo,
+		freezeRepo:  freezeRepo,
+		batchRepo:   batchRepo,
+		escrowRepo:  escrowRepo,
 	}
 }
 
@@ -66,21 +60,7 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 	onlineSales := int64(0)
 	cashSales := totalSales - onlineSales
 
-	// 3. Statistiques de crédit
-	creditStats, err := uc.contractRepo.GetMerchantCreditStats(ctx, shopID)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to get credit stats")
-		return nil, fmt.Errorf("get credit stats: %w", err)
-	}
-
-	// 4. Statistiques de recouvrement
-	recoveryStats, err := uc.installmentRepo.GetMerchantRecoveryStats(ctx, shopID)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to get recovery stats")
-		return nil, fmt.Errorf("get recovery stats: %w", err)
-	}
-
-	// 5. Wallet et gel
+	// 3. Wallet et gel
 	wallet, err := uc.walletRepo.FindByShopID(ctx, shopID)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Wallet not found, using default")
@@ -108,14 +88,14 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 		}
 	}
 
-	// 6. Commission du mois
+	// 4. Commission du mois
 	monthlyCommission, err := uc.batchRepo.GetMonthlyCommissionByShop(ctx, shopID)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Failed to get monthly commission")
 		monthlyCommission = 0
 	}
 
-	// 7. 🆕 CALCUL DU SOLDE EN ATTENTE (ESCROW)
+	// 5. 🆕 CALCUL DU SOLDE EN ATTENTE (ESCROW)
 	var pendingEscrowBalanceCents int64
 	heldEscrows, err := uc.escrowRepo.FindHeldByShopID(ctx, shopID)
 	if err == nil {
@@ -127,22 +107,21 @@ func (uc *GetMerchantOverviewUsecase) Execute(ctx context.Context) (*merchantdto
 		logger.Warn().Err(err).Msg("Failed to get held escrows for overview")
 	}
 
-	// 8. Construire la réponse
-	// ⚠️ NOTE : Assure-toi d'ajouter le champ `PendingEscrowBalanceCents int64`
-	// dans la struct `MerchantOverviewResponse` de ton fichier DTO.
+	// 6. Construire la réponse
+	// Note: Les champs liés au crédit sont mis à 0 car le module crédit a été supprimé.
 	return &merchantdto.MerchantOverviewResponse{
 		TotalSalesCents:           totalSales,
 		TotalOrdersCount:          ordersCount,
 		OnlineSalesCents:          onlineSales,
 		CashSalesCents:            cashSales,
-		ActiveContractsCount:      creditStats.ActiveContractsCount,
-		TotalFinancedCents:        creditStats.TotalFinancedCents,
-		TotalOutstandingCents:     creditStats.TotalOutstandingCents,
-		RecoveryRatePercent:       recoveryStats.RecoveryRatePercent,
-		OverdueAmountCents:        recoveryStats.OverdueAmountCents,
-		OverdueCount:              recoveryStats.OverdueCount,
+		ActiveContractsCount:      0, // Module crédit supprimé
+		TotalFinancedCents:        0, // Module crédit supprimé
+		TotalOutstandingCents:     0, // Module crédit supprimé
+		RecoveryRatePercent:       0, // Module crédit supprimé
+		OverdueAmountCents:        0, // Module crédit supprimé
+		OverdueCount:              0, // Module crédit supprimé
 		WalletBalanceCents:        walletBalance,
-		PendingEscrowBalanceCents: pendingEscrowBalanceCents, // 🆕 CHAMP AJOUTÉ
+		PendingEscrowBalanceCents: pendingEscrowBalanceCents,
 		IsFrozen:                  isFrozen,
 		FreezeReason:              freezeReason,
 		AmountDueCents:            amountDue,

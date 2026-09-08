@@ -1,8 +1,9 @@
 package scheduler
 
 import (
-	appscheduler "Goshop/application/scheduler"
 	"context"
+
+	appscheduler "Goshop/application/scheduler"
 
 	"github.com/robfig/cron/v3"
 	"github.com/rs/zerolog"
@@ -14,14 +15,12 @@ type CronScheduler struct {
 	commissionSched           *appscheduler.CommissionScheduler
 	onlinePaymentSched        *appscheduler.OnlinePaymentScheduler
 	tontineSched              *appscheduler.TontineScheduler
-	creditSched               *appscheduler.CreditScheduler
-	escrowAutoReleaseSched    *appscheduler.EscrowAutoReleaseScheduler // 🆕 v4.7.0
+	escrowAutoReleaseSched    *appscheduler.EscrowAutoReleaseScheduler
 	logger                    zerolog.Logger
 	scheduleCron              string
 	onlinePaymentSchedule     string
 	tontineSchedule           string
-	creditSchedule            string
-	escrowAutoReleaseSchedule string // 🆕 v4.7.0
+	escrowAutoReleaseSchedule string
 }
 
 // NewCronScheduler crée une nouvelle instance
@@ -29,14 +28,12 @@ func NewCronScheduler(
 	commissionSched *appscheduler.CommissionScheduler,
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler,
 	tontineSched *appscheduler.TontineScheduler,
-	creditSched *appscheduler.CreditScheduler,
-	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler, // 🆕 v4.7.0
+	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler,
 	logger zerolog.Logger,
 	scheduleCron string,
 	onlinePaymentSchedule string,
 	tontineSchedule string,
-	creditSchedule string,
-	escrowAutoReleaseSchedule string, // 🆕 v4.7.0
+	escrowAutoReleaseSchedule string,
 ) *CronScheduler {
 
 	if scheduleCron == "" {
@@ -48,11 +45,8 @@ func NewCronScheduler(
 	if tontineSchedule == "" {
 		tontineSchedule = "*/30 * * * *"
 	}
-	if creditSchedule == "" {
-		creditSchedule = "0 3 * * *"
-	}
 	if escrowAutoReleaseSchedule == "" {
-		escrowAutoReleaseSchedule = "0 */6 * * *" // 🆕 v4.7.0 : Toutes les 6 heures
+		escrowAutoReleaseSchedule = "0 */6 * * *"
 	}
 
 	return &CronScheduler{
@@ -60,14 +54,12 @@ func NewCronScheduler(
 		commissionSched:           commissionSched,
 		onlinePaymentSched:        onlinePaymentSched,
 		tontineSched:              tontineSched,
-		creditSched:               creditSched,
-		escrowAutoReleaseSched:    escrowAutoReleaseSched, // 🆕 v4.7.0
+		escrowAutoReleaseSched:    escrowAutoReleaseSched,
 		logger:                    logger.With().Str("component", "cron_scheduler").Logger(),
 		scheduleCron:              scheduleCron,
 		onlinePaymentSchedule:     onlinePaymentSchedule,
 		tontineSchedule:           tontineSchedule,
-		creditSchedule:            creditSchedule,
-		escrowAutoReleaseSchedule: escrowAutoReleaseSchedule, // 🆕 v4.7.0
+		escrowAutoReleaseSchedule: escrowAutoReleaseSchedule,
 	}
 }
 
@@ -77,8 +69,7 @@ func (s *CronScheduler) Start() error {
 		Str("cod_schedule", s.scheduleCron).
 		Str("online_payment_schedule", s.onlinePaymentSchedule).
 		Str("tontine_schedule", s.tontineSchedule).
-		Str("credit_schedule", s.creditSchedule).
-		Str("escrow_auto_release_schedule", s.escrowAutoReleaseSchedule). // 🆕 v4.7.0
+		Str("escrow_auto_release_schedule", s.escrowAutoReleaseSchedule).
 		Msg("🕐 Starting cron scheduler")
 
 	// 1. COD (tous les jours à 2h)
@@ -121,21 +112,7 @@ func (s *CronScheduler) Start() error {
 		}
 	}
 
-	// 4. Credit (tous les jours à 3h)
-	if s.creditSched != nil {
-		_, err = s.cron.AddFunc(s.creditSchedule, func() {
-			s.logger.Info().Msg("⏰ Cron trigger: Credit commission collection")
-			ctx := context.Background()
-			if err := s.creditSched.RunCollection(ctx); err != nil {
-				s.logger.Error().Err(err).Msg("❌ Credit commission collection failed")
-			}
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	// 🆕 5. Escrow Auto-Release (toutes les 6 heures)
+	// 4. Escrow Auto-Release (toutes les 6 heures)
 	if s.escrowAutoReleaseSched != nil {
 		_, err = s.cron.AddFunc(s.escrowAutoReleaseSchedule, func() {
 			s.logger.Info().Msg("⏰ Cron trigger: Escrow auto-release")
