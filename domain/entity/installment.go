@@ -14,14 +14,19 @@ import (
 // InstallmentPlan représente la configuration du paiement en tranches pour un produit.
 // C'est le marchand qui décide : "Je vends ce produit en 3 fois, toutes les 15 jours".
 type InstallmentPlan struct {
-	ID         string    `json:"id" db:"id"`
-	ProductID  string    `json:"product_id" db:"product_id"`
-	ShopID     string    `json:"shop_id" db:"shop_id"`
-	NbTranches int       `json:"nb_tranches" db:"nb_tranches"` // Ex: 2, 3, 4, 5
-	DelaiJours int       `json:"delai_jours" db:"delai_jours"` // Ex: 15, 30 jours entre chaque tranche
-	IsActive   bool      `json:"is_active" db:"is_active"`
-	CreatedAt  time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at" db:"updated_at"`
+	ID         string `json:"id" db:"id"`
+	ProductID  string `json:"product_id" db:"product_id"`
+	ShopID     string `json:"shop_id" db:"shop_id"`
+	NbTranches int    `json:"nb_tranches" db:"nb_tranches"` // Ex: 2, 3, 4, 5
+	DelaiJours int    `json:"delai_jours" db:"delai_jours"` // Ex: 15, 30 jours entre chaque tranche
+
+	// 🆕 v5.1.0 : Délai dynamique basé sur la zone de livraison
+	DeliveryZoneID              *string `json:"delivery_zone_id,omitempty" db:"delivery_zone_id"`
+	InstallmentReleaseDelayDays int     `json:"installment_release_delay_days" db:"installment_release_delay_days"`
+
+	IsActive  bool      `json:"is_active" db:"is_active"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // NewInstallmentPlan crée un nouveau plan avec validation stricte.

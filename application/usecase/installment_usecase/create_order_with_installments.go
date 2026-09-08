@@ -74,6 +74,10 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 		return order, nil
 	}
 
+	// 🆕 v5.1.0 : Copier les informations de délai dynamique du plan vers la commande
+	order.DeliveryZoneID = plan.DeliveryZoneID
+	order.InstallmentReleaseDelayDays = plan.InstallmentReleaseDelayDays
+
 	// 3. Calculer les montants et dates des tranches
 	amounts := entity.CalculateInstallmentAmount(totalCents, plan.NbTranches)
 	dueDates := entity.CalculateDueDates(time.Now().UTC(), plan.NbTranches, plan.DelaiJours)

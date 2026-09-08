@@ -890,7 +890,7 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ Client Dashboard usecase initialized")
 
 	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
-	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo)
+	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneService)
 	getInstallmentsUC := installmentusecase.NewGetInstallmentsUsecase(orderInstallmentRepo)
 	releaseEscrowFundsUC := installmentusecase.NewReleaseEscrowFundsUsecase(txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo)
 	installmentHandler := installmenthandler.NewInstallmentHandler(configureInstallmentPlanUC, getInstallmentsUC, releaseEscrowFundsUC)

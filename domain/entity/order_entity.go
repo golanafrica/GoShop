@@ -51,6 +51,9 @@ type Order struct {
 	DeliveryNotes       *string    `json:"delivery_notes,omitempty"`
 	AmountReceivedCents *int64     `json:"amount_received_cents,omitempty"`
 	ReservedUntil       *time.Time `json:"reserved_until,omitempty"`
+	// 🆕 v5.1.0 : Pour le calcul dynamique du délai de libération des tranches
+	DeliveryZoneID              *string `json:"delivery_zone_id,omitempty"`
+	InstallmentReleaseDelayDays int     `json:"installment_release_delay_days"`
 }
 
 // IsCashOnDelivery retourne true si la commande est en cash à la livraison
