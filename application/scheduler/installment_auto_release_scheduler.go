@@ -55,13 +55,10 @@ func (s *InstallmentAutoReleaseScheduler) RunAutoRelease(ctx context.Context) er
 	notifiedCount := 0
 
 	for _, order := range orders {
-		if order.PaymentMethod != "installment" {
-			continue
-		}
-
+		// 🆕 Vérification robuste : on ne traite que les commandes qui ont des tranches
 		installments, err := s.installmentRepo.GetByOrderID(ctx, order.ID)
 		if err != nil || len(installments) == 0 {
-			continue
+			continue // Ce n'est pas une commande en tranches
 		}
 
 		allPaid := true
@@ -80,13 +77,13 @@ func (s *InstallmentAutoReleaseScheduler) RunAutoRelease(ctx context.Context) er
 		if order.DeliveredAt != nil {
 			releaseDate = order.DeliveredAt.AddDate(0, 0, order.InstallmentReleaseDelayDays)
 		} else {
-			releaseDate = order.CreatedAt.AddDate(0, 0, 30)
+			releaseDate = order.CreatedAt.AddDate(0, 0, 30) // Fallback de sécurité
 		}
 
 		now := time.Now().UTC()
 		hoursUntilRelease := releaseDate.Sub(now).Hours()
 
-		// 🆕 Vérifier si on est dans la fenêtre de 24h avant libération
+		// Vérifier si on est dans la fenêtre de 24h avant libération
 		if hoursUntilRelease > 0 && hoursUntilRelease <= 24 {
 			orderUUID, parseErr := uuid.Parse(order.ID)
 			if parseErr == nil {
@@ -103,6 +100,7 @@ func (s *InstallmentAutoReleaseScheduler) RunAutoRelease(ctx context.Context) er
 			continue
 		}
 
+		// Vérifier litige avant libération
 		orderUUID, err := uuid.Parse(order.ID)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("order_id", order.ID).Msg("Invalid order UUID, skipping")
@@ -119,6 +117,7 @@ func (s *InstallmentAutoReleaseScheduler) RunAutoRelease(ctx context.Context) er
 			continue
 		}
 
+		// Libérer les fonds
 		_, err = s.releaseEscrowUC.Execute(ctx, order.ID)
 		if err != nil {
 			s.logger.Error().Err(err).Str("order_id", order.ID).Msg("Failed to auto-release")
@@ -139,7 +138,6 @@ func (s *InstallmentAutoReleaseScheduler) RunAutoRelease(ctx context.Context) er
 	return nil
 }
 
-// 🆕 notifyClientReleaseSoon envoie un rappel au client 24h avant libération
 func (s *InstallmentAutoReleaseScheduler) notifyClientReleaseSoon(ctx context.Context, order *entity.Order, releaseDate time.Time) {
 	if s.notifService == nil {
 		return
@@ -151,9 +149,8 @@ func (s *InstallmentAutoReleaseScheduler) notifyClientReleaseSoon(ctx context.Co
 		order.ID[:8], releaseDate.Format("02/01/2006 à 15h04"),
 	)
 
-	// ✅ Utilisation réelle du NotificationService via la méthode générique SendNotification
 	req := &service.NotificationRequest{
-		Type:    "installment_release_soon", // Tu pourras ajouter cette constante dans notification_service.go plus tard
+		Type:    "installment_release_soon",
 		OrderID: order.ID,
 		Data: map[string]interface{}{
 			"subject": subject,
