@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #2563eb; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 20px; border-radius: 0 0 8px 8px; }
+        .highlight { background: #dbeafe; padding: 15px; border-radius: 8px; margin: 15px 0; }
+        .btn { display: inline-block; background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 15px; }
+        .footer { text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎉 Toutes les tranches payées !</h1>
+        </div>
+        <div class="content">
+            <p>Bonjour <strong>{{.MerchantName}}</strong>,</p>
+            <p>Bonne nouvelle ! Le client a payé <strong>toutes les tranches</strong> de la commande <strong>#{{.OrderID}}</strong>.</p>
+            
+            <div class="highlight">
+                <p><strong>📦 Commande :</strong> #{{.OrderID}}</p>
+                <p><strong>💰 Montant total :</strong> {{.TotalAmount}} FCFA</p>
+                <p><strong>📅 Libération prévue :</strong> {{.ReleaseDate}}</p>
+                <p><strong>📍 Zone de livraison :</strong> {{.ZoneName}}</p>
+            </div>
+            
+            <p>Les fonds sont actuellement <strong>bloqués en séquestre</strong> (escrow) pour protéger le client. Ils seront automatiquement libérés sur votre wallet dans <strong>{{.DelayDays}} jours</strong>, sauf si le client signale un problème.</p>
+            
+            <p><strong>💡 Conseil :</strong> Assurez-vous d'avoir bien livré le produit et que le client est satisfait. Si un litige est ouvert, la libération sera automatiquement bloquée.</p>
+            
+            <a href="{{.DashboardURL}}" class="btn">Voir ma commande</a>
+        </div>
+        <div class="footer">
+            <p>Cet email a été envoyé par GoShop. Ne répondez pas directement.</p>
+        </div>
+    </div>
+</body>
+</html>

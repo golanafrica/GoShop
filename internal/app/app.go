@@ -956,9 +956,10 @@ func (a *App) setupRouter() {
 		orderInstallmentRepo,
 		disputeRepo,
 		releaseEscrowFundsUC,
+		notifService,
 		a.Logger.Logger,
 	)
-	a.Logger.Info().Msg("✅ v5.1.0 Installment auto-release scheduler initialized")
+	a.Logger.Info().Msg("✅ v5.2.0 Installment auto-release scheduler initialized (with notifications)")
 
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)

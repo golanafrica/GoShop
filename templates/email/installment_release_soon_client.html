@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #f59e0b; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 20px; border-radius: 0 0 8px 8px; }
+        .warning { background: #fef3c7; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #f59e0b; }
+        .btn-primary { display: inline-block; background: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px; margin-right: 10px; }
+        .btn-secondary { display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px; }
+        .footer { text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⏰ Rappel : Vérifiez votre commande</h1>
+        </div>
+        <div class="content">
+            <p>Bonjour <strong>{{.CustomerName}}</strong>,</p>
+            <p>La libération des fonds de votre commande <strong>#{{.OrderID}}</strong> est prévue <strong>dans 24 heures</strong>.</p>
+            
+            <div class="warning">
+                <p><strong>⚠️ Action requise :</strong> Avez-vous bien reçu votre produit ? Est-il conforme à votre commande ?</p>
+                <p>Une fois les fonds libérés, le remboursement sera plus complexe.</p>
+            </div>
+            
+            <p><strong>📦 Commande :</strong> #{{.OrderID}}</p>
+            <p><strong>💰 Montant :</strong> {{.TotalAmount}} FCFA</p>
+            <p><strong>📅 Libération prévue :</strong> {{.ReleaseDate}}</p>
+            
+            <div style="margin-top: 20px;">
+                <a href="{{.DisputeURL}}" class="btn-primary">Signaler un problème</a>
+                <a href="{{.OrderURL}}" class="btn-secondary">Voir ma commande</a>
+            </div>
+            
+            <p style="margin-top: 20px;">Si tout est en ordre, <strong>vous n'avez rien à faire</strong>. Les fonds seront libérés automatiquement au marchand.</p>
+        </div>
+        <div class="footer">
+            <p>Cet email a été envoyé par GoShop. Besoin d'aide ? Contactez support@goshop.com</p>
+        </div>
+    </div>
+</body>
+</html>
