@@ -890,11 +890,26 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ Client Dashboard usecase initialized")
 
 	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
+	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
 	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneService)
 	getInstallmentsUC := installmentusecase.NewGetInstallmentsUsecase(orderInstallmentRepo)
 	releaseEscrowFundsUC := installmentusecase.NewReleaseEscrowFundsUsecase(txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo)
-	installmentHandler := installmenthandler.NewInstallmentHandler(configureInstallmentPlanUC, getInstallmentsUC, releaseEscrowFundsUC)
-	a.Logger.Info().Msg("✅ v5.0.0 Installment usecases & handler initialized")
+
+	// 🆕 v5.3.0 : Dashboard Marchand Usecase
+	getMerchantDashboardUC := installmentusecase.NewGetMerchantDashboardUsecase(
+		postgresOrderRepo,
+		orderInstallmentRepo,
+		deliveryZoneRepo,
+	)
+
+	// 🆕 v5.3.0 : Installment Handler mis à jour avec le Dashboard
+	installmentHandler := installmenthandler.NewInstallmentHandler(
+		configureInstallmentPlanUC,
+		getInstallmentsUC,
+		releaseEscrowFundsUC,
+		getMerchantDashboardUC,
+	)
+	a.Logger.Info().Msg("✅ v5.3.0 Installment usecases & handler initialized (including merchant dashboard)")
 
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
