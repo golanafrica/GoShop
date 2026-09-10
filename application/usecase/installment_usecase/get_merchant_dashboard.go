@@ -2,11 +2,13 @@ package installmentusecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	installmentdto "Goshop/application/dto/installment_dto"
 	"Goshop/domain/repository"
+	"Goshop/interfaces/utils"
 )
 
 type GetMerchantDashboardUsecase struct {
@@ -27,10 +29,30 @@ func NewGetMerchantDashboardUsecase(
 	}
 }
 
+// 🆕 v5.3.0 : Structure pour la sérialisation JSON dans Redis
+type dashboardCacheData struct {
+	Dashboard *installmentdto.MerchantInstallmentDashboardResponse `json:"dashboard"`
+	Summaries []*installmentdto.InstallmentOrderSummary            `json:"summaries"`
+}
+
 // Execute récupère toutes les commandes en tranches d'un marchand et calcule les stats
+// 🆕 v5.3.0 : Intègre un cache Redis avec TTL de 5 minutes pour optimiser les performances
 func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID string) (*installmentdto.MerchantInstallmentDashboardResponse, []*installmentdto.InstallmentOrderSummary, error) {
-	// 1. Récupérer toutes les commandes du marchand (à optimiser plus tard avec un filtre payment_method ou jointure)
-	orders, err := uc.orderRepo.FindAll(ctx) // Note: Idéalement, ajouter FindByShopID(ctx, shopID)
+	cacheKey := fmt.Sprintf("merchant_installment_dashboard:%s", shopID)
+
+	// 1. 🆕 Essayer le cache Redis
+	if utils.Rdb != nil {
+		cached, err := utils.Rdb.Get(ctx, cacheKey).Result()
+		if err == nil {
+			var data dashboardCacheData
+			if err := json.Unmarshal([]byte(cached), &data); err == nil {
+				return data.Dashboard, data.Summaries, nil
+			}
+		}
+	}
+
+	// 2. Fallback sur la base de données
+	orders, err := uc.orderRepo.FindAll(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("échec de la récupération des commandes: %w", err)
 	}
@@ -84,7 +106,6 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		if hasOverdue {
 			dashboard.TotalOverdueOrders++
 		}
-		// Le montant en séquestre est le montant payé mais pas encore libéré
 		dashboard.TotalHeldAmount += paidAmount
 
 		// Déterminer le statut global
@@ -123,7 +144,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 
 		summaries = append(summaries, &installmentdto.InstallmentOrderSummary{
 			OrderID:             order.ID,
-			CustomerName:        "Client " + order.CustomerID[:8], // À remplacer par un jointure customer si besoin
+			CustomerName:        "Client " + order.CustomerID[:8],
 			TotalAmount:         order.TotalCents,
 			PaidAmount:          paidAmount,
 			RemainingAmount:     remainingAmount,
@@ -136,5 +157,25 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		})
 	}
 
+	// 3. 🆕 Mettre en cache le résultat pour 5 minutes
+	if utils.Rdb != nil {
+		dataToCache := dashboardCacheData{
+			Dashboard: &dashboard,
+			Summaries: summaries,
+		}
+		if jsonData, err := json.Marshal(dataToCache); err == nil {
+			utils.Rdb.Set(ctx, cacheKey, jsonData, 5*time.Minute)
+		}
+	}
+
+	// ✅ Correction de l'erreur de syntaxe ici
 	return &dashboard, summaries, nil
+}
+
+// 🆕 v5.3.0 : InvalidateCache permet de vider le cache après un paiement ou une confirmation de livraison
+func (uc *GetMerchantDashboardUsecase) InvalidateCache(ctx context.Context, shopID string) {
+	if utils.Rdb != nil {
+		cacheKey := fmt.Sprintf("merchant_installment_dashboard:%s", shopID)
+		utils.Rdb.Del(ctx, cacheKey)
+	}
 }
