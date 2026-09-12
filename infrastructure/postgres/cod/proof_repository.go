@@ -1283,3 +1283,29 @@ func (r *CODProofRepositoryInfrastructure) SumTotalCommissionByShopID(ctx contex
 
 	return total, nil
 }
+
+// FindProofsReadyForCollection retourne les preuves confirmées prêtes pour la collecte de commission
+// en fonction du délai de la zone de livraison (cod_confirmation_delay_days)
+// Utilise COALESCE pour fallback à 7 jours si la zone n'est pas définie
+func (r *CODProofRepositoryInfrastructure) FindProofsReadyForCollection(ctx context.Context, limit int) ([]*entity.CODProof, error) {
+	query := `
+		SELECT cp.id, cp.order_id, cp.shop_id, cp.customer_id,
+		       cp.client_payment_proof_url, cp.client_payment_amount_cents,
+		       cp.client_payment_date, cp.client_receipt_number, cp.client_notes, cp.client_submitted_at,
+		       cp.merchant_receipt_proof_url, cp.merchant_received_amount_cents,
+		       cp.merchant_receipt_date, cp.merchant_notes, cp.merchant_submitted_at,
+		       cp.amounts_match, cp.dates_match,
+		       cp.commission_cents, cp.commission_status, cp.commission_collected_at,
+		       cp.status,
+		       cp.dispute_raised_at, cp.dispute_reason, cp.dispute_resolved_at,
+		       cp.created_at, cp.updated_at
+		FROM cod_proofs cp
+		LEFT JOIN delivery_zones dz ON cp.delivery_zone_id = dz.id
+		WHERE cp.status = 'confirmed'
+		  AND cp.commission_status IN ('pending', 'due')
+		  AND cp.created_at + (COALESCE(dz.cod_confirmation_delay_days, 7) || ' days')::interval <= NOW()
+		ORDER BY cp.created_at ASC
+		LIMIT $1
+	`
+	return r.scanProofs(ctx, query, limit)
+}

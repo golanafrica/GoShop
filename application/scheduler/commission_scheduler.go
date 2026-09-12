@@ -73,7 +73,9 @@ func (s *CommissionScheduler) RunNightlyCollection(ctx context.Context) error {
 	// 2. Traiter les preuves par lots
 	for {
 		// Récupérer un lot de preuves en attente
-		proofs, err := s.batchRepo.FindPendingProofsForCollection(ctx, s.batchSize)
+		//proofs, err := s.batchRepo.FindPendingProofsForCollection(ctx, s.batchSize)
+		// 🆕 Récupère les preuves dont le délai de la zone de livraison est écoulé
+		proofs, err := s.codRepo.FindProofsReadyForCollection(ctx, s.batchSize)
 		if err != nil {
 			s.logger.Error().Err(err).Msg("Failed to fetch pending proofs")
 			batch.Status = "failed"

@@ -118,6 +118,10 @@ type CODProofRepository interface {
 	// UpdateCommissionStatus met à jour uniquement le statut de commission
 	UpdateCommissionStatus(ctx context.Context, id string, status entity.CODCommissionStatus) error
 
+	// FindProofsReadyForCollection retourne les preuves confirmées prêtes pour la collecte
+	// en fonction du délai de confirmation COD de la zone de livraison (cod_confirmation_delay_days)
+	FindProofsReadyForCollection(ctx context.Context, limit int) ([]*entity.CODProof, error)
+
 	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) CODProofRepository
 }
