@@ -57,24 +57,36 @@ func (r *deliveryZoneRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// 🆕 CORRECTION MAJEURE : Utilisation de COALESCE pour éviter les erreurs de scan NULL
+// sur les champs optionnels (region, description, created_by, updated_by)
+const baseSelectQuery = `
+	SELECT 
+		id, zone_code, zone_name, country, COALESCE(region, ''), zone_type, 
+		delivery_delay_days, return_delay_days, warranty_response_days, 
+		cod_confirmation_delay_days, installment_release_delay_days, 
+		COALESCE(description, ''), is_active, priority, 
+		COALESCE(created_by, ''), COALESCE(updated_by, ''), created_at, updated_at 
+	FROM delivery_zones
+`
+
 func (r *deliveryZoneRepository) FindByID(ctx context.Context, id string) (*entity.DeliveryZone, error) {
-	return r.queryZone(ctx, "SELECT id, zone_code, zone_name, country, region, zone_type, delivery_delay_days, return_delay_days, warranty_response_days, cod_confirmation_delay_days, installment_release_delay_days, description, is_active, priority, created_by, updated_by, created_at, updated_at FROM delivery_zones WHERE id = $1", id)
+	return r.queryZone(ctx, baseSelectQuery+" WHERE id = $1", id)
 }
 
 func (r *deliveryZoneRepository) FindByCode(ctx context.Context, code string) (*entity.DeliveryZone, error) {
-	return r.queryZone(ctx, "SELECT id, zone_code, zone_name, country, region, zone_type, delivery_delay_days, return_delay_days, warranty_response_days, cod_confirmation_delay_days, installment_release_delay_days, description, is_active, priority, created_by, updated_by, created_at, updated_at FROM delivery_zones WHERE zone_code = $1", code)
+	return r.queryZone(ctx, baseSelectQuery+" WHERE zone_code = $1", code)
 }
 
 func (r *deliveryZoneRepository) ListByCountry(ctx context.Context, country string) ([]*entity.DeliveryZone, error) {
-	return r.queryZones(ctx, "SELECT id, zone_code, zone_name, country, region, zone_type, delivery_delay_days, return_delay_days, warranty_response_days, cod_confirmation_delay_days, installment_release_delay_days, description, is_active, priority, created_by, updated_by, created_at, updated_at FROM delivery_zones WHERE country = $1 ORDER BY priority DESC", country)
+	return r.queryZones(ctx, baseSelectQuery+" WHERE country = $1 ORDER BY priority DESC", country)
 }
 
 func (r *deliveryZoneRepository) ListByType(ctx context.Context, zoneType entity.ZoneType) ([]*entity.DeliveryZone, error) {
-	return r.queryZones(ctx, "SELECT id, zone_code, zone_name, country, region, zone_type, delivery_delay_days, return_delay_days, warranty_response_days, cod_confirmation_delay_days, installment_release_delay_days, description, is_active, priority, created_by, updated_by, created_at, updated_at FROM delivery_zones WHERE zone_type = $1 ORDER BY priority DESC", zoneType)
+	return r.queryZones(ctx, baseSelectQuery+" WHERE zone_type = $1 ORDER BY priority DESC", zoneType)
 }
 
 func (r *deliveryZoneRepository) ListActive(ctx context.Context) ([]*entity.DeliveryZone, error) {
-	return r.queryZones(ctx, "SELECT id, zone_code, zone_name, country, region, zone_type, delivery_delay_days, return_delay_days, warranty_response_days, cod_confirmation_delay_days, installment_release_delay_days, description, is_active, priority, created_by, updated_by, created_at, updated_at FROM delivery_zones WHERE is_active = true ORDER BY country, priority DESC")
+	return r.queryZones(ctx, baseSelectQuery+" WHERE is_active = true ORDER BY country, priority DESC")
 }
 
 // Helpers

@@ -29,18 +29,18 @@ func NewGetMerchantDashboardUsecase(
 	}
 }
 
-// 🆕 v5.3.0 : Structure pour la sérialisation JSON dans Redis
+// dashboardCacheData structure pour la sérialisation JSON dans Redis
 type dashboardCacheData struct {
 	Dashboard *installmentdto.MerchantInstallmentDashboardResponse `json:"dashboard"`
 	Summaries []*installmentdto.InstallmentOrderSummary            `json:"summaries"`
 }
 
-// Execute récupère toutes les commandes en tranches d'un marchand et calcule les stats
-// 🆕 v5.3.0 : Intègre un cache Redis avec TTL de 5 minutes pour optimiser les performances
+// Execute récupère toutes les commandes en tranches d'un marchand et calcule les statistiques globales
+// Intègre un cache Redis avec TTL de 5 minutes pour optimiser les performances
 func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID string) (*installmentdto.MerchantInstallmentDashboardResponse, []*installmentdto.InstallmentOrderSummary, error) {
 	cacheKey := fmt.Sprintf("merchant_installment_dashboard:%s", shopID)
 
-	// 1. 🆕 Essayer le cache Redis
+	// 1. Essayer le cache Redis d'abord (TTL 5 min)
 	if utils.Rdb != nil {
 		cached, err := utils.Rdb.Get(ctx, cacheKey).Result()
 		if err == nil {
@@ -51,7 +51,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		}
 	}
 
-	// 2. Fallback sur la base de données
+	// 2. Fallback sur la base de données si cache manquant ou expiré
 	orders, err := uc.orderRepo.FindAll(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("échec de la récupération des commandes: %w", err)
@@ -70,7 +70,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 			continue // Ce n'est pas une commande en tranches
 		}
 
-		// Calculer les montants
+		// Calculer les montants payés et restants
 		var paidAmount, remainingAmount int64
 		var nextDueDate *time.Time
 		var hasOverdue bool
@@ -100,7 +100,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 			}
 		}
 
-		// Mettre à jour les stats globales
+		// Mettre à jour les statistiques globales du dashboard
 		dashboard.TotalPendingOrders++
 		dashboard.TotalAmountPending += remainingAmount
 		if hasOverdue {
@@ -108,7 +108,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		}
 		dashboard.TotalHeldAmount += paidAmount
 
-		// Déterminer le statut global
+		// Déterminer le statut global de la commande
 		status := "pending"
 		if hasOverdue {
 			status = "overdue"
@@ -118,28 +118,31 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 			status = "partial"
 		}
 
-		// Calculer la date de libération prévue
-		var expectedReleaseDate *time.Time
-		delayDays := order.InstallmentReleaseDelayDays
-		if delayDays == 0 {
-			delayDays = 7 // Fallback
+		// La zone de livraison est la source unique de vérité pour le délai de libération
+		zoneName := "Zone inconnue"
+		delayDays := 7 // Fallback par défaut
+
+		if order.DeliveryZoneID != nil {
+			zone, err := uc.deliveryZoneRepo.FindByID(ctx, *order.DeliveryZoneID)
+			if err == nil && zone != nil {
+				zoneName = zone.ZoneName
+				delayDays = zone.InstallmentReleaseDelayDays
+			}
+		} else if order.InstallmentReleaseDelayDays > 0 {
+			// Rétrocompatibilité si le délai est stocké directement sur la commande
+			delayDays = order.InstallmentReleaseDelayDays
 		}
 
+		// Calculer la date de libération prévue des fonds
+		var expectedReleaseDate *time.Time
 		if order.DeliveredAt != nil {
+			// Cas normal : libération après livraison + délai de la zone
 			releaseDate := order.DeliveredAt.AddDate(0, 0, delayDays)
 			expectedReleaseDate = &releaseDate
 		} else if allPaid {
-			// Si tout est payé mais pas livré, fallback à 30 jours après création
+			// Fallback de sécurité : si tout est payé mais pas livré, libération après 30 jours
 			releaseDate := order.CreatedAt.AddDate(0, 0, 30)
 			expectedReleaseDate = &releaseDate
-		}
-
-		// Récupérer le nom de la zone (optionnel, pour l'affichage)
-		zoneName := "Zone inconnue"
-		if order.DeliveryZoneID != nil {
-			if zone, err := uc.deliveryZoneRepo.FindByID(ctx, *order.DeliveryZoneID); err == nil && zone != nil {
-				zoneName = zone.ZoneName
-			}
 		}
 
 		summaries = append(summaries, &installmentdto.InstallmentOrderSummary{
@@ -157,7 +160,7 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		})
 	}
 
-	// 3. 🆕 Mettre en cache le résultat pour 5 minutes
+	// 3. Mettre en cache le résultat pour 5 minutes afin d'optimiser les performances
 	if utils.Rdb != nil {
 		dataToCache := dashboardCacheData{
 			Dashboard: &dashboard,
@@ -168,11 +171,11 @@ func (uc *GetMerchantDashboardUsecase) Execute(ctx context.Context, shopID strin
 		}
 	}
 
-	// ✅ Correction de l'erreur de syntaxe ici
 	return &dashboard, summaries, nil
 }
 
-// 🆕 v5.3.0 : InvalidateCache permet de vider le cache après un paiement ou une confirmation de livraison
+// InvalidateCache vide le cache Redis après un paiement ou une confirmation de livraison
+// pour garantir que le marchand voit les données les plus récentes
 func (uc *GetMerchantDashboardUsecase) InvalidateCache(ctx context.Context, shopID string) {
 	if utils.Rdb != nil {
 		cacheKey := fmt.Sprintf("merchant_installment_dashboard:%s", shopID)

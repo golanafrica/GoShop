@@ -369,6 +369,7 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 }
 
 // FindAll retourne toutes les commandes du shop courant
+// FindAll retourne toutes les commandes du shop courant
 func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, error) {
 	shopID, err := or.getShopID(ctx)
 	if err != nil {
@@ -384,6 +385,15 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			o.status,
 			o.created_at,
 			o.updated_at,
+			o.payment_method,
+			o.accepted_at,
+			o.rejected_at,
+			o.delivered_at,
+			o.cancelled_at,
+			o.delivery_notes,
+			o.amount_received_cents,
+			o.reserved_until,
+			o.delivery_zone_id,
 			oi.id AS item_id,
 			oi.product_id,
 			oi.quantity,
@@ -405,13 +415,23 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 
 	for rows.Next() {
 		var (
-			orderID       string
-			shopIDVal     string
-			customerID    string
-			totalCents    int64
-			status        string
-			createdAt     time.Time
-			updatedAt     time.Time
+			orderID             string
+			shopIDVal           string
+			customerID          string
+			totalCents          int64
+			status              string
+			createdAt           time.Time
+			updatedAt           time.Time
+			paymentMethod       sql.NullString
+			acceptedAt          sql.NullTime
+			rejectedAt          sql.NullTime
+			deliveredAt         sql.NullTime
+			cancelledAt         sql.NullTime
+			deliveryNotes       sql.NullString
+			amountReceivedCents sql.NullInt64
+			reservedUntil       sql.NullTime
+			deliveryZoneID      sql.NullString // 🆕 DOIT ÊTRE ICI
+
 			itemID        sql.NullString
 			productID     sql.NullString
 			quantity      sql.NullInt64
@@ -427,6 +447,15 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			&status,
 			&createdAt,
 			&updatedAt,
+			&paymentMethod,
+			&acceptedAt,
+			&rejectedAt,
+			&deliveredAt,
+			&cancelledAt,
+			&deliveryNotes,
+			&amountReceivedCents,
+			&reservedUntil,
+			&deliveryZoneID, // 🆕 DOIT ÊTRE ICI (16ème position, juste avant itemID)
 			&itemID,
 			&productID,
 			&quantity,
@@ -449,6 +478,37 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 				UpdatedAt:  updatedAt,
 				Items:      []*entity.OrderItem{},
 			}
+
+			if paymentMethod.Valid {
+				order.PaymentMethod = paymentMethod.String
+			}
+			if acceptedAt.Valid {
+				order.AcceptedAt = &acceptedAt.Time
+			}
+			if rejectedAt.Valid {
+				order.RejectedAt = &rejectedAt.Time
+			}
+			if deliveredAt.Valid {
+				order.DeliveredAt = &deliveredAt.Time
+			}
+			if cancelledAt.Valid {
+				order.CancelledAt = &cancelledAt.Time
+			}
+			if deliveryNotes.Valid {
+				order.DeliveryNotes = &deliveryNotes.String
+			}
+			if amountReceivedCents.Valid {
+				order.AmountReceivedCents = &amountReceivedCents.Int64
+			}
+			if reservedUntil.Valid {
+				order.ReservedUntil = &reservedUntil.Time
+			}
+
+			// 🆕 C'EST ICI QUE LA MAGIE OPÈRE
+			if deliveryZoneID.Valid {
+				order.DeliveryZoneID = &deliveryZoneID.String
+			}
+
 			orderMap[orderID] = order
 		}
 

@@ -46,6 +46,9 @@ COPY --from=builder --chown=goshop:goshop /app/bin/api .
 # Configurer les permissions du binaire
 # 🛡️ 555 = lecture+exécution uniquement (pas d'écriture)
 RUN chmod 555 api
+# 🆕 Créer le dossier uploads AVANT de passer en non-root, avec les bons droits
+# 🛡️ Sans ça, le binaire (UID 10001) n'a pas le droit de créer/écrire dans ./uploads
+RUN mkdir -p /app/uploads && chown -R goshop:goshop /app/uploads
 # Passer à l'utilisateur non-root
 USER goshop
 # Exposer le port
