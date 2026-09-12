@@ -1085,10 +1085,14 @@ func (a *App) setupRouter() {
 		unfreezeAccountUC,
 	)
 
+	// 🆕 v5.1.0 : Admin COD Dashboard Usecase
+	adminCODDashboardUC := codusecase.NewGetAdminCODDashboardUsecase(codProofRepo)
+
 	codHandler := codhandler.NewCODHandler(
 		submitClientProofUC,
 		submitMerchantProofUC,
 		collectCommissionUC,
+		adminCODDashboardUC,
 		codProofRepo,
 	)
 
@@ -1479,6 +1483,8 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(adminDeliveryZoneHandler.ListZones))
 				r.Put("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.UpdateZone))
 				r.Delete("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.DeleteZone))
+				// 🆕 v5.1.0 : Admin COD Dashboard Route
+				r.Get("/cod/commissions/dashboard", middl.ErrorHandler(codHandler.GetAdminCODDashboard))
 			})
 		})
 	})

@@ -22,23 +22,26 @@ import (
 // ============================================================
 
 type CODHandler struct {
-	submitClientUC   *codusecase.SubmitClientProofUsecase
-	submitMerchantUC *codusecase.SubmitMerchantProofUsecase
-	collectUC        *codusecase.CollectCommissionUsecase
-	codProofRepo     repository.CODProofRepository
+	submitClientUC      *codusecase.SubmitClientProofUsecase
+	submitMerchantUC    *codusecase.SubmitMerchantProofUsecase
+	collectUC           *codusecase.CollectCommissionUsecase
+	getAdminDashboardUC *codusecase.GetAdminCODDashboardUsecase
+	codProofRepo        repository.CODProofRepository
 }
 
 func NewCODHandler(
 	submitClientUC *codusecase.SubmitClientProofUsecase,
 	submitMerchantUC *codusecase.SubmitMerchantProofUsecase,
 	collectUC *codusecase.CollectCommissionUsecase,
+	getAdminDashboardUC *codusecase.GetAdminCODDashboardUsecase,
 	codProofRepo repository.CODProofRepository,
 ) *CODHandler {
 	return &CODHandler{
-		submitClientUC:   submitClientUC,
-		submitMerchantUC: submitMerchantUC,
-		collectUC:        collectUC,
-		codProofRepo:     codProofRepo,
+		submitClientUC:      submitClientUC,
+		submitMerchantUC:    submitMerchantUC,
+		collectUC:           collectUC,
+		getAdminDashboardUC: getAdminDashboardUC,
+		codProofRepo:        codProofRepo,
 	}
 }
 
@@ -789,6 +792,31 @@ func (h *CODHandler) GetCommissionStats(w http.ResponseWriter, r *http.Request) 
 			"disputed":  disputedCount,
 		},
 	})
+}
+
+// GetAdminCODDashboard godoc
+// @Summary Obtenir le tableau de bord des commissions COD (Admin uniquement)
+// @Tags Admin COD
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} utils.AppError
+// @Security ApiKeyAuth
+// @Router /api/admin/cod/commissions/dashboard [get]
+func (h *CODHandler) GetAdminCODDashboard(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	dashboard, err := h.getAdminDashboardUC.Execute(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to get admin COD dashboard")
+		return utils.NewAppError("DASHBOARD_FETCH_FAILED", err.Error(), http.StatusInternalServerError)
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success":   true,
+		"dashboard": dashboard,
+	})
+	return nil // ✅ Correction : WriteJSON ne retourne pas d'error, on retourne nil
 }
 
 // ============================================================
