@@ -7,6 +7,26 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+
+## [v5.0.0-installment-zones] - 2026-09-12
+
+### 🚀 Nouveautés Majeures
+- **Système de Zones de Livraison Dynamiques** : 47+ zones pré-configurées (BF, CI, SN, ML, etc.) avec délais personnalisables (min 3j, max 30j).
+- **Paiement en Tranches (Installments)** : Workflow complet de configuration, paiement échelonné, et libération différée des fonds en séquestre.
+- **Scheduler Auto-Release Intelligent** : Libération automatique basée sur `DeliveredAt + ZoneDelay`, avec fallback de sécurité à 30 jours si `DeliveredAt` est NULL.
+- **Blocage par Litige** : Intégration atomique avec le module Dispute. Un litige ouvert passe l'escrow en statut `disputed` et bloque immédiatement toute libération.
+- **Notifications Proactives** : Email/WebSocket au marchand (dernière tranche payée) et au client (rappel 24h avant libération).
+- **Dashboard Marchand** : API dédiée avec statistiques globales (montants en attente, séquestre, retard) et cache Redis (TTL 5 min) pour des performances optimales.
+
+### 🛠️ Architecture & Base de Données
+- **Nouvelles Tables** : `delivery_zones` (avec seed de 47+ zones).
+- **Nouvelles Colonnes** : `delivery_zone_id` ajouté à `orders`, `tontine_groups`, `cod_proofs`, et `installment_plans` (prêt pour une future extension).
+- **Fix Critique** : Correction des erreurs de scan `NULL` dans `DeliveryZoneRepository` via l'utilisation de `COALESCE` sur les champs optionnels (`region`, `description`).
+
+### 🧪 Tests & Qualité
+- **3 Nouveaux Tests E2E** : Validation des délais dynamiques (urbain 5j vs rural 10j), test du fallback 30 jours, et test de blocage par litige.
+- **Couverture** : 100% des scénarios critiques du flux de paiement en tranches sont maintenant testés en intégration.
+
 ## [v4.5.0-production-ready] - 2026-07-21
 
 ### 🚨 Sécurité & Durcissement (CRITIQUE)
