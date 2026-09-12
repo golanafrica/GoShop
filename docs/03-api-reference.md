@@ -153,6 +153,25 @@ Pour interagir avec les ressources d'une boutique spécifique, vous **devez** in
 | `POST` | `/api/tontine/groups/join` | Rejoindre un groupe via code d'invitation |
 | `POST` | `/api/tontine/groups/{id}/pay` | Payer sa cotisation pour le cycle en cours |
 | `GET` | `/api/tontine/groups/{id}/payments` | Historique des paiements du groupe |
+### 💳 Paiement en Tranches & Zones de Livraison (v5.0.0)
+*(Nécessite le header `X-Shop-Slug` pour les routes marchand)*
+
+| Méthode | Endpoint | Description |
+|---------|----------|-------------|
+| `POST` | `/api/products/{product_id}/installment-plan` | (Marchand) Configurer un plan de paiement en tranches pour un produit (délai basé sur la zone) |
+| `GET` | `/api/products/{product_id}/installment-plan` | (Public/Marchand) Récupérer le plan de tranches d'un produit |
+| `GET` | `/api/orders/{order_id}/installments` | (Marchand/Client) Récupérer le détail et le statut de toutes les tranches d'une commande |
+| `GET` | `/api/merchant/installments/dashboard` | (Marchand) Tableau de bord global : stats (en attente, séquestre, retard) et résumé des commandes |
+
+#### 👑 Administration des Zones de Livraison
+*(Nécessite le rôle `super_admin` ou `admin`)*
+
+| Méthode | Endpoint | Description |
+|---------|----------|-------------|
+| `POST` | `/api/admin/delivery-zones` | Créer une nouvelle zone de livraison (ex: "Ouaga Urbain", 5 jours) |
+| `GET` | `/api/admin/delivery-zones` | Lister toutes les zones de livraison (avec filtres par pays/type) |
+| `PUT` | `/api/admin/delivery-zones/{id}` | Modifier les délais ou le statut d'une zone |
+| `DELETE` | `/api/admin/delivery-zones/{id}` | Désactiver une zone de livraison (soft delete) |
 
 ### 🔔 Notifications Temps Réel (v4.5.0)
 | Méthode | Endpoint | Description |

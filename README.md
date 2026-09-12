@@ -85,6 +85,13 @@ GoShop est distribué sous licence **Apache 2.0**. Voir le fichier [LICENSE](./L
 - Vérification propriétaire/collaborateur avant toute action
 - KYC Marchand obligatoire pour certaines opérations
 
+### 📦 Paiement en Tranches & Zones de Livraison (v5.0.0)
+- **Zones de Livraison Dynamiques** : 47+ zones pré-configurées (Afrique de l'Ouest) avec délais personnalisables (urbain, rural, international).
+- **Scheduler Intelligent** : Libération automatique des fonds en séquestre basée sur `Date de Livraison + Délai de la Zone`.
+- **Sécurité Maximale** : Fallback de 30 jours si la livraison n'est jamais confirmée, et blocage atomique immédiat en cas d'ouverture de litige.
+- **Dashboard Marchand** : Vue d'ensemble des commandes en tranches, montants en attente, en séquestre et en retard, avec cache Redis (TTL 5 min) pour des performances optimales.
+- **Notifications Proactives** : Alerte au marchand lors du paiement de la dernière tranche, et rappel au client 24h avant la libération automatique des fonds.
+
 ---
 
 ## 🎉 Nouveautés v4.5.0
@@ -166,6 +173,14 @@ Migration `033_add_user_id_to_customers.sql` permet de lier un `Customer` à un 
 - Permissions par endpoint
 - Middleware `RequireRoles` pour protection granulaire
 
+### 🎉 Nouveautés v5.0.0
+
+#### Système de Paiement en Tranches & Zones de Livraison
+- **Service DeliveryZone Partagé** : Entité, Repository et Service avec cache Redis (TTL 24h) pour gérer les délais dynamiques (livraison, retour, COD, tranches).
+- **Admin CRUD** : Interface complète pour que les super-admins gèrent les 47+ zones africaines.
+- **Scheduler Auto-Release** : Tâche Cron (toutes les 6h) qui libère les fonds escrow uniquement si toutes les tranches sont payées, le délai écoulé, et **aucun litige actif**.
+- **Intégration Litiges** : Le statut `disputed` de l'escrow bloque immédiatement toute tentative de libération automatique ou manuelle.
+- **Tests E2E Complets** : Couverture totale des scénarios (délais urbains vs ruraux, fallback 30 jours, blocage par litige).
 ---
 
 ## 🎯 Nouveautés v3.x
@@ -846,6 +861,7 @@ Voir [CONTRIBUTING.md](docs/contributing.md) pour les détails.
 - `refactor:` Refactoring de code
 
 ---
+
 
 ## 📄 Licence
 
