@@ -416,6 +416,21 @@ func (mr *MockCODProofRepositoryMockRecorder) FindPendingProofsByShopID(ctx, sho
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPendingProofsByShopID", reflect.TypeOf((*MockCODProofRepository)(nil).FindPendingProofsByShopID), ctx, shopID)
 }
 
+// FindProofsReadyForCollection mocks base method.
+func (m *MockCODProofRepository) FindProofsReadyForCollection(ctx context.Context, limit int) ([]*entity.CODProof, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindProofsReadyForCollection", ctx, limit)
+	ret0, _ := ret[0].([]*entity.CODProof)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindProofsReadyForCollection indicates an expected call of FindProofsReadyForCollection.
+func (mr *MockCODProofRepositoryMockRecorder) FindProofsReadyForCollection(ctx, limit any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindProofsReadyForCollection", reflect.TypeOf((*MockCODProofRepository)(nil).FindProofsReadyForCollection), ctx, limit)
+}
+
 // SumCommissionCollectedByShopID mocks base method.
 func (m *MockCODProofRepository) SumCommissionCollectedByShopID(ctx context.Context, shopID string) (int64, error) {
 	m.ctrl.T.Helper()

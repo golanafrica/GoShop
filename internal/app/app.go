@@ -116,6 +116,9 @@ import (
 	// 🆕 v5.1.0 : Delivery Zone Infrastructure
 	deliveryzoneinfra "Goshop/infrastructure/postgres/delivery_zone"
 
+	// 🆕 v5.2.0 : Customer Reliability Score Infrastructure
+	customerreliabilityscoreinfra "Goshop/infrastructure/postgres/customer_reliability_score"
+
 	"Goshop/domain/entity"
 	"Goshop/domain/service"
 	"Goshop/infrastructure/notification"
@@ -181,6 +184,10 @@ import (
 	deliveryzoneusecase "Goshop/application/usecase/delivery_zone_usecase"
 	deliveryzoneservice "Goshop/domain/service"
 	deliveryzonehandler "Goshop/interfaces/handler/delivery_zone_handler"
+
+	// 🆕 v5.2.0 : Customer Reliability Score Usecase & Handler
+	customerreliabilityusecase "Goshop/application/usecase/customer_reliability_usecase"
+	customerreliabilityhandler "Goshop/interfaces/handler/customer_reliability_handler"
 
 	"Goshop/config/setupLogging"
 	"Goshop/interfaces/middl"
@@ -326,7 +333,10 @@ func (a *App) setupRouter() {
 	deliveryZoneRepo := deliveryzoneinfra.NewDeliveryZoneRepository(a.DB)
 	deliveryZoneService := deliveryzoneservice.NewDeliveryZoneService(deliveryZoneRepo)
 
-	a.Logger.Info().Msg("✅ v5.1.0 repositories initialized (all + user_2fa + user_sessions + api_keys + dispute + delivery_proof + installments + delivery_zones)")
+	// 🆕 v5.2.0 : Customer Reliability Score Repository
+	customerReliabilityScoreRepo := customerreliabilityscoreinfra.NewCustomerReliabilityScoreRepository(a.DB)
+
+	a.Logger.Info().Msg("✅ v5.2.0 repositories initialized (customer_reliability_scores)")
 
 	// ============================================================
 	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
@@ -889,9 +899,27 @@ func (a *App) setupRouter() {
 	getDashboardUC := customerusecase.NewGetClientDashboardUsecase(postgresCustomerRepo)
 	a.Logger.Info().Msg("✅ Client Dashboard usecase initialized")
 
-	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
+	// ============ 🆕 v5.2.0 : CUSTOMER RELIABILITY SCORE USECASE & HANDLER ============
+	calculateReliabilityScoreUC := customerreliabilityusecase.NewCalculateReliabilityScoreUsecase(
+		customerReliabilityScoreRepo,
+		postgresCustomerRepo,
+		a.Logger.Logger,
+	)
+	customerReliabilityHandler := customerreliabilityhandler.NewCustomerReliabilityHandler(calculateReliabilityScoreUC)
+	a.Logger.Info().Msg("✅ v5.2.0 Customer Reliability Score usecase & handler initialized")
 	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
 	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneService)
+
+	// 🆕 v5.2.0 : Create Installment Order Usecase (avec vérification du score de fiabilité)
+	createInstallmentOrderUC := installmentusecase.NewCreateInstallmentOrderUsecase(
+		txmanagerRepo,
+		postgresOrderRepo,
+		installmentPlanRepo,
+		postgresCustomerRepo,
+		customerReliabilityScoreRepo, // 🆕 AJOUTÉ : Repository du score de fiabilité
+		orderInstallmentRepo,
+	)
+
 	getInstallmentsUC := installmentusecase.NewGetInstallmentsUsecase(orderInstallmentRepo)
 	releaseEscrowFundsUC := installmentusecase.NewReleaseEscrowFundsUsecase(txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo)
 
@@ -902,14 +930,15 @@ func (a *App) setupRouter() {
 		deliveryZoneRepo,
 	)
 
-	// 🆕 v5.3.0 : Installment Handler mis à jour avec le Dashboard
+	// 🆕 v5.3.0 : Installment Handler mis à jour avec le Dashboard et la création de commande
 	installmentHandler := installmenthandler.NewInstallmentHandler(
 		configureInstallmentPlanUC,
+		createInstallmentOrderUC, // 🆕 AJOUTÉ ICI : pour créer les commandes en tranches avec vérification du score
 		getInstallmentsUC,
 		releaseEscrowFundsUC,
 		getMerchantDashboardUC,
 	)
-	a.Logger.Info().Msg("✅ v5.3.0 Installment usecases & handler initialized (including merchant dashboard)")
+	a.Logger.Info().Msg("✅ v5.3.0 Installment usecases & handler initialized (including merchant dashboard & reliability check)")
 
 	// ============ 🆕 v3.1.0 : COMMISSION SCHEDULER (COD) ============
 	commissionSched := appscheduler.NewCommissionScheduler(
@@ -1208,7 +1237,7 @@ func (a *App) setupRouter() {
 	fileHandler := filehandler.NewFileHandler(downloadFileUC, uploadStorage, fileSecretKey)
 	a.Logger.Info().Msg("✅ v4.10.0 File download handler initialized")
 
-	a.Logger.Info().Msg("✅ v5.1.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments, delivery_zones)")
+	a.Logger.Info().Msg("✅ v5.2.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments, delivery_zones, reliability_score)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1325,6 +1354,9 @@ func (a *App) setupRouter() {
 				r.Delete("/{id}", middl.ErrorHandler(customerHandler.DeleteCustomerHandler))
 
 				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
+
+				// 🆕 v5.2.0 : Customer Reliability Score Route
+				r.Get("/{customer_id}/reliability-score", middl.ErrorHandler(customerReliabilityHandler.GetCustomerScore))
 			})
 
 			r.Route("/orders", func(r chi.Router) {
@@ -1540,7 +1572,7 @@ func (a *App) setupRouter() {
 			Str("tontine_schedule", tontineSchedule).
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
 			Str("installment_schedule", installmentSchedule). // 🆕 Ajouté
-			Msg("✅ v5.1.0 All schedulers started successfully")
+			Msg("✅ v5.2.0 All schedulers started successfully")
 	}
 
 	a.Router = r
@@ -1548,7 +1580,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.1.0: Delivery Zone Service integrated)")
+		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1613,7 +1645,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	loggingConfig := setupLogging.Config{
 		Environment: "test",
 		ServiceName: "goshop-api-test",
-		Version:     "5.1.0",
+		Version:     "5.2.0",
 		LogLevel:    "warn",
 	}
 	logger := setupLogging.NewLogger(loggingConfig)

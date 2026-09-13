@@ -44,6 +44,7 @@ type GetMerchantDashboardUC interface {
 
 type InstallmentHandler struct {
 	configurePlanUC        ConfigurePlanUC
+	createOrderUC          *installmentusecase.CreateInstallmentOrderUsecase // 🆕 AJOUTÉ
 	getInstallmentsUC      GetInstallmentsUC
 	releaseEscrowUC        ReleaseEscrowUC
 	getMerchantDashboardUC GetMerchantDashboardUC // 🆕 v5.3.0
@@ -51,12 +52,14 @@ type InstallmentHandler struct {
 
 func NewInstallmentHandler(
 	configurePlanUC ConfigurePlanUC,
+	createOrderUC *installmentusecase.CreateInstallmentOrderUsecase, // 🆕 AJOUTÉ
 	getInstallmentsUC GetInstallmentsUC,
 	releaseEscrowUC ReleaseEscrowUC,
 	getMerchantDashboardUC GetMerchantDashboardUC, // 🆕 v5.3.0
 ) *InstallmentHandler {
 	return &InstallmentHandler{
 		configurePlanUC:        configurePlanUC,
+		createOrderUC:          createOrderUC,
 		getInstallmentsUC:      getInstallmentsUC,
 		releaseEscrowUC:        releaseEscrowUC,
 		getMerchantDashboardUC: getMerchantDashboardUC, // 🆕 v5.3.0

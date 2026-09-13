@@ -15,6 +15,8 @@ type CreateInstallmentOrderUsecase struct {
 	txManager       repository.TxManager
 	orderRepo       repository.OrderRepository
 	planRepo        repository.InstallmentPlanRepository
+	customerRepo    repository.CustomerRepositoryInterface
+	scoreRepo       repository.CustomerReliabilityScoreRepository // 🆕 AJOUTÉ
 	installmentRepo repository.OrderInstallmentRepository
 }
 
@@ -22,18 +24,21 @@ func NewCreateInstallmentOrderUsecase(
 	txManager repository.TxManager,
 	orderRepo repository.OrderRepository,
 	planRepo repository.InstallmentPlanRepository,
+	customerRepo repository.CustomerRepositoryInterface,
+	scoreRepo repository.CustomerReliabilityScoreRepository, // 🆕 AJOUTÉ
 	installmentRepo repository.OrderInstallmentRepository,
 ) *CreateInstallmentOrderUsecase {
 	return &CreateInstallmentOrderUsecase{
 		txManager:       txManager,
 		orderRepo:       orderRepo,
 		planRepo:        planRepo,
+		customerRepo:    customerRepo,
+		scoreRepo:       scoreRepo, // 🆕 AJOUTÉ
 		installmentRepo: installmentRepo,
 	}
 }
 
 // Execute crée la commande ET les tranches de manière atomique.
-// Note: Adapte les paramètres à ta méthode de création de commande existante.
 func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, customerID string, totalCents int64, items []*entity.OrderItem) (*entity.Order, error) {
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
@@ -42,24 +47,22 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 	defer tx.Rollback()
 
 	// 1. Créer la commande (Utilise ta logique existante, adaptée pour utiliser 'tx')
-	// Exemple simplifié : adapte avec ton vrai CreateWithTx ou équivalent
 	order := &entity.Order{
-		ID:            "generated-order-uuid", // Remplace par uuid.New().String()
+		ID:            "generated-order-uuid", // Remplace par uuid.New().String() si nécessaire
 		ShopID:        shopID,
 		CustomerID:    customerID,
 		TotalCents:    totalCents,
 		Status:        string(entity.OrderStatusPending),
-		PaymentMethod: "installment", // Nouveau type de paiement
+		PaymentMethod: "installment",
 		CreatedAt:     time.Now().UTC(),
 		UpdatedAt:     time.Now().UTC(),
 		Items:         items,
 	}
 
 	// TODO: uc.orderRepo.CreateWithTx(ctx, tx, order)
-	// Pour l'instant, on simule la réussite
 	orderID := order.ID
 
-	// 2. Vérifier si un plan en tranches est actif pour le premier produit (simplifié)
+	// 2. Vérifier si un plan en tranches est actif pour le premier produit
 	productID := items[0].ProductID
 	plan, err := uc.planRepo.GetByProductID(ctx, productID)
 	if err != nil {
@@ -72,6 +75,24 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
 		return order, nil
+	}
+
+	// 🆕 VÉRIFICATION DU SCORE DE FIABILITÉ
+	score, err := uc.scoreRepo.FindByCustomerID(ctx, customerID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check customer reliability score: %w", err)
+	}
+
+	// Si le client n'a pas encore de score, on en crée un par défaut (Bronze)
+	if score == nil {
+		score = entity.NewCustomerReliabilityScore(customerID)
+	}
+
+	// Vérifier la limite de tranches
+	maxInstallments := score.GetMaxInstallments()
+	if maxInstallments > 0 && plan.NbTranches > maxInstallments {
+		return nil, fmt.Errorf("accès refusé : votre niveau de fiabilité (%s) est limité à %d tranches maximum. Vous avez demandé %d tranches",
+			score.Tier, maxInstallments, plan.NbTranches)
 	}
 
 	// 🆕 v5.1.0 : Copier les informations de délai dynamique du plan vers la commande
@@ -89,9 +110,8 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 		installments = append(installments, inst)
 	}
 
-	// 5. Sauvegarder les tranches en batch via le repository attaché à la TX
-	installmentRepoTx := uc.installmentRepo // Assure-toi que ton repo implémente WithTX si nécessaire, ou passe tx directement
-	if err := installmentRepoTx.CreateBatch(ctx, installments); err != nil {
+	// 5. Sauvegarder les tranches en batch via le repository
+	if err := uc.installmentRepo.CreateBatch(ctx, installments); err != nil {
 		return nil, fmt.Errorf("échec de la création des tranches: %w", err)
 	}
 
