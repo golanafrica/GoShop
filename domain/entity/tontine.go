@@ -130,6 +130,7 @@ func (s *ProductTontineSettings) ValidateParticipantCount(count int) error {
 
 type TontineGroup struct {
 	ID                string  `json:"id" db:"id"`
+	Name              string  `json:"name" db:"name"` // 🆕 AJOUTÉ : Nom personnalisé du groupe
 	ProductID         string  `json:"product_id" db:"product_id"`
 	ShopID            string  `json:"shop_id" db:"shop_id"`
 	CreatorCustomerID *string `json:"creator_customer_id,omitempty" db:"creator_customer_id"`
@@ -152,13 +153,16 @@ type TontineGroup struct {
 }
 
 func NewTontineGroup(
-	productID, shopID string,
+	name, productID, shopID string, // 🆕 AJOUTÉ : name en premier paramètre
 	creatorCustomerID *string,
 	creatorType, circleType string,
 	amountPerCycleCents int64,
 	totalCycles int,
 	inviteCode string,
 ) (*TontineGroup, error) {
+	if name == "" { // 🆕 AJOUTÉ : Validation du nom
+		return nil, errors.New("name is required")
+	}
 	if productID == "" {
 		return nil, errors.New("product_id is required")
 	}
@@ -186,6 +190,7 @@ func NewTontineGroup(
 
 	now := time.Now().UTC()
 	return &TontineGroup{
+		Name:                name, // 🆕 AJOUTÉ
 		ProductID:           productID,
 		ShopID:              shopID,
 		CreatorCustomerID:   creatorCustomerID,

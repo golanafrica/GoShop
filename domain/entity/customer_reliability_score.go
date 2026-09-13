@@ -146,6 +146,15 @@ func (s *CustomerReliabilityScore) CanUseInstallments() bool {
 	return true
 }
 
+// 🆕 CanCreateTontine vérifie si le client peut créer un groupe de ce type
+func (s *CustomerReliabilityScore) CanCreateTontine(circleType string) bool {
+	if circleType == TontineCircleFamily {
+		return true // Tout le monde peut créer un cercle familial
+	}
+	// Pour Commercial et Corporate, il faut être Silver ou Gold
+	return s.Tier == TierSilver || s.Tier == TierGold
+}
+
 // GetMaxInstallments retourne le nombre maximum de tranches autorisées
 func (s *CustomerReliabilityScore) GetMaxInstallments() int {
 	switch s.Tier {

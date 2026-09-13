@@ -424,6 +424,7 @@ func TestCODWorkflow_Complete(t *testing.T) {
 // ============================================================
 
 // createTestProduct crée un produit de test et retourne son ID
+// createTestProduct crée un produit de test et retourne son ID
 func createTestProduct(t *testing.T, shopID string) string {
 	t.Helper()
 	productID := uuid.New().String()
@@ -437,14 +438,17 @@ func createTestProduct(t *testing.T, shopID string) string {
 }
 
 // createTestCustomer crée un client de test et retourne son ID
+// ✅ CORRECTION : Ajout de kyc_level = 'verified' pour permettre la participation à la tontine
+// createTestCustomer crée un client de test et retourne son ID
+// ✅ CORRECTION : Ajout de la colonne 'email' et 'kyc_level' = 'verified'
 func createTestCustomer(t *testing.T, shopID string) string {
 	t.Helper()
 	customerID := uuid.New().String()
 	_, err := sharedDB.Exec(`
-		INSERT INTO customers (id, shop_id, first_name, last_name, phone, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+		INSERT INTO customers (id, shop_id, first_name, last_name, phone, email, kyc_level, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'verified', NOW(), NOW())
 		ON CONFLICT (id) DO NOTHING
-	`, customerID, shopID, "Test", "Customer", "+22670000000")
+	`, customerID, shopID, "Test", "Customer", "+22670000000", "test.customer@example.com")
 	require.NoError(t, err, "Failed to create test customer")
 	return customerID
 }

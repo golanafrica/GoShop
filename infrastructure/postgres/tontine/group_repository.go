@@ -65,8 +65,10 @@ func (r *TontineGroupRepositoryInfrastructure) scanGroup(row *sql.Row) (*entity.
 	var startedAt sql.NullTime
 	var completedAt sql.NullTime
 
+	// 🆕 AJOUT DE group.Name dans le Scan (2ème position)
 	err := row.Scan(
 		&group.ID,
+		&group.Name,
 		&group.ProductID,
 		&group.ShopID,
 		&creatorCustomerID,
@@ -116,8 +118,10 @@ func (r *TontineGroupRepositoryInfrastructure) scanGroups(ctx context.Context, q
 		var startedAt sql.NullTime
 		var completedAt sql.NullTime
 
+		// 🆕 AJOUT DE group.Name dans le Scan (2ème position)
 		err := rows.Scan(
 			&group.ID,
+			&group.Name,
 			&group.ProductID,
 			&group.ShopID,
 			&creatorCustomerID,
@@ -170,13 +174,14 @@ func (r *TontineGroupRepositoryInfrastructure) Create(ctx context.Context, group
 		return fmt.Errorf("group shop_id does not match tenant shop_id")
 	}
 
+	// 🆕 AJOUT DE name ET current_cycle = 1 dans l'INSERT
 	query := `
 		INSERT INTO tontine_groups (
-			product_id, shop_id, creator_customer_id, creator_type,
+			name, product_id, shop_id, creator_customer_id, creator_type,
 			circle_type, amount_per_cycle_cents,
 			total_cycles, current_cycle, invite_code,
 			status, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
 		RETURNING id, created_at, updated_at
 	`
 
@@ -186,6 +191,7 @@ func (r *TontineGroupRepositoryInfrastructure) Create(ctx context.Context, group
 	}
 
 	err = r.queryRowContext(ctx, query,
+		group.Name, // 🆕 AJOUTÉ
 		group.ProductID,
 		group.ShopID,
 		creatorCustomerID,
@@ -193,7 +199,7 @@ func (r *TontineGroupRepositoryInfrastructure) Create(ctx context.Context, group
 		group.CircleType,
 		group.AmountPerCycleCents,
 		group.TotalCycles,
-		group.CurrentCycle,
+		1, // current_cycle par défaut
 		group.InviteCode,
 		group.Status,
 	).Scan(&group.ID, &group.CreatedAt, &group.UpdatedAt)
@@ -210,8 +216,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByID(ctx context.Context, id 
 		return nil, err
 	}
 
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,
@@ -224,8 +231,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByID(ctx context.Context, id 
 
 // FindByIDUnscoped trouve un groupe par ID SANS tenant (webhooks)
 func (r *TontineGroupRepositoryInfrastructure) FindByIDUnscoped(ctx context.Context, id string) (*entity.TontineGroup, error) {
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,
@@ -242,8 +250,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByInviteCode(ctx context.Cont
 		return nil, err
 	}
 
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,
@@ -263,8 +272,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByShopID(ctx context.Context,
 		return nil, fmt.Errorf("access denied: shop_id mismatch")
 	}
 
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,
@@ -282,8 +292,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByProductID(ctx context.Conte
 		return nil, err
 	}
 
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,
@@ -301,8 +312,9 @@ func (r *TontineGroupRepositoryInfrastructure) FindByCreatorCustomerID(ctx conte
 		return nil, err
 	}
 
+	// 🆕 AJOUT DE name dans le SELECT
 	query := `
-		SELECT id, product_id, shop_id, creator_customer_id, creator_type,
+		SELECT id, name, product_id, shop_id, creator_customer_id, creator_type,
 		       circle_type, amount_per_cycle_cents,
 		       total_cycles, current_cycle, invite_code,
 		       status, started_at, completed_at,

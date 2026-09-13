@@ -1,5 +1,7 @@
 package repository
 
+//go:generate mockgen -destination=../../mocks/repository/mock_customer_reliability_score_repository.go -package=repository . CustomerReliabilityScoreRepository
+
 import (
 	"Goshop/domain/entity"
 	"context"

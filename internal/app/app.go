@@ -628,6 +628,7 @@ func (a *App) setupRouter() {
 		tontineSettingsRepo,
 		postgreProductRepo,
 		postgresCustomerRepo,
+		customerReliabilityScoreRepo,
 		txmanagerRepo,
 	)
 
