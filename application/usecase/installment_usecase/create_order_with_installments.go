@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
+
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
-
-	"github.com/rs/zerolog/log"
 )
 
 type CreateInstallmentOrderUsecase struct {
@@ -16,7 +17,7 @@ type CreateInstallmentOrderUsecase struct {
 	orderRepo       repository.OrderRepository
 	planRepo        repository.InstallmentPlanRepository
 	customerRepo    repository.CustomerRepositoryInterface
-	scoreRepo       repository.CustomerReliabilityScoreRepository // 🆕 AJOUTÉ
+	scoreRepo       repository.CustomerReliabilityScoreRepository
 	installmentRepo repository.OrderInstallmentRepository
 }
 
@@ -25,7 +26,7 @@ func NewCreateInstallmentOrderUsecase(
 	orderRepo repository.OrderRepository,
 	planRepo repository.InstallmentPlanRepository,
 	customerRepo repository.CustomerRepositoryInterface,
-	scoreRepo repository.CustomerReliabilityScoreRepository, // 🆕 AJOUTÉ
+	scoreRepo repository.CustomerReliabilityScoreRepository,
 	installmentRepo repository.OrderInstallmentRepository,
 ) *CreateInstallmentOrderUsecase {
 	return &CreateInstallmentOrderUsecase{
@@ -33,7 +34,7 @@ func NewCreateInstallmentOrderUsecase(
 		orderRepo:       orderRepo,
 		planRepo:        planRepo,
 		customerRepo:    customerRepo,
-		scoreRepo:       scoreRepo, // 🆕 AJOUTÉ
+		scoreRepo:       scoreRepo,
 		installmentRepo: installmentRepo,
 	}
 }
@@ -46,21 +47,25 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 	}
 	defer tx.Rollback()
 
-	// 1. Créer la commande (Utilise ta logique existante, adaptée pour utiliser 'tx')
+	// 1. Initialiser la commande
 	order := &entity.Order{
-		ID:            "generated-order-uuid", // Remplace par uuid.New().String() si nécessaire
+		ID:            uuid.New().String(),
 		ShopID:        shopID,
 		CustomerID:    customerID,
 		TotalCents:    totalCents,
 		Status:        string(entity.OrderStatusPending),
-		PaymentMethod: "installment",
+		PaymentMethod: "mobile_money",
 		CreatedAt:     time.Now().UTC(),
 		UpdatedAt:     time.Now().UTC(),
 		Items:         items,
 	}
 
-	// TODO: uc.orderRepo.CreateWithTx(ctx, tx, order)
-	orderID := order.ID
+	// ✅ CORRECTION : Capturer les deux valeurs de retour (*entity.Order, error)
+	createdOrder, err := uc.orderRepo.Create(ctx, order)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create order: %w", err)
+	}
+	orderID := createdOrder.ID
 
 	// 2. Vérifier si un plan en tranches est actif pour le premier produit
 	productID := items[0].ProductID
@@ -74,7 +79,7 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
-		return order, nil
+		return createdOrder, nil
 	}
 
 	// 🆕 VÉRIFICATION DU SCORE DE FIABILITÉ
@@ -96,8 +101,8 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 	}
 
 	// 🆕 v5.1.0 : Copier les informations de délai dynamique du plan vers la commande
-	order.DeliveryZoneID = plan.DeliveryZoneID
-	order.InstallmentReleaseDelayDays = plan.InstallmentReleaseDelayDays
+	createdOrder.DeliveryZoneID = plan.DeliveryZoneID
+	createdOrder.InstallmentReleaseDelayDays = plan.InstallmentReleaseDelayDays
 
 	// 3. Calculer les montants et dates des tranches
 	amounts := entity.CalculateInstallmentAmount(totalCents, plan.NbTranches)
@@ -121,5 +126,5 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 	}
 
 	log.Info().Str("order_id", orderID).Int("tranches", plan.NbTranches).Msg("Installment order created successfully")
-	return order, nil
+	return createdOrder, nil
 }
