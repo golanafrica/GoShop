@@ -140,7 +140,7 @@ func (uc *CreateTontineGroupUsecase) Execute(ctx context.Context, req *CreateGro
 			score = entity.NewCustomerReliabilityScore(req.CreatorCustomerID)
 		}
 		if !score.CanCreateTontine(req.CircleType) {
-			return nil, fmt.Errorf("accès refusé : votre niveau de fiabilité (%s) ne vous permet pas de créer un cercle %s. Niveau Silver (600+) requis.", score.Tier, req.CircleType)
+			return nil, fmt.Errorf("SCORE_INSUFFICIENT: Votre niveau de fiabilité actuel (%s) ne vous permet pas de créer un cercle %s. Veuillez compléter votre vérification d'identité (KYC) ou participer à des cercles Familiaux pour améliorer votre score et débloquer cette fonctionnalité.", score.Tier, req.CircleType)
 		}
 
 		creatorCustomerID = &req.CreatorCustomerID

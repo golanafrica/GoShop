@@ -86,7 +86,16 @@ func (h *TontineHandler) CreateGroup(w http.ResponseWriter, r *http.Request) err
 		// 📊 MÉTRIQUE : Échec création de groupe
 		metrics.ApplicationErrorsTotal.WithLabelValues("tontine_create_group", "tontine_handler").Inc()
 		metrics.TontineOperationDuration.WithLabelValues("create_group").Observe(duration)
-		return utils.NewAppError("CREATE_GROUP_FAILED", err.Error(), http.StatusBadRequest)
+
+		errMsg := err.Error()
+
+		// 🆕 UX : Gestion spécifique de l'erreur de score insuffisant pour afficher un message clair au frontend
+		if strings.Contains(errMsg, "SCORE_INSUFFICIENT") {
+			cleanMsg := strings.TrimPrefix(errMsg, "SCORE_INSUFFICIENT: ")
+			return utils.NewAppError("SCORE_INSUFFICIENT", cleanMsg, http.StatusForbidden)
+		}
+
+		return utils.NewAppError("CREATE_GROUP_FAILED", errMsg, http.StatusBadRequest)
 	}
 
 	// 📊 MÉTRIQUES : Succès création de groupe
