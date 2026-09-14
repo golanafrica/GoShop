@@ -423,21 +423,35 @@ func (a *App) setupRouter() {
 	)
 	a.Logger.Info().Msg("✅ v4.6.1 Email notification provider initialized")
 
+	// ============ 🆕 v5.4.0 : TELEGRAM NOTIFICATION SERVICE ============
+	telegramToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	adminChatID := os.Getenv("TELEGRAM_ADMIN_CHAT_ID")
+	var telegramService *notification.TelegramService
+
+	if telegramToken != "" && adminChatID != "" {
+		// ✅ CORRECTION : Ajout de '&' pour passer un pointeur (*zerolog.Logger)
+		telegramService = notification.NewTelegramService(telegramToken, adminChatID, &a.Logger.Logger)
+		a.Logger.Info().Msg("✅ v5.4.0 Telegram notification service initialized")
+	} else {
+		a.Logger.Warn().Msg("⚠️ v5.4.0 Telegram bot token or admin chat ID not configured")
+	}
+
 	// ============ 🆕 v4.5.0 : NOTIFICATION DISPATCHER ============
 	var notifService service.NotificationService
-	if wsHub != nil || emailService != nil {
+	if wsHub != nil || emailService != nil || telegramService != nil {
 		notifService = notification.NewNotificationDispatcher(
 			wsHub,
 			emailNotifProvider,
+			telegramService, // 🆕 AJOUTÉ
 			postgresCustomerRepo,
 			shopRepo,
 			postgresUserRepo,
 			a.Logger.Logger,
 		)
-		a.Logger.Info().Msg("✅ v4.6.1 Notification Dispatcher initialized (WebSocket + Email)")
+		a.Logger.Info().Msg("✅ v5.4.0 Notification Dispatcher initialized (WebSocket + Email + Telegram)")
 	} else {
 		notifService = notification.NewNoopNotificationService(a.Logger.Logger)
-		a.Logger.Warn().Msg("⚠️ v4.5.0 Notification Dispatcher using Noop")
+		a.Logger.Warn().Msg("⚠️ v5.4.0 Notification Dispatcher using Noop")
 	}
 
 	// ============ 🆕 v4.9.1 : UPLOAD TOKEN REPOSITORY (Redis) ============

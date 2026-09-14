@@ -16,35 +16,40 @@ import (
 
 // NotificationDispatcher implémente service.NotificationService
 type NotificationDispatcher struct {
-	wsHub         *wsinfra.Hub
-	emailProvider NotificationProvider
-	customerRepo  repository.CustomerRepositoryInterface
-	shopRepo      repository.ShopRepository
-	userRepo      userrepository.UserRepository
-	logger        zerolog.Logger
+	wsHub           *wsinfra.Hub
+	emailProvider   NotificationProvider
+	telegramService *TelegramService // 🆕 AJOUTÉ
+	customerRepo    repository.CustomerRepositoryInterface
+	shopRepo        repository.ShopRepository
+	userRepo        userrepository.UserRepository
+	logger          zerolog.Logger
 }
 
 // NewNotificationDispatcher crée une nouvelle instance du dispatcher
 func NewNotificationDispatcher(
 	wsHub *wsinfra.Hub,
 	emailProvider NotificationProvider,
+	telegramService *TelegramService, // 🆕 AJOUTÉ
 	customerRepo repository.CustomerRepositoryInterface,
 	shopRepo repository.ShopRepository,
 	userRepo userrepository.UserRepository,
 	logger zerolog.Logger,
 ) service.NotificationService {
 	return &NotificationDispatcher{
-		wsHub:         wsHub,
-		emailProvider: emailProvider,
-		customerRepo:  customerRepo,
-		shopRepo:      shopRepo,
-		userRepo:      userRepo,
-		logger:        logger.With().Str("component", "notification_dispatcher").Logger(),
+		wsHub:           wsHub,
+		emailProvider:   emailProvider,
+		telegramService: telegramService, // 🆕 AJOUTÉ
+		customerRepo:    customerRepo,
+		shopRepo:        shopRepo,
+		userRepo:        userRepo,
+		logger:          logger.With().Str("component", "notification_dispatcher").Logger(),
 	}
 }
 
 // sendWebSocketNotification envoie une notification via WebSocket de manière asynchrone
-func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, userID string, eventType, title, message string, data map[string]interface{}) {
+// NOTE: Le paramètre ctx est nommé '_' car nous utilisons volontairement context.Background()
+// dans la goroutine pour éviter que l'annulation de la requête HTTP n'annule l'envoi.
+func (d *NotificationDispatcher) sendWebSocketNotification(_ context.Context, userID string, eventType, title, message string, data map[string]interface{}) {
 	if d.wsHub == nil || userID == "" {
 		return
 	}
@@ -57,8 +62,6 @@ func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, 
 	}
 
 	go func() {
-		// 🚨 CORRECTION : Utiliser context.Background() pour éviter que le contexte
-		// de la requête HTTP (qui sera annulé à la fin du handler) n'annule l'envoi WS.
 		bgCtx := context.Background()
 		if err := d.wsHub.SendToUser(bgCtx, userID, msg); err != nil {
 			d.logger.Error().Err(err).Str("user_id", userID).Str("event", eventType).Msg("Failed to send WebSocket notification")
@@ -69,13 +72,13 @@ func (d *NotificationDispatcher) sendWebSocketNotification(ctx context.Context, 
 }
 
 // sendEmailNotification envoie une notification par email de manière asynchrone
-func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, userEmail, title, message string, data map[string]interface{}) {
+// NOTE: '_' utilisé pour la même raison (fire-and-forget).
+func (d *NotificationDispatcher) sendEmailNotification(_ context.Context, userEmail, title, message string, data map[string]interface{}) {
 	if d.emailProvider == nil || userEmail == "" {
 		return
 	}
 
 	go func() {
-		// 🚨 CORRECTION : Utiliser context.Background() pour éviter l'annulation prématurée
 		bgCtx := context.Background()
 		if err := d.emailProvider.SendClientNotification(bgCtx, userEmail, title, message, data); err != nil {
 			d.logger.Error().Err(err).Str("email", userEmail).Msg("Failed to send email notification")
@@ -85,7 +88,32 @@ func (d *NotificationDispatcher) sendEmailNotification(ctx context.Context, user
 	}()
 }
 
-// getUserEmailByID récupère l'email directement depuis le userID (plus efficace pour Tontine/Crédit)
+// 🆕 sendTelegramNotification envoie une notification via Telegram de manière asynchrone
+// NOTE: '_' utilisé pour la même raison (fire-and-forget).
+func (d *NotificationDispatcher) sendTelegramNotification(_ context.Context, chatID, title, message string, data map[string]interface{}) {
+	if d.telegramService == nil || chatID == "" {
+		return
+	}
+
+	telegramMsg := fmt.Sprintf("<b>🔔 %s</b>\n\n%s", title, message)
+	if len(data) > 0 {
+		telegramMsg += "\n📊 <b>Détails :</b>\n"
+		for key, value := range data {
+			telegramMsg += fmt.Sprintf("• %s : %v\n", key, value)
+		}
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		if err := d.telegramService.SendMessage(bgCtx, chatID, telegramMsg); err != nil {
+			d.logger.Error().Err(err).Str("chat_id", chatID).Msg("Failed to send Telegram notification")
+		} else {
+			d.logger.Info().Str("chat_id", chatID).Msg("Telegram notification sent successfully")
+		}
+	}()
+}
+
+// getUserEmailByID récupère l'email directement depuis le userID
 func (d *NotificationDispatcher) getUserEmailByID(userID string) string {
 	if d.userRepo == nil || userID == "" {
 		return ""
@@ -141,6 +169,9 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 			eventType := "client_order_" + string(order.Status)
 			d.sendWebSocketNotification(bgCtx, userID, eventType, title, message, data)
 			d.sendEmailNotification(bgCtx, userEmail, title, message, data)
+			// 🆕 Pour l'instant, on envoie aussi à l'admin pour tester.
+			// Plus tard, tu pourras stocker le telegram_chat_id du client en base et l'utiliser ici.
+			d.sendTelegramNotification(bgCtx, d.telegramService.adminChatID, title, message, data)
 		}
 	}()
 
@@ -156,10 +187,6 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 
 	return nil
 }
-
-// ============================================================
-// MÉTHODES EXISTANTES (Commandes & Litiges)
-// ============================================================
 
 func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context, shop *entity.Shop, order *entity.Order) error {
 	title := "Nouvelle commande reçue"
@@ -245,7 +272,7 @@ func (d *NotificationDispatcher) NotifyMerchantCommissionPaid(ctx context.Contex
 
 func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context, customerID, orderID, resolution string, refundedAmount int64) error {
 	title := "Litige résolu"
-	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité en votre faveur. Un remboursement de %d FCFA (montant net après déduction des frais de transaction) a été initié vers votre compte.", orderID, refundedAmount/100)
+	message := fmt.Sprintf("Votre litige concernant la commande #%s a été traité en votre faveur. Un remboursement de %d FCFA a été initié.", orderID, refundedAmount/100)
 	data := map[string]interface{}{"order_id": orderID, "resolution": resolution, "refunded_amount": refundedAmount / 100}
 
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
