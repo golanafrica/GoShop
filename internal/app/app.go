@@ -75,6 +75,9 @@ import (
 	"Goshop/infrastructure/postgres/shop"
 	"Goshop/infrastructure/postgres/tontine"
 
+	// 🆕 v5.4.0 : Notification Repository (Corrigé pour pointer vers le bon dossier)
+	notificationinfra "Goshop/infrastructure/notification"
+
 	// 🆕 Idempotency
 	"Goshop/infrastructure/idempotency"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
@@ -132,6 +135,8 @@ import (
 
 	// 🆕 v4.2.0 : Admin Shop Handler
 	adminshophandler "Goshop/interfaces/handler/admin_shop_handler"
+
+	notificationhandler "Goshop/interfaces/handler/notification_handler"
 
 	// 🆕 v4.3.0 : Collaborator Handler
 	collaboratorhandler "Goshop/interfaces/handler/collaborator_handler"
@@ -436,19 +441,24 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ v5.4.0 Telegram bot token or admin chat ID not configured")
 	}
 
-	// ============ 🆕 v4.5.0 : NOTIFICATION DISPATCHER ============
+	// ============ 🆕 v5.4.0 : NOTIFICATION REPOSITORY ============
+	notifRepo := notificationinfra.NewNotificationRepositoryInfrastructure(a.DB)
+	a.Logger.Info().Msg("✅ v5.4.0 Notification repository initialized")
+
+	// ============ 🆕 v5.4.0 : NOTIFICATION DISPATCHER ============
 	var notifService service.NotificationService
 	if wsHub != nil || emailService != nil || telegramService != nil {
 		notifService = notification.NewNotificationDispatcher(
 			wsHub,
 			emailNotifProvider,
-			telegramService, // 🆕 AJOUTÉ
+			telegramService,
+			notifRepo, // 🆕 Injection du repository
 			postgresCustomerRepo,
 			shopRepo,
 			postgresUserRepo,
 			a.Logger.Logger,
 		)
-		a.Logger.Info().Msg("✅ v5.4.0 Notification Dispatcher initialized (WebSocket + Email + Telegram)")
+		a.Logger.Info().Msg("✅ v5.4.0 Notification Dispatcher initialized (DB + WebSocket + Email + Telegram)")
 	} else {
 		notifService = notification.NewNoopNotificationService(a.Logger.Logger)
 		a.Logger.Warn().Msg("⚠️ v5.4.0 Notification Dispatcher using Noop")
@@ -1121,6 +1131,10 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
 
+	// ============ 🆕 v5.4.0 : NOTIFICATION HANDLER ============
+	notificationHandler := notificationhandler.NewNotificationHandler(notifRepo)
+	a.Logger.Info().Msg("✅ v5.4.0 Notification handler initialized")
+
 	// ============ 🆕 v3.0.0 : HANDLERS ============
 	walletHandler := wallethandler.NewWalletHandler(
 		creditWalletUC,
@@ -1412,6 +1426,11 @@ func (a *App) setupRouter() {
 
 			r.Route("/wallet", func(r chi.Router) {
 				walletHandler.RegisterRoutes(r)
+			})
+
+			// 🆕 v5.4.0 : NOTIFICATION ROUTES (Centre de notifications In-App)
+			r.Route("/notifications", func(r chi.Router) {
+				notificationHandler.RegisterRoutes(r)
 			})
 
 			r.Get("/tontine/vouchers", middl.ErrorHandler(tontineHandler.ListVouchers))
