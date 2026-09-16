@@ -5,78 +5,68 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/application/metrics"
 	paymentusecase "Goshop/application/usecase/payment_usecase"
+	withdrawalusecase "Goshop/application/usecase/withdrawal_usecase"
 	"Goshop/domain/entity"
+	paymentinfra "Goshop/infrastructure/payment"
 	"Goshop/interfaces/utils"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 )
 
-// 🛡️ CORRECTION AUDIT : Taille maximale du payload webhook (1 MB)
-// Protection contre les attaques DoS par gros payloads
 const maxWebhookSize = 1 << 20 // 1 MB
 
-// ProcessWebhookUseCaseInterface définit le contrat
 type ProcessWebhookUseCaseInterface interface {
 	Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error
 }
 
 // WebhookHandler gère les webhooks des providers
 type WebhookHandler struct {
-	processUC ProcessWebhookUseCaseInterface
+	processUC       ProcessWebhookUseCaseInterface
+	processPayoutUC *withdrawalusecase.ProcessPayoutWebhookUsecase
+	registry        *paymentinfra.Registry
 }
 
 // NewWebhookHandler crée une nouvelle instance
-func NewWebhookHandler(processUC ProcessWebhookUseCaseInterface) *WebhookHandler {
+func NewWebhookHandler(
+	processUC ProcessWebhookUseCaseInterface,
+	processPayoutUC *withdrawalusecase.ProcessPayoutWebhookUsecase,
+	registry *paymentinfra.Registry,
+) *WebhookHandler {
 	return &WebhookHandler{
-		processUC: processUC,
+		processUC:       processUC,
+		processPayoutUC: processPayoutUC,
+		registry:        registry,
 	}
 }
 
-// @Summary Recevoir les webhooks de paiement
-// @Description Endpoint public sécurisé pour recevoir les notifications de changement de statut de paiement des fournisseurs (Wave, Orange, Moov, YengaPay).
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param provider path string true "Code du fournisseur (wave, orange_money, moov_money, yenga_pay)"
-// @Param x-webhook-hash header string false "Signature HMAC-SHA256 du payload (YengaPay)"
-// @Param X-Signature header string false "Signature HMAC-SHA256 du payload (fallback)"
-// @Success 200 {object} paymentdto.WebhookResponse "Webhook reçu et traité avec succès"
-// @Failure 400 {object} utils.AppError "Fournisseur inconnu ou signature invalide"
-// @Failure 413 {object} utils.AppError "Payload trop volumineux"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Router /webhooks/{provider} [post]
 func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
 	logger := zerolog.Ctx(ctx)
 
-	// Récupérer le provider depuis l'URL
 	providerCode := chi.URLParam(r, "provider")
 	if providerCode == "" {
 		return utils.ErrInvalidPayload
 	}
 
-	// Valider le provider
 	provider := entity.PaymentProvider(providerCode)
 	validProviders := map[entity.PaymentProvider]bool{
 		entity.ProviderOrangeMoney: true,
 		entity.ProviderMoovMoney:   true,
 		entity.ProviderWave:        true,
 		entity.ProviderYengaPay:    true,
-		// 🛡️ CORRECTION AUDIT : ProviderMock retiré en production
-		// Les mocks ne doivent jamais accepter de webhooks réels
 	}
 	if !validProviders[provider] {
 		return utils.NewAppError("INVALID_PROVIDER", "unknown provider: "+providerCode, http.StatusBadRequest)
 	}
 
-	// 🛡️ CORRECTION AUDIT : Limiter la taille du payload pour éviter les attaques DoS
 	limitedBody := io.LimitReader(r.Body, maxWebhookSize+1)
 	payload, err := io.ReadAll(limitedBody)
 	if err != nil {
@@ -85,29 +75,22 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 	}
 	defer r.Body.Close()
 
-	// 🛡️ Vérifier si le payload dépasse la limite
 	if int64(len(payload)) > maxWebhookSize {
-		logger.Warn().
-			Str("provider", providerCode).
-			Int64("size", int64(len(payload))).
-			Msg("Webhook payload too large")
+		logger.Warn().Str("provider", providerCode).Int64("size", int64(len(payload))).Msg("Webhook payload too large")
 		return utils.NewAppError("PAYLOAD_TOO_LARGE", "webhook payload exceeds 1MB limit", http.StatusRequestEntityTooLarge)
 	}
 
-	// ✅ CORRECTION : Lire la signature depuis le bon header YengaPay
-	// YengaPay utilise "x-webhook-hash" selon la documentation officielle
 	signature := r.Header.Get("x-webhook-hash")
 	if signature == "" {
-		signature = r.Header.Get("X-Webhook-Hash") // Fallback avec majuscules
+		signature = r.Header.Get("X-Webhook-Hash")
 	}
 	if signature == "" {
-		signature = r.Header.Get("X-Signature") // Fallback générique
+		signature = r.Header.Get("X-Signature")
 	}
 	if signature == "" {
-		signature = r.URL.Query().Get("signature") // Fallback query param
+		signature = r.URL.Query().Get("signature")
 	}
 
-	// ✅ AJOUT : Logger le type d'événement YengaPay pour le débogage (payment.success, payout.success, etc.)
 	eventType := r.Header.Get("x-yengapay-event")
 	if eventType == "" {
 		eventType = r.Header.Get("X-Yengapay-Event")
@@ -116,7 +99,6 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		eventType = "unknown"
 	}
 
-	// 📊 MÉTRIQUE : Webhook reçu
 	metrics.WebhookReceivedTotal.WithLabelValues(providerCode, eventType).Inc()
 
 	logger.Info().
@@ -126,51 +108,91 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		Bool("has_signature", signature != "").
 		Msg("Processing webhook")
 
-	// Traiter le webhook
-	err = h.processUC.Execute(ctx, provider, payload, signature)
+	// 🆕 ROUTAGE : Si c'est un événement de PAYOUT YengaPay, on le dirige vers le usecase dédié
+	if provider == entity.ProviderYengaPay && strings.HasPrefix(eventType, "payout.") {
+		err = h.handlePayoutWebhook(ctx, provider, payload, signature, eventType)
+	} else {
+		// Sinon, on traite comme un paiement entrant classique
+		err = h.processUC.Execute(ctx, provider, payload, signature)
+	}
 
-	// 📊 MÉTRIQUES de traitement
 	duration := time.Since(start).Seconds()
 	metrics.WebhookProcessingDuration.WithLabelValues(providerCode).Observe(duration)
 
-	// ✅ DISTINGUER LES ERREURS
 	if err != nil {
-		// 📊 Métriques d'erreur
 		metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "error").Inc()
 		metrics.ApplicationErrorsTotal.WithLabelValues("webhook_processing", "webhook_handler").Inc()
 
-		// Erreur de validation (signature invalide, payload malformé) → 400
 		if errors.Is(err, paymentusecase.ErrWebhookValidation) {
 			logger.Warn().Err(err).Msg("Webhook validation failed")
-			return utils.NewAppError(
-				"WEBHOOK_VALIDATION_FAILED",
-				err.Error(),
-				http.StatusBadRequest,
-			)
+			return utils.NewAppError("WEBHOOK_VALIDATION_FAILED", err.Error(), http.StatusBadRequest)
 		}
 
-		// Erreur de traitement (paiement non trouvé, etc.) → 200
-		// On log mais on retourne 200 pour éviter les retries du provider
 		if errors.Is(err, paymentusecase.ErrWebhookProcessing) {
 			logger.Warn().Err(err).Msg("Webhook processing failed (returning 200)")
 		} else if errors.Is(err, paymentusecase.ErrWebhookAlreadyProcessed) {
-			// 🛡️ CORRECTION AUDIT : Idempotence - webhook déjà traité
 			logger.Info().Msg("Webhook already processed (idempotent, returning 200)")
 			metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "duplicate").Inc()
 		} else {
-			// Autres erreurs → 200 (pour éviter les retries)
 			logger.Error().Err(err).Msg("Webhook processing error (returning 200)")
 		}
 	} else {
-		// 📊 Métrique de succès
 		metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "success").Inc()
 	}
 
-	// Retourner 200 pour que le provider ne renvoie pas le webhook
 	response := paymentdto.WebhookResponse{
 		Status:  "received",
 		Message: "webhook processed",
 	}
 	utils.WriteJSON(w, http.StatusOK, response)
+	return nil
+}
+
+// 🆕 handlePayoutWebhook traite spécifiquement les webhooks de retrait (Cash-Out)
+func (h *WebhookHandler) handlePayoutWebhook(
+	ctx context.Context,
+	provider entity.PaymentProvider,
+	payload []byte,
+	signature string,
+	eventType string,
+) error {
+	logger := zerolog.Ctx(ctx)
+
+	// 1. Récupérer le provider spécifique depuis le registry
+	providerInstance, err := h.registry.Get(provider)
+	if err != nil {
+		logger.Error().Err(err).Str("provider", string(provider)).Msg("Provider not found in registry for payout webhook")
+		return err
+	}
+
+	// 2. Valider le webhook via l'instance du provider (qui possède la méthode ValidateWebhook)
+	event, err := providerInstance.ValidateWebhook(ctx, payload, signature)
+	if err != nil {
+		logger.Error().Err(err).Msg("Invalid payout webhook signature")
+		return err
+	}
+
+	// 3. Extraire la référence (selon la structure de ton event YengaPay)
+	providerRef := event.ProviderRef
+	if providerRef == "" {
+		// Fallback si la ref est dans le JSON brut (ex: "id" ou "transactionId")
+		if id, ok := event.Metadata["id"].(string); ok {
+			providerRef = id
+		}
+	}
+
+	if providerRef == "" {
+		logger.Warn().Msg("Missing provider reference in payout webhook")
+		return nil // Ignorer silencieusement pour éviter les boucles de retry
+	}
+
+	// 4. Appeler le usecase de traitement de payout
+	err = h.processPayoutUC.Execute(ctx, providerRef, eventType, event.Metadata)
+	if err != nil {
+		logger.Error().Err(err).Str("provider_ref", providerRef).Msg("Failed to process payout webhook")
+		return err
+	}
+
+	logger.Info().Str("provider_ref", providerRef).Str("event_type", eventType).Msg("✅ Payout webhook processed successfully")
 	return nil
 }

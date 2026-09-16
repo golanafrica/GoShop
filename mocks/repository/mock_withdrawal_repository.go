@@ -11,6 +11,7 @@ package repository
 
 import (
 	entity "Goshop/domain/entity"
+	repository "Goshop/domain/repository"
 	context "context"
 	reflect "reflect"
 
@@ -86,6 +87,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByProviderRef mocks base method.
+func (m *MockWithdrawalRepository) FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByProviderRef", ctx, providerRef)
+	ret0, _ := ret[0].(*entity.Withdrawal)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByProviderRef indicates an expected call of FindByProviderRef.
+func (mr *MockWithdrawalRepositoryMockRecorder) FindByProviderRef(ctx, providerRef any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByProviderRef", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindByProviderRef), ctx, providerRef)
+}
+
 // FindByShopID mocks base method.
 func (m *MockWithdrawalRepository) FindByShopID(ctx context.Context, shopID uuid.UUID, limit, offset int) ([]*entity.Withdrawal, error) {
 	m.ctrl.T.Helper()
@@ -113,4 +129,18 @@ func (m *MockWithdrawalRepository) Update(ctx context.Context, withdrawal *entit
 func (mr *MockWithdrawalRepositoryMockRecorder) Update(ctx, withdrawal any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockWithdrawalRepository)(nil).Update), ctx, withdrawal)
+}
+
+// WithTX mocks base method.
+func (m *MockWithdrawalRepository) WithTX(tx repository.Tx) repository.WithdrawalRepository {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WithTX", tx)
+	ret0, _ := ret[0].(repository.WithdrawalRepository)
+	return ret0
+}
+
+// WithTX indicates an expected call of WithTX.
+func (mr *MockWithdrawalRepositoryMockRecorder) WithTX(tx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WithTX", reflect.TypeOf((*MockWithdrawalRepository)(nil).WithTX), tx)
 }

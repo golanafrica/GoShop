@@ -560,6 +560,13 @@ func (a *App) setupRouter() {
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 
+	// 🆕 v5.4.0 : Payout Webhook Usecase (pour traiter payout.success / payout.failed)
+	processPayoutWebhookUC := withdrawalusecase.NewProcessPayoutWebhookUsecase(
+		withdrawalRepo,
+		walletRepo,
+		txmanagerRepo,
+	)
+
 	// ============ 🆕 CASH ORDER USECASES ============
 	acceptOrderUC := orderusecase.NewAcceptOrderUsecase(
 		postgresOrderRepo,
@@ -1102,8 +1109,15 @@ func (a *App) setupRouter() {
 		refundPaymentUC,
 		completePaymentUC,
 	)
-	webhookHandler := paymenthandler.NewWebhookHandler(processWebhookUC)
 
+	// 🆕 v5.4.0 : Injection du processPayoutWebhookUC et du paymentRegistry concret
+	webhookHandler := paymenthandler.NewWebhookHandler(
+		processWebhookUC,
+		processPayoutWebhookUC,
+		paymentRegistry, // ✅ Ceci est bien de type *paymentinfra.Registry
+	)
+
+	// 🆕 AJOUTÉ : Initialisation du WithdrawalHandler (qui était manquante)
 	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
 		createWithdrawalUC,
 		listWithdrawalsUC,

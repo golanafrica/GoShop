@@ -15,6 +15,10 @@ type WithdrawalRepository interface {
 	Create(ctx context.Context, withdrawal *entity.Withdrawal) error
 	FindByID(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error)
 	FindByShopID(ctx context.Context, shopID uuid.UUID, limit, offset int) ([]*entity.Withdrawal, error)
+	FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error) // 🆕 AJOUTÉ
 	Update(ctx context.Context, withdrawal *entity.Withdrawal) error
 	CountByShopID(ctx context.Context, shopID uuid.UUID) (int, error)
+
+	// WithTX retourne le repository attaché à une transaction
+	WithTX(tx Tx) WithdrawalRepository // 🆕 AJOUTÉ
 }
