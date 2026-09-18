@@ -65,11 +65,12 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(ctx context.Context, providerRef 
 
 	switch eventType {
 	case "payout.success":
-		// ✅ SUCCÈS : L'argent est bien parti du compte GoShop vers le marchand
+		// SUCCES : l'argent est parti du compte GoShop vers le marchand
+		operatorTxID := extractOperatorTransID(yengaPayload)
 		if err := withdrawal.MarkSuccess(
 			withdrawal.FeesCents,
 			withdrawal.NetAmountCents,
-			extractOperatorTransID(yengaPayload),
+			operatorTxID,
 		); err != nil {
 			return fmt.Errorf("failed to mark withdrawal as success: %w", err)
 		}
@@ -80,11 +81,12 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(ctx context.Context, providerRef 
 
 		logger.Info().
 			Str("withdrawal_id", withdrawal.ID.String()).
-			Msg("✅ Withdrawal marked as SUCCESS")
+			Str("operator_transaction_id", operatorTxID).
+			Msg("Withdrawal marked as SUCCESS")
 
 	case "payout.failed":
-		// ❌ ÉCHEC : YengaPay a automatiquement recrédité le compte principal GoShop.
-		// Nous devons recréditer le wallet virtuel du marchand pour maintenir la cohérence.
+		// ECHEC : YengaPay a recrédité le compte principal GoShop.
+		// On recrédite le wallet virtuel du marchand pour rester cohérent.
 		reason := extractErrorMessage(yengaPayload)
 		if err := withdrawal.MarkFailed(reason); err != nil {
 			return fmt.Errorf("failed to mark withdrawal as failed: %w", err)
@@ -94,10 +96,8 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(ctx context.Context, providerRef 
 			return fmt.Errorf("failed to update withdrawal status: %w", err)
 		}
 
-		// Recréditer le wallet du marchand (montant total = net + frais, car YengaPay rembourse tout)
 		refundAmount := withdrawal.AmountCents
 
-		// Trouver le wallet pour le recréditer
 		wallet, err := walletRepoTx.FindByShopIDForUpdate(ctx, withdrawal.ShopID.String())
 		if err != nil {
 			return fmt.Errorf("failed to find wallet for refund: %w", err)
@@ -114,14 +114,14 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(ctx context.Context, providerRef 
 			Str("withdrawal_id", withdrawal.ID.String()).
 			Int64("refunded_amount", refundAmount).
 			Str("reason", reason).
-			Msg("⚠️ Withdrawal FAILED, merchant wallet refunded")
+			Msg("Withdrawal FAILED, merchant wallet refunded")
 
 	default:
 		logger.Warn().Str("event_type", eventType).Msg("Unknown payout event type, ignoring")
 		return nil
 	}
 
-	// 4. Commit de la transaction
+	// 4. Commit
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -129,15 +129,29 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(ctx context.Context, providerRef 
 	return nil
 }
 
-// Helpers pour extraire les données du payload YengaPay
+// extractOperatorTransID lit l'ID opérateur depuis le metadata / payload YengaPay
 func extractOperatorTransID(payload map[string]interface{}) string {
-	if id, ok := payload["operatorTransId"].(string); ok {
-		return id
+	if payload == nil {
+		return ""
+	}
+	keys := []string{
+		"operatorTransId",
+		"operator_transaction_id",
+		"operator_trans_id",
+		"operatorTransactionId",
+	}
+	for _, k := range keys {
+		if id, ok := payload[k].(string); ok && id != "" {
+			return id
+		}
 	}
 	return ""
 }
 
 func extractErrorMessage(payload map[string]interface{}) string {
+	if payload == nil {
+		return "Unknown error from provider"
+	}
 	if msg, ok := payload["errorMessage"].(string); ok && msg != "" {
 		return msg
 	}

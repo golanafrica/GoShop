@@ -2,6 +2,7 @@ package paymenthandler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -108,11 +109,10 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 		Bool("has_signature", signature != "").
 		Msg("Processing webhook")
 
-	// 🆕 ROUTAGE : Si c'est un événement de PAYOUT YengaPay, on le dirige vers le usecase dédié
+	// ROUTAGE : payout YengaPay -> usecase dedie, sinon paiement entrant
 	if provider == entity.ProviderYengaPay && strings.HasPrefix(eventType, "payout.") {
 		err = h.handlePayoutWebhook(ctx, provider, payload, signature, eventType)
 	} else {
-		// Sinon, on traite comme un paiement entrant classique
 		err = h.processUC.Execute(ctx, provider, payload, signature)
 	}
 
@@ -148,7 +148,7 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
-// 🆕 handlePayoutWebhook traite spécifiquement les webhooks de retrait (Cash-Out)
+// handlePayoutWebhook traite les webhooks de retrait (Cash-Out)
 func (h *WebhookHandler) handlePayoutWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -158,41 +158,60 @@ func (h *WebhookHandler) handlePayoutWebhook(
 ) error {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le provider spécifique depuis le registry
 	providerInstance, err := h.registry.Get(provider)
 	if err != nil {
 		logger.Error().Err(err).Str("provider", string(provider)).Msg("Provider not found in registry for payout webhook")
 		return err
 	}
 
-	// 2. Valider le webhook via l'instance du provider (qui possède la méthode ValidateWebhook)
 	event, err := providerInstance.ValidateWebhook(ctx, payload, signature)
 	if err != nil {
 		logger.Error().Err(err).Msg("Invalid payout webhook signature")
 		return err
 	}
 
-	// 3. Extraire la référence (selon la structure de ton event YengaPay)
+	// Fusionner le JSON brut dans Metadata pour garantir operatorTransId, id, etc.
+	rawMeta := map[string]interface{}{}
+	if err := json.Unmarshal(payload, &rawMeta); err != nil {
+		logger.Warn().Err(err).Msg("Failed to unmarshal payout payload into map (continuing with event.Metadata)")
+	}
+
+	merged := map[string]interface{}{}
+	if event.Metadata != nil {
+		for k, v := range event.Metadata {
+			merged[k] = v
+		}
+	}
+	for k, v := range rawMeta {
+		merged[k] = v
+	}
+
 	providerRef := event.ProviderRef
 	if providerRef == "" {
-		// Fallback si la ref est dans le JSON brut (ex: "id" ou "transactionId")
-		if id, ok := event.Metadata["id"].(string); ok {
+		if id, ok := merged["id"].(string); ok && id != "" {
 			providerRef = id
+		}
+	}
+	if providerRef == "" {
+		if tid, ok := merged["transId"].(string); ok && tid != "" {
+			providerRef = tid
 		}
 	}
 
 	if providerRef == "" {
 		logger.Warn().Msg("Missing provider reference in payout webhook")
-		return nil // Ignorer silencieusement pour éviter les boucles de retry
+		return nil
 	}
 
-	// 4. Appeler le usecase de traitement de payout
-	err = h.processPayoutUC.Execute(ctx, providerRef, eventType, event.Metadata)
+	err = h.processPayoutUC.Execute(ctx, providerRef, eventType, merged)
 	if err != nil {
 		logger.Error().Err(err).Str("provider_ref", providerRef).Msg("Failed to process payout webhook")
 		return err
 	}
 
-	logger.Info().Str("provider_ref", providerRef).Str("event_type", eventType).Msg("✅ Payout webhook processed successfully")
+	logger.Info().
+		Str("provider_ref", providerRef).
+		Str("event_type", eventType).
+		Msg("Payout webhook processed successfully")
 	return nil
 }

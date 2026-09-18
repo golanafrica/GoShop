@@ -496,11 +496,16 @@ func (a *App) setupRouter() {
 		shopRepo,
 		escrowRepo,
 	)
+
+	// 🛠️ CORRECTION : Ajout de escrowRepo et rateRepo pour correspondre à la nouvelle signature
 	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
 		paymentRepo,
 		postgresOrderRepo,
 		paymentRegistry,
+		escrowRepo,
+		rateRepo,
 	)
+
 	listPaymentsUC := paymentusecase.NewListPaymentsUsecase(paymentRepo)
 	refundPaymentUC := paymentusecase.NewRefundPaymentUsecase(
 		paymentRepo,

@@ -762,6 +762,7 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 	}
 
 	var webhookData struct {
+		// Pay-in
 		APIEnv          string `json:"apiEnv"`
 		PaymentStatus   string `json:"paymentStatus"`
 		TransID         string `json:"transId"`
@@ -774,26 +775,48 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		CountryOrigin   string `json:"contryOrigin"`
 		Reference       string `json:"reference"`
 		Currency        string `json:"currency"`
+
+		// Payout (cash-out)
+		ID              string `json:"id"`
+		Status          string `json:"status"`
+		OperatorTransID string `json:"operatorTransId"`
+		Amount          int64  `json:"amount"`
+		Fees            int64  `json:"fees"`
 	}
 
 	if err := json.Unmarshal(payload, &webhookData); err != nil {
 		return nil, fmt.Errorf("invalid webhook payload: %w", err)
 	}
 
+	// Ref: pay-in (transId / paymentIntentId) ou payout (id)
 	providerRef := webhookData.TransID
 	if providerRef == "" {
 		providerRef = webhookData.PaymentIntentID
 	}
-
+	if providerRef == "" {
+		providerRef = webhookData.ID
+	}
 	if providerRef == "" {
 		return nil, fmt.Errorf("missing transaction ID in webhook")
 	}
 
-	status := mapYengaStatus(webhookData.PaymentStatus)
+	// Statut: paymentStatus (pay-in) ou status (payout)
+	statusRaw := webhookData.PaymentStatus
+	if statusRaw == "" {
+		statusRaw = webhookData.Status
+	}
+	status := mapYengaStatus(statusRaw)
+
+	amountCents := webhookData.PaymentAmount * 100
+	if amountCents == 0 && webhookData.Amount > 0 {
+		amountCents = webhookData.Amount * 100
+	}
 
 	logger.Info().
 		Str("transaction_id", webhookData.TransID).
 		Str("payment_intent_id", webhookData.PaymentIntentID).
+		Str("payout_id", webhookData.ID).
+		Str("operator_trans_id", webhookData.OperatorTransID).
 		Str("status", string(status)).
 		Msg("Webhook validated successfully")
 
@@ -801,11 +824,11 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		Provider:    entity.ProviderYengaPay,
 		EventType:   "payment.completed",
 		ProviderRef: providerRef,
-		ExternalID:  webhookData.TransID,
+		ExternalID:  firstNonEmpty(webhookData.TransID, webhookData.ID),
 		Payload:     payload,
 		Signature:   signature,
 		Status:      status,
-		AmountCents: webhookData.PaymentAmount * 100,
+		AmountCents: amountCents,
 		Metadata: map[string]interface{}{
 			"payment_source":  webhookData.PaymentSource,
 			"customer_number": webhookData.CustomerNumber,
@@ -814,8 +837,22 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 			"reference":       webhookData.Reference,
 			"currency":        webhookData.Currency,
 			"api_env":         webhookData.APIEnv,
+			"id":              webhookData.ID,
+			"operatorTransId": webhookData.OperatorTransID,
+			"status":          webhookData.Status,
+			"amount":          webhookData.Amount,
+			"fees":            webhookData.Fees,
 		},
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Refund initie un remboursement via l'API de Yenga Pay

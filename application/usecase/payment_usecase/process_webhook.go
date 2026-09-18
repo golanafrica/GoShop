@@ -146,6 +146,10 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			if strings.HasPrefix(ref, "ORDER-") {
 				orderIDStr = strings.TrimPrefix(ref, "ORDER-")
 				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Extracted order_id from reference")
+			} else if _, err := uuid.Parse(ref); err == nil {
+				// ✅ CORRECTION : Si la référence est déjà un UUID valide, on l'utilise directement comme orderID
+				orderIDStr = ref
+				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Reference is a valid UUID, using as order_id")
 			}
 		}
 
