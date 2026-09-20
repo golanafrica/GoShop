@@ -3,12 +3,14 @@ package paymentusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	paymentinfra "Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -44,13 +46,11 @@ func NewCheckPaymentStatusUsecase(
 func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID string) (*paymentdto.PaymentResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Vérifier le shop (multi-tenant)
 	_, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
 
-	// 2. Récupérer le paiement
 	id, err := uuid.Parse(paymentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid payment_id: %w", err)
@@ -61,7 +61,6 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
-	// 3. Si le paiement est dans un état non-terminal, vérifier auprès du provider
 	if !paymentEntity.IsTerminal() && paymentEntity.ProviderRef != nil {
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err == nil {
@@ -70,7 +69,9 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 				switch status.Status {
 				case entity.PaymentStatusSuccess:
 					if err := paymentEntity.MarkSuccess(*paymentEntity.ProviderRef); err == nil {
-						// Aligné sur process_webhook : confirmed pour autoriser shipping proof
+						// Canal pay-in reel (meme moyen au refund)
+						applyPayInChannelFromStatus(paymentEntity, status, logger)
+
 						if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, string(entity.OrderStatusConfirmed)); err != nil {
 							logger.Error().Err(err).
 								Str("order_id", paymentEntity.OrderID.String()).
@@ -82,58 +83,8 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 								Msg("Order status updated to confirmed after provider success")
 						}
 
-						// 🚨 FIX CRUCIAL : Créer le compte séquestre et mettre à jour la commission en fallback
-						orderIDStr := paymentEntity.OrderID.String()
-						_, escrowErr := uc.escrowRepo.FindByOrderID(ctx, orderIDStr)
-						if escrowErr != nil {
-							logger.Info().Str("order_id", orderIDStr).Msg("Escrow not found, creating it now (fallback for missing webhook)")
-
-							order, orderErr := uc.orderRepo.FindByID(ctx, orderIDStr)
-							if orderErr == nil && order != nil {
-								rateBps := 250 // fallback par défaut (2.5%)
-								if uc.commissionRateRepo != nil {
-									rateBps = ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, order.ShopID, logger)
-								}
-
-								grossCents := paymentEntity.AmountCents
-								commissionCents := (grossCents * int64(rateBps)) / 10000
-								providerFeesCents := int64(0)
-								escrowTotalCents := grossCents - providerFeesCents
-
-								// ✅ CORRECTION : Mettre à jour les champs de commission sur l'entité en mémoire
-								paymentEntity.ProviderFeesCents = providerFeesCents
-								paymentEntity.CommissionRateBps = rateBps
-								paymentEntity.CommissionCents = commissionCents
-
-								// ✅ CORRECTION CRUCIALE : Sauvegarder les commissions calculées en base de données AVANT de créer l'escrow
-								if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
-									logger.Error().Err(updateErr).Msg("Failed to update payment with commission data in fallback")
-								}
-
-								escrow := &entity.EscrowAccount{
-									OrderID:             &orderIDStr,
-									SourceType:          entity.EscrowSourceOrder,
-									TotalAmountCents:    escrowTotalCents,
-									ReleasedAmountCents: 0,
-									CommissionCents:     commissionCents,
-									Status:              entity.EscrowAccountFundsHeld,
-									FundsHeldAt:         time.Now().UTC(),
-									CreatedAt:           time.Now().UTC(),
-									UpdatedAt:           time.Now().UTC(),
-								}
-
-								if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
-									logger.Error().Err(err).Str("order_id", orderIDStr).Msg("Failed to create fallback escrow account")
-								} else {
-									logger.Info().
-										Int64("gross_cents", grossCents).
-										Int64("commission_cents", commissionCents).
-										Int("rate_bps", rateBps).
-										Str("order_id", orderIDStr).
-										Msg("✅ Fallback escrow account created and payment commission updated")
-								}
-							}
-						}
+						// Fallback escrow si webhook manquant (meme settlement que process_webhook)
+						uc.ensureEscrowOnSuccess(ctx, paymentEntity, status, logger)
 					}
 				case entity.PaymentStatusFailed:
 					if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
@@ -149,11 +100,163 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 		Str("status", string(paymentEntity.Status)).
 		Msg("Payment status checked")
 
-	// 4. Construire la réponse
 	return mapPaymentToResponse(paymentEntity), nil
 }
 
-// formatTimeUTC formate un time.Time en UTC
+// applyPayInChannelFromStatus ecrit payment_source + customer_number sur le payment
+// pour que customer_wins refund utilise le meme canal que le pay-in.
+func applyPayInChannelFromStatus(p *entity.Payment, status *paymentinfra.PaymentStatus, logger *zerolog.Logger) {
+	if status == nil || status.Metadata == nil {
+		return
+	}
+	if p.Metadata == nil {
+		p.Metadata = make(map[string]interface{})
+	}
+
+	if src, ok := status.Metadata["payment_source"].(string); ok && strings.TrimSpace(src) != "" {
+		p.Metadata["payment_source"] = strings.TrimSpace(src)
+		delete(p.Metadata, "seed_fallback")
+	}
+	if op, ok := status.Metadata["operator"].(string); ok && strings.TrimSpace(op) != "" {
+		p.Metadata["operator"] = strings.TrimSpace(op)
+	}
+	if num, ok := status.Metadata["customer_number"].(string); ok && strings.TrimSpace(num) != "" {
+		num = strings.TrimSpace(num)
+		p.Metadata["customer_number"] = num
+		ph := num
+		if len(ph) > 0 && ph[0] != '+' {
+			if len(ph) == 8 {
+				ph = "+226" + ph
+			} else {
+				ph = "+" + ph
+			}
+		}
+		p.CustomerPhone = &ph
+	}
+
+	logger.Info().
+		Interface("payment_source", p.Metadata["payment_source"]).
+		Interface("customer_number", p.Metadata["customer_number"]).
+		Str("customer_phone", func() string {
+			if p.CustomerPhone != nil {
+				return *p.CustomerPhone
+			}
+			return ""
+		}()).
+		Msg("Pay-in channel applied from CheckStatus")
+}
+
+// ensureEscrowOnSuccess crée l'escrow + commission si absent (aligné process_webhook).
+func (uc *CheckPaymentStatusUsecase) ensureEscrowOnSuccess(
+	ctx context.Context,
+	paymentEntity *entity.Payment,
+	status *paymentinfra.PaymentStatus,
+	logger *zerolog.Logger,
+) {
+	if uc.escrowRepo == nil || paymentEntity.OrderID == uuid.Nil {
+		return
+	}
+
+	orderIDStr := paymentEntity.OrderID.String()
+
+	if _, err := uc.escrowRepo.FindByOrderID(ctx, orderIDStr); err == nil {
+		logger.Info().
+			Str("order_id", orderIDStr).
+			Msg("Escrow already exists — skip fallback creation")
+		if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+			logger.Error().Err(updateErr).Msg("Failed to update payment after success (escrow already existed)")
+		}
+		return
+	}
+
+	shopIDStr := paymentEntity.ShopID.String()
+	rateBps := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
+
+	providerFeesCents := extractProviderFeesCents(status)
+
+	settlement := ComputeOrderSettlement(
+		paymentEntity.AmountCents,
+		providerFeesCents,
+		rateBps,
+	)
+
+	paymentEntity.ProviderFeesCents = settlement.ProviderFeesCents
+	paymentEntity.CommissionRateBps = settlement.CommissionRateBps
+	paymentEntity.CommissionCents = settlement.CommissionCents
+	if paymentEntity.Metadata == nil {
+		paymentEntity.Metadata = make(map[string]interface{})
+	}
+	paymentEntity.Metadata["escrow_created"] = true
+
+	if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+		logger.Error().Err(updateErr).Msg("Failed to update payment with commission data in fallback")
+		return
+	}
+
+	if settlement.MerchantNetCents <= 0 {
+		logger.Warn().
+			Str("order_id", orderIDStr).
+			Int64("merchant_net_cents", settlement.MerchantNetCents).
+			Msg("Merchant net <= 0 — skip escrow creation")
+		return
+	}
+
+	now := time.Now().UTC()
+	escrow := &entity.EscrowAccount{
+		OrderID:             &orderIDStr,
+		SourceType:          entity.EscrowSourceOrder,
+		TotalAmountCents:    settlement.EscrowTotalCents,
+		ReleasedAmountCents: 0,
+		CommissionCents:     settlement.CommissionCents,
+		Status:              entity.EscrowAccountFundsHeld,
+		FundsHeldAt:         now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+
+	if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
+		logger.Error().Err(err).Str("order_id", orderIDStr).Msg("Failed to create fallback escrow account")
+		return
+	}
+
+	logger.Info().
+		Int64("gross_cents", settlement.GrossCents).
+		Int64("provider_fees_cents", settlement.ProviderFeesCents).
+		Int("commission_rate_bps", settlement.CommissionRateBps).
+		Int64("commission_cents", settlement.CommissionCents).
+		Int64("escrow_total_cents", settlement.EscrowTotalCents).
+		Int64("merchant_net_cents", settlement.MerchantNetCents).
+		Str("order_id", orderIDStr).
+		Msg("✅ Fallback escrow created (ComputeOrderSettlement, aligned with webhook)")
+}
+
+func extractProviderFeesCents(status *paymentinfra.PaymentStatus) int64 {
+	if status == nil || status.Metadata == nil {
+		return 0
+	}
+	if v, ok := status.Metadata["provider_fees_cents"]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int64(n)
+		case int64:
+			return n
+		case int:
+			return int64(n)
+		}
+	}
+	if v, ok := status.Metadata["payment_fees"]; ok {
+		switch n := v.(type) {
+		case float64:
+			return int64(n * 100)
+		case int64:
+			return n * 100
+		case int:
+			return int64(n) * 100
+		}
+	}
+	return 0
+}
+
 func formatTimeUTC(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05")
 }

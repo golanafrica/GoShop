@@ -122,7 +122,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 
 		merchantAmount := escrow.GetMerchantAmount()
 
-		// Claim atomique disputed → released (anti race multi-instance / double resolve)
 		claimed, claimErr := escrowRepoTx.ClaimRelease(ctx, escrow.ID, entity.EscrowAccountDisputed, merchantAmount)
 		if claimErr != nil {
 			return nil, fmt.Errorf("claim release failed: %w", claimErr)
@@ -134,7 +133,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		shopIDStr := dispute.ShopID.String()
 		refType := "dispute_resolution"
 
-		// Idempotence pré-check (même TX)
 		existing, findErr := walletTxnRepoTx.FindByReferenceIDAdmin(ctx, refType, disputeIDStr)
 		if findErr == nil && existing != nil && existing.Status == entity.WalletTxCompleted {
 			logger.Info().
@@ -213,30 +211,38 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("payment provider not found: %w", err)
 		}
 
-		refundAmount := successPayment.AmountCents
+		// Client = net escrow (brut - frais Yenga). Frais PSP non rembourses.
+		refundAmount := escrow.TotalAmountCents
 		if refundAmount <= 0 {
-			refundAmount = escrow.TotalAmountCents
+			refundAmount = successPayment.AmountCents - successPayment.ProviderFeesCents
+			if refundAmount <= 0 {
+				refundAmount = successPayment.AmountCents
+			}
 		}
 		refundedAmount = refundAmount
 
-		customerPhone := ""
-		if successPayment.CustomerPhone != nil {
-			customerPhone = *successPayment.CustomerPhone
-		}
-		operator := ""
-		if successPayment.Metadata != nil {
-			if op, ok := successPayment.Metadata["operator"].(string); ok {
-				operator = op
-			}
+		// Meme canal que le pay-in : telephone + operateur issus du paiement reel
+		customerPhone, operator, sourceHint := resolveRefundDestination(successPayment)
+
+		logger.Info().
+			Int64("payment_amount_cents", successPayment.AmountCents).
+			Int64("provider_fees_cents", successPayment.ProviderFeesCents).
+			Int64("escrow_total_cents", escrow.TotalAmountCents).
+			Int64("refund_amount_cents", refundAmount).
+			Str("customer_phone", customerPhone).
+			Str("operator", operator).
+			Str("source_hint", sourceHint).
+			Msg("customer_wins refund = escrow net, same channel as pay-in when known")
+
+		if customerPhone == "" {
+			return nil, fmt.Errorf("cannot refund: missing customer phone on payment (pay-in channel unknown)")
 		}
 
-		// Refund provider AVANT écritures finales
 		if err := provider.Refund(ctx, *successPayment.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			logger.Error().Err(err).Msg("Failed to process refund with provider")
 			return nil, fmt.Errorf("failed to process refund with provider: %w", err)
 		}
 
-		// disputed → refunded (domain)
 		if err := escrow.ResolveDispute(false); err != nil {
 			return nil, fmt.Errorf("failed to resolve escrow for customer: %w", err)
 		}
@@ -267,7 +273,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Notifications hors TX
 	if uc.notificationSvc != nil {
 		shop := &entity.Shop{ID: dispute.ShopID}
 		tenantCtx := tenant.WithTenant(context.Background(), shop)
@@ -292,4 +297,104 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		Msg("Dispute resolved successfully")
 
 	return dispute, nil
+}
+
+// resolveRefundDestination priorise les infos du pay-in Yenga (webhook / CheckStatus)
+// pour reutiliser le meme telephone et le meme operateur au cash-out.
+//
+// Priorite telephone :
+//  1. payment.CustomerPhone
+//  2. metadata.customer_number / customerNumber / customer_phone
+//
+// Priorite operateur :
+//  1. metadata.payment_source / paymentSource (ex: OrangeMoneyAPI, SankMoneyAPI)
+//  2. metadata.operator / cashout_method
+//  3. defaut vide → le provider Refund applique son fallback (ORANGE_MONEY)
+func resolveRefundDestination(p *entity.Payment) (phone string, operator string, sourceHint string) {
+	if p.CustomerPhone != nil && strings.TrimSpace(*p.CustomerPhone) != "" {
+		phone = strings.TrimSpace(*p.CustomerPhone)
+	}
+
+	if p.Metadata != nil {
+		if phone == "" {
+			phone = firstMetaString(p.Metadata, "customer_number", "customerNumber", "customer_phone")
+		}
+		sourceHint = firstMetaString(p.Metadata, "payment_source", "paymentSource", "payment_source_raw")
+		operator = mapPayInSourceToCashoutOperator(sourceHint)
+		if operator == "" {
+			operator = mapPayInSourceToCashoutOperator(firstMetaString(p.Metadata, "operator", "cashout_method", "cashoutMethod"))
+		}
+	}
+
+	phone = normalizeMSISDN(phone)
+	return phone, operator, sourceHint
+}
+
+func firstMetaString(meta map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := meta[k]; ok {
+			switch t := v.(type) {
+			case string:
+				if s := strings.TrimSpace(t); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// mapPayInSourceToCashoutOperator convertit les libelles Yenga pay-in vers cashoutMethod.
+// Ex: "OrangeMoneyAPI" / "ORANGE" → "ORANGE"
+//
+//	"SankMoneyAPI" / "SANK" → "SANK"
+func mapPayInSourceToCashoutOperator(src string) string {
+	s := strings.ToUpper(strings.TrimSpace(src))
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "-", "_")
+
+	switch {
+	case strings.Contains(s, "ORANGE"):
+		return "ORANGE"
+	case strings.Contains(s, "MOOV"):
+		return "MOOV"
+	case strings.Contains(s, "TELECEL"):
+		return "TELECEL"
+	case strings.Contains(s, "CORIS"):
+		return "CORIS"
+	case strings.Contains(s, "SANK"):
+		return "SANK"
+	default:
+		// deja un code cash-out explicite
+		switch s {
+		case "ORANGE_MONEY", "MOOV_MONEY", "TELECEL", "CORIS_MONEY", "SANK_MONEY":
+			return s
+		}
+		return s
+	}
+}
+
+func normalizeMSISDN(phone string) string {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return ""
+	}
+	// Yenga cash-out attend souvent +226...
+	if strings.HasPrefix(phone, "00") {
+		phone = "+" + phone[2:]
+	}
+	if phone[0] != '+' && len(phone) >= 8 {
+		// BF local 70xxxxxx → +22670xxxxxx
+		if len(phone) == 8 {
+			phone = "+226" + phone
+		} else if !strings.HasPrefix(phone, "226") {
+			phone = "+" + phone
+		} else {
+			phone = "+" + phone
+		}
+	}
+	return phone
 }

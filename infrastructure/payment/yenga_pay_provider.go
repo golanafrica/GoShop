@@ -224,7 +224,7 @@ func (p *YengaPayProvider) InitiatePayment(ctx context.Context, req *PaymentRequ
 // CashOutRequest représente une demande de retrait
 type CashOutRequest struct {
 	AmountCents       int64
-	PaymentMethod     string // "ORANGE_MONEY", "MOOV_MONEY", etc.
+	PaymentMethod     string
 	DestinationNumber string
 	DestinationName   string
 	DestinationEmail  string
@@ -242,13 +242,12 @@ type CashOutResponse struct {
 }
 
 // CashOut effectue un retrait vers Mobile Money via Yenga Pay
-// Endpoint: POST /api/v1/groups/{organization_id}/cash-out
 func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*CashOutResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
 	yengaReq := map[string]interface{}{
 		"cashoutMethod": req.PaymentMethod,
-		"amount":        req.AmountCents / 100, // Yenga Pay attend des FCFA
+		"amount":        req.AmountCents / 100,
 		"destNumber":    req.DestinationNumber,
 		"groupId":       p.organizationID,
 		"projectId":     p.projectID,
@@ -292,7 +291,6 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
-		// OK
 	default:
 		return nil, fmt.Errorf("Yenga Pay cash-out error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -330,7 +328,7 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 	}, nil
 }
 
-// ============ AUTRES MÉTHODES (inchangées) ============
+// ============ AUTRES MÉTHODES ============
 
 func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA int64, req *PaymentRequest) (*yengaPaymentIntentResponse, error) {
 	articles := []map[string]interface{}{
@@ -691,16 +689,32 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
+	// Debug temporaire : retirer en prod une fois le canal stabilise
+	logger.Info().
+		Str("reference", providerRef).
+		Str("raw_body", string(respBody)).
+		Msg("Yenga CheckStatus raw response (debug canal pay-in)")
+
 	var yengaResp struct {
-		ID                string `json:"id"`
-		PaymentIntentID   string `json:"paymentIntentId"`
-		TransactionID     string `json:"transactionId"`
-		TransactionStatus string `json:"transactionStatus"`
-		Status            string `json:"status"`
-		PaymentStatus     string `json:"paymentStatus"`
-		PaymentAmount     int64  `json:"paymentAmount"`
-		Amount            int64  `json:"amount"`
-		Currency          string `json:"currency"`
+		ID                  string `json:"id"`
+		PaymentIntentID     string `json:"paymentIntentId"`
+		TransactionID       string `json:"transactionId"`
+		TransactionStatus   string `json:"transactionStatus"`
+		Status              string `json:"status"`
+		PaymentStatus       string `json:"paymentStatus"`
+		PaymentAmount       int64  `json:"paymentAmount"`
+		Amount              int64  `json:"amount"`
+		PaymentFees         int64  `json:"paymentFees"` // XOF
+		Currency            string `json:"currency"`
+		PaymentSource       string `json:"paymentSource"`
+		CustomerNumber      string `json:"customerNumber"`
+		Operator            string `json:"operator"`
+		CustomerPhone       string `json:"customerPhone"`
+		SelectedOperator    string `json:"selectedOperator"`    // ex: TELECEL, ORANGE, MOOV, CORISM
+		SelectedCountryCode string `json:"selectedCountryCode"` // ex: BF
+		SelectedFees        int64  `json:"selectedFees"`
+		SelectedNetAmount   int64  `json:"selectedNetAmount"`
+		SelectedGrossAmount int64  `json:"selectedGrossAmount"`
 	}
 
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
@@ -721,20 +735,94 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 	if amount == 0 {
 		amount = yengaResp.Amount
 	}
+	if amount == 0 {
+		amount = yengaResp.SelectedGrossAmount
+	}
+
+	meta := map[string]interface{}{
+		"currency": yengaResp.Currency,
+	}
+
+	// Frais PSP (XOF) — paymentFees ou selectedFees
+	feesXOF := yengaResp.PaymentFees
+	if feesXOF == 0 {
+		feesXOF = yengaResp.SelectedFees
+	}
+	if feesXOF > 0 {
+		meta["payment_fees"] = float64(feesXOF)
+	}
+
+	// Canal pay-in : paymentSource est souvent null sur intent apres checkout
+	// → fallback selectedOperator (TELECEL, ORANGE, MOOV, CORISM, SANKM, ...)
+	src := strings.TrimSpace(yengaResp.PaymentSource)
+	opRaw := strings.TrimSpace(yengaResp.SelectedOperator)
+	if opRaw == "" {
+		opRaw = strings.TrimSpace(yengaResp.Operator)
+	}
+	opUpper := strings.ToUpper(opRaw)
+
+	if src == "" && opUpper != "" {
+		switch opUpper {
+		case "ORANGE":
+			src = "OrangeMoneyAPI"
+			meta["operator"] = "ORANGE"
+		case "MOOV":
+			src = "MoovMoneyAPI"
+			meta["operator"] = "MOOV"
+		case "TELECEL":
+			src = "TelecelMoneyAPI"
+			meta["operator"] = "TELECEL"
+		case "CORISM", "CORIS":
+			src = "CorisMoneyAPI"
+			meta["operator"] = "CORIS"
+		case "SANKM", "SANK":
+			src = "SankMoneyAPI"
+			meta["operator"] = "SANK"
+		case "WAVE":
+			src = "WaveMoneyAPI"
+			meta["operator"] = "WAVE"
+		case "MTN":
+			src = "MtnMoneyAPI"
+			meta["operator"] = "MTN"
+		default:
+			src = opUpper + "MoneyAPI"
+			meta["operator"] = opUpper
+		}
+	}
+	if src != "" {
+		meta["payment_source"] = src
+	}
+	if _, ok := meta["operator"]; !ok && opUpper != "" {
+		meta["operator"] = opUpper
+	}
+	if cc := strings.TrimSpace(yengaResp.SelectedCountryCode); cc != "" {
+		meta["selected_country_code"] = cc
+	}
+
+	// MSISDN : souvent null sur payment-intent meme en DONE (webhook / merchant-payment requis)
+	custNum := strings.TrimSpace(yengaResp.CustomerNumber)
+	if custNum == "" {
+		custNum = strings.TrimSpace(yengaResp.CustomerPhone)
+	}
+	if custNum != "" {
+		meta["customer_number"] = custNum
+	}
 
 	logger.Debug().
 		Str("reference", providerRef).
 		Str("yenga_status", statusStr).
 		Str("mapped_status", string(status)).
+		Int64("payment_fees_xof", feesXOF).
+		Str("payment_source", src).
+		Str("selected_operator", opRaw).
+		Str("customer_number", custNum).
 		Msg("Payment status checked")
 
 	return &PaymentStatus{
 		ProviderRef: providerRef,
 		Status:      status,
 		AmountCents: amount * 100,
-		Metadata: map[string]interface{}{
-			"currency": yengaResp.Currency,
-		},
+		Metadata:    meta,
 	}, nil
 }
 
@@ -762,7 +850,6 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 	}
 
 	var webhookData struct {
-		// Pay-in
 		APIEnv          string `json:"apiEnv"`
 		PaymentStatus   string `json:"paymentStatus"`
 		TransID         string `json:"transId"`
@@ -776,7 +863,6 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		Reference       string `json:"reference"`
 		Currency        string `json:"currency"`
 
-		// Payout (cash-out)
 		ID              string `json:"id"`
 		Status          string `json:"status"`
 		OperatorTransID string `json:"operatorTransId"`
@@ -788,7 +874,6 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		return nil, fmt.Errorf("invalid webhook payload: %w", err)
 	}
 
-	// Ref: pay-in (transId / paymentIntentId) ou payout (id)
 	providerRef := webhookData.TransID
 	if providerRef == "" {
 		providerRef = webhookData.PaymentIntentID
@@ -800,7 +885,6 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		return nil, fmt.Errorf("missing transaction ID in webhook")
 	}
 
-	// Statut: paymentStatus (pay-in) ou status (payout)
 	statusRaw := webhookData.PaymentStatus
 	if statusRaw == "" {
 		statusRaw = webhookData.Status
@@ -832,7 +916,7 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		Metadata: map[string]interface{}{
 			"payment_source":  webhookData.PaymentSource,
 			"customer_number": webhookData.CustomerNumber,
-			"payment_fees":    webhookData.PaymentFees,
+			"payment_fees":    float64(webhookData.PaymentFees),
 			"country_origin":  webhookData.CountryOrigin,
 			"reference":       webhookData.Reference,
 			"currency":        webhookData.Currency,
@@ -855,97 +939,125 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// Refund initie un remboursement via l'API de Yenga Pay
-// Basé sur la structure de l'API YengaPay (voir méthode CheckStatus fallback)
-// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
-// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
-// Refund initie un remboursement vers le client via l'API Cash-Out de Yenga Pay
+// mapOperatorToCashoutMethod : refund / cash-out (doc Yenga)
+func mapOperatorToCashoutMethod(operator string) string {
+	switch strings.ToUpper(strings.TrimSpace(operator)) {
+	case "ORANGE", "ORANGE_MONEY":
+		return "ORANGE_MONEY"
+	case "MOOV", "MOOV_MONEY":
+		return "MOOV_MONEY"
+	case "TELECEL", "TELECEL_MONEY":
+		return "TELECEL_MONEY"
+	case "SANK", "SANKM", "SANK_MONEY":
+		return "SANK_MONEY"
+	case "CORIS", "CORISM", "CORIS_MONEY":
+		// Pay-in Coris OK ; cash-out souvent indisponible → fallback
+		return "ORANGE_MONEY"
+	default:
+		return "ORANGE_MONEY"
+	}
+}
+
 func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
 	logger := zerolog.Ctx(ctx)
 
 	amountFCFA := float64(amountCents) / 100.0
 
-	// ✅ FORMATAGE DU NUMÉRO : YengaPay Cash-Out exige le format international avec '+'
 	destNumber := customerPhone
 	if len(destNumber) > 0 && destNumber[0] != '+' {
 		destNumber = "+" + destNumber
 	}
 
-	// ✅ DÉTERMINATION DYNAMIQUE DE L'OPÉRATEUR POUR LE CASH-OUT
-	cashoutMethod := "ORANGE_MONEY" // Valeur par défaut de secours
-	if operator != "" {
-		switch strings.ToUpper(operator) {
-		case "ORANGE", "ORANGE_MONEY":
-			cashoutMethod = "ORANGE_MONEY"
-		case "MOOV", "MOOV_MONEY":
-			cashoutMethod = "MOOV_MONEY"
-		case "TELECEL":
-			cashoutMethod = "TELECEL"
-		case "CORIS", "CORIS_MONEY":
-			cashoutMethod = "CORIS_MONEY"
-		case "SANK", "SANK_MONEY":
-			cashoutMethod = "SANK_MONEY"
-		default:
-			cashoutMethod = strings.ToUpper(operator)
-		}
-	}
-
-	yengaReq := map[string]interface{}{
-		"cashoutMethod": cashoutMethod,
-		"amount":        amountFCFA,
-		"destNumber":    destNumber,
-		"groupId":       p.organizationID,
-		"projectId":     p.projectID,
-		"description":   fmt.Sprintf("Refund for payment %s", providerRef),
-	}
-
-	reqBody, err := json.Marshal(yengaReq)
-	if err != nil {
-		return fmt.Errorf("failed to marshal refund request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/groups/%s/cash-out", p.baseURL, p.organizationID)
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("failed to create refund request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.apiKey)
+	cashoutMethod := mapOperatorToCashoutMethod(operator)
 
 	logger.Info().
-		Str("url", url).
-		Str("provider_ref", providerRef).
-		Int64("amount_cents", amountCents).
-		Str("dest_number", destNumber).
+		Str("operator_in", operator).
 		Str("cashout_method", cashoutMethod).
-		Msg("Calling Yenga Pay cash-out for refund")
+		Msg("Mapped pay-in operator to Yenga cashoutMethod")
 
-	resp, err := p.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("failed to send refund request: %w", err)
+	doCashOut := func(method string) (int, []byte, error) {
+		yengaReq := map[string]interface{}{
+			"cashoutMethod": method,
+			"amount":        amountFCFA,
+			"destNumber":    destNumber,
+			"groupId":       p.organizationID,
+			"projectId":     p.projectID,
+			"description":   fmt.Sprintf("Refund for payment %s", providerRef),
+		}
+
+		reqBody, err := json.Marshal(yengaReq)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to marshal refund request: %w", err)
+		}
+
+		url := fmt.Sprintf("%s/groups/%s/cash-out", p.baseURL, p.organizationID)
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to create refund request: %w", err)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-api-key", p.apiKey)
+
+		logger.Info().
+			Str("url", url).
+			Str("provider_ref", providerRef).
+			Int64("amount_cents", amountCents).
+			Str("dest_number", destNumber).
+			Str("cashout_method", method).
+			Msg("Calling Yenga Pay cash-out for refund")
+
+		resp, err := p.httpClient.Do(httpReq)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to send refund request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to read refund response: %w", err)
+		}
+
+		return resp.StatusCode, respBody, nil
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	statusCode, respBody, err := doCashOut(cashoutMethod)
 	if err != nil {
-		return fmt.Errorf("failed to read refund response: %w", err)
+		return err
 	}
 
-	switch resp.StatusCode {
+	// Methode non dispo sur le projet → retry ORANGE_MONEY (doc: toujours listé)
+	if statusCode == http.StatusForbidden &&
+		cashoutMethod != "ORANGE_MONEY" &&
+		strings.Contains(string(respBody), "n'est pas disponible") {
+
+		logger.Warn().
+			Str("failed_method", cashoutMethod).
+			Str("response", string(respBody)).
+			Msg("Cashout method unavailable on project — retry ORANGE_MONEY")
+
+		statusCode, respBody, err = doCashOut("ORANGE_MONEY")
+		if err != nil {
+			return err
+		}
+		cashoutMethod = "ORANGE_MONEY"
+	}
+
+	switch statusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
-		// Succès
 	default:
 		logger.Error().
-			Int("status_code", resp.StatusCode).
+			Int("status_code", statusCode).
 			Str("response", string(respBody)).
+			Str("cashout_method", cashoutMethod).
 			Msg("Yenga Pay refund API error")
-		return fmt.Errorf("Yenga Pay refund error (status %d): %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("Yenga Pay refund error (status %d): %s", statusCode, string(respBody))
 	}
 
 	logger.Info().
 		Str("provider_ref", providerRef).
+		Str("cashout_method", cashoutMethod).
 		Msg("Refund (cash-out) initiated successfully via Yenga Pay")
 
 	return nil
@@ -955,8 +1067,7 @@ func (p *YengaPayProvider) IsAvailable(ctx context.Context) bool {
 	return p.apiKey != "" && p.organizationID != "" && p.projectID != ""
 }
 
-// ============ Helpers ============
-
+// mapOperatorCode : pay-in direct (codes Yenga operatorCode)
 func mapOperatorCode(operator string) string {
 	switch operator {
 	case "orange_money", "ORANGE":
@@ -996,8 +1107,6 @@ func mapYengaStatus(yengaStatus string) entity.PaymentStatus {
 		return entity.PaymentStatusPending
 	}
 }
-
-// ============ Types de réponse Yenga Pay ============
 
 type yengaPaymentIntentResponse struct {
 	ID                              string `json:"id"`
