@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -72,8 +71,9 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 			id, shop_id, order_id, provider, provider_ref,
 			amount_cents, currency, customer_phone, customer_email,
 			description, status, metadata, initiated_at, completed_at, expires_at,
-			reference_type, reference_id, webhook_external_id, provider_fees_cents
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			reference_type, reference_id, webhook_external_id, provider_fees_cents,
+			commission_cents, commission_rate_bps, commission_status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 	`
 
 	_, err = r.execContext(ctx, query,
@@ -96,6 +96,9 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
+		payment.CommissionCents,
+		payment.CommissionRateBps,
+		payment.CommissionStatus,
 	)
 
 	if err != nil {
@@ -116,6 +119,7 @@ func (r *PaymentRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUID) 
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE id = $1 AND shop_id = $2
@@ -135,6 +139,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderID(ctx context.Context, orderID u
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1 AND shop_id = $2
@@ -156,6 +161,7 @@ func (r *PaymentRepositoryPostgres) FindByProviderRef(ctx context.Context, provi
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -170,6 +176,7 @@ func (r *PaymentRepositoryPostgres) FindByProviderRefForUpdate(ctx context.Conte
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -185,6 +192,7 @@ func (r *PaymentRepositoryPostgres) FindByShop(ctx context.Context, shopID uuid.
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE shop_id = $1
@@ -238,6 +246,7 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
+	// ✅ CORRECTION : Ajout de commission_cents, commission_rate_bps et commission_status dans l'UPDATE
 	query := `
 		UPDATE payments SET
 			provider_ref = $1,
@@ -249,8 +258,11 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 			reference_id = $7,
 			webhook_external_id = $8,
 			provider_fees_cents = $9,
+			commission_cents = $10,
+			commission_rate_bps = $11,
+			commission_status = $12,
 			updated_at = NOW()
-		WHERE id = $10 AND shop_id = $11
+		WHERE id = $13 AND shop_id = $14
 	`
 
 	result, err := r.execContext(ctx, query,
@@ -263,6 +275,9 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
+		payment.CommissionCents,
+		payment.CommissionRateBps,
+		payment.CommissionStatus,
 		payment.ID,
 		shopID,
 	)
@@ -284,6 +299,8 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 	var p entity.Payment
 	var metadataBytes []byte
 	var providerRef, customerPhone, customerEmail, description, referenceType, referenceID, webhookExternalID sql.NullString
+	var commissionStatus sql.NullString
+	var commissionCollectedAt sql.NullTime
 
 	err := row.Scan(
 		&p.ID,
@@ -305,6 +322,10 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&referenceID,
 		&webhookExternalID,
 		&p.ProviderFeesCents,
+		&p.CommissionCents,
+		&p.CommissionRateBps,
+		&commissionStatus,
+		&commissionCollectedAt,
 		&p.CreatedAt,
 		&p.UpdatedAt,
 	)
@@ -337,6 +358,12 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 	if webhookExternalID.Valid {
 		p.WebhookExternalID = &webhookExternalID.String
 	}
+	if commissionStatus.Valid {
+		p.CommissionStatus = commissionStatus.String
+	}
+	if commissionCollectedAt.Valid {
+		p.CommissionCollectedAt = &commissionCollectedAt.Time
+	}
 
 	if len(metadataBytes) > 0 {
 		if err := json.Unmarshal(metadataBytes, &p.Metadata); err != nil {
@@ -356,6 +383,8 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 		var p entity.Payment
 		var metadataBytes []byte
 		var providerRef, customerPhone, customerEmail, description, referenceType, referenceID, webhookExternalID sql.NullString
+		var commissionStatus sql.NullString
+		var commissionCollectedAt sql.NullTime
 
 		err := rows.Scan(
 			&p.ID,
@@ -377,6 +406,10 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 			&referenceID,
 			&webhookExternalID,
 			&p.ProviderFeesCents,
+			&p.CommissionCents,
+			&p.CommissionRateBps,
+			&commissionStatus,
+			&commissionCollectedAt,
 			&p.CreatedAt,
 			&p.UpdatedAt,
 		)
@@ -404,6 +437,12 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 		}
 		if webhookExternalID.Valid {
 			p.WebhookExternalID = &webhookExternalID.String
+		}
+		if commissionStatus.Valid {
+			p.CommissionStatus = commissionStatus.String
+		}
+		if commissionCollectedAt.Valid {
+			p.CommissionCollectedAt = &commissionCollectedAt.Time
 		}
 
 		if len(metadataBytes) > 0 {
@@ -545,6 +584,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, o
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1
@@ -559,5 +599,3 @@ func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, o
 
 	return r.scanPayments(rows)
 }
-
-var _ = time.Now
