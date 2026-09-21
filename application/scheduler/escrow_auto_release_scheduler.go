@@ -25,18 +25,19 @@ import (
 //  2. FindByReferenceIDAdmin avant crédit — no-op si déjà crédité
 //  3. Unique partial index uq_wallet_txn_ref_completed — filet DB
 type EscrowAutoReleaseScheduler struct {
-	deliveryProofRepo  repository.DeliveryProofRepository
-	escrowRepo         repository.EscrowAccountRepository
-	orderRepo          repository.OrderRepository
-	tontineVoucherRepo repository.TontineVoucherRepository
-	tontineGroupRepo   repository.TontineGroupRepository
-	shopRepo           repository.ShopRepository
-	walletRepo         repository.MerchantWalletRepository
-	walletTxnRepo      repository.WalletTransactionRepository
-	creditWalletUC     *walletusecase.CreditWalletUsecase
-	batchSize          int
-	maxRetries         int
-	logger             zerolog.Logger
+	deliveryProofRepo   repository.DeliveryProofRepository
+	escrowRepo          repository.EscrowAccountRepository
+	orderRepo           repository.OrderRepository
+	tontineVoucherRepo  repository.TontineVoucherRepository
+	tontineGroupRepo    repository.TontineGroupRepository
+	shopRepo            repository.ShopRepository
+	walletRepo          repository.MerchantWalletRepository
+	walletTxnRepo       repository.WalletTransactionRepository
+	platformRevenueRepo repository.PlatformRevenueRepository // 🆕 Ajouté pour le Split Payment
+	creditWalletUC      *walletusecase.CreditWalletUsecase
+	batchSize           int
+	maxRetries          int
+	logger              zerolog.Logger
 }
 
 // NewEscrowAutoReleaseScheduler crée une nouvelle instance
@@ -49,22 +50,24 @@ func NewEscrowAutoReleaseScheduler(
 	shopRepo repository.ShopRepository,
 	walletRepo repository.MerchantWalletRepository,
 	walletTxnRepo repository.WalletTransactionRepository,
+	platformRevenueRepo repository.PlatformRevenueRepository, // 🆕 Ajouté
 	creditWalletUC *walletusecase.CreditWalletUsecase,
 	logger zerolog.Logger,
 ) *EscrowAutoReleaseScheduler {
 	return &EscrowAutoReleaseScheduler{
-		deliveryProofRepo:  deliveryProofRepo,
-		escrowRepo:         escrowRepo,
-		orderRepo:          orderRepo,
-		tontineVoucherRepo: tontineVoucherRepo,
-		tontineGroupRepo:   tontineGroupRepo,
-		shopRepo:           shopRepo,
-		walletRepo:         walletRepo,
-		walletTxnRepo:      walletTxnRepo,
-		creditWalletUC:     creditWalletUC,
-		batchSize:          100,
-		maxRetries:         3,
-		logger:             logger.With().Str("component", "escrow_auto_release_scheduler").Logger(),
+		deliveryProofRepo:   deliveryProofRepo,
+		escrowRepo:          escrowRepo,
+		orderRepo:           orderRepo,
+		tontineVoucherRepo:  tontineVoucherRepo,
+		tontineGroupRepo:    tontineGroupRepo,
+		shopRepo:            shopRepo,
+		walletRepo:          walletRepo,
+		walletTxnRepo:       walletTxnRepo,
+		platformRevenueRepo: platformRevenueRepo, // 🆕 Ajouté
+		creditWalletUC:      creditWalletUC,
+		batchSize:           100,
+		maxRetries:          3,
+		logger:              logger.With().Str("component", "escrow_auto_release_scheduler").Logger(),
 	}
 }
 
@@ -126,21 +129,6 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 }
 
 // processProof traite une preuve individuelle avec claim atomique anti-race.
-//
-// Ordre critique :
-//  1. Résoudre shop_id + escrow
-//  2. ClaimRelease atomique (funds_held → released) — un seul gagnant multi-instance
-//  3. Crédit wallet idempotent (FindByReferenceIDAdmin + unique index)
-//  4. Update delivery proof
-//
-// processProof traite une preuve individuelle avec claim atomique anti-race.
-//
-// Ordre critique :
-//  1. Résoudre shop_id + escrow
-//  2. ClaimRelease atomique (funds_held → released) — un seul gagnant multi-instance
-//  3. Crédit wallet idempotent UNIQUEMENT pour les orders
-//     Tontine : déjà crédité NET+held en fin de cycle → skip crédit ici
-//  4. Update delivery proof
 func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *entity.DeliveryProof) (int64, error) {
 	itemLogger := s.logger.With().
 		Str("proof_id", proof.ID).
@@ -212,7 +200,17 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger.Info().Msg("🔒 Escrow claimed successfully")
 
-	// 5. Crédit wallet UNIQUEMENT pour les commandes (orders).
+	// 🆕 5. SPLIT PAYMENT : Créditer le compte de revenus de la plateforme avec la commission
+	if escrow.CommissionCents > 0 && s.platformRevenueRepo != nil {
+		if err := s.platformRevenueRepo.CreditRevenue(ctx, escrow.CommissionCents, proof.ID, escrow.ID); err != nil {
+			itemLogger.Error().Err(err).Msg("Failed to credit platform revenue")
+			// On ne bloque pas le crédit du marchand, mais on logue l'erreur pour réconciliation
+		} else {
+			itemLogger.Info().Int64("commission_cents", escrow.CommissionCents).Msg("✅ Platform revenue credited (Split)")
+		}
+	}
+
+	// 6. Crédit wallet UNIQUEMENT pour les commandes (orders).
 	//    Tontine : déjà crédité NET + held à la fin de cycle (CreditFromTontine).
 	//    Redeem libère le held — ne jamais re-créditer ici.
 	if proof.TontineVoucherID != nil {
@@ -252,7 +250,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return 0, fmt.Errorf("failed to credit merchant wallet after %d attempts (escrow already claimed): %w", s.maxRetries, lastErr)
 	}
 
-	// 6. Mettre à jour la delivery proof
+	// 7. Mettre à jour la delivery proof
 	if err := proof.ReleaseFunds(); err != nil {
 		itemLogger.Warn().Err(err).Msg("proof.ReleaseFunds in-memory failed (may already be released)")
 	}
@@ -268,10 +266,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 }
 
 // creditMerchantWallet crédite le wallet du marchand de façon idempotente.
-//
-// Garde-fous :
-//  1. FindByReferenceIDAdmin("escrow_auto_release", proofID) → no-op si déjà crédité
-//  2. Unique index uq_wallet_txn_ref_completed → erreur unique → traité comme succès
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -290,7 +284,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			Msg("⏭️ Wallet already credited for this proof — skip")
 		return nil
 	}
-	// err != nil ou existing == nil → on continue (pas encore crédité)
 
 	// --- Tenant context pour wallet ---
 	shopUUID, err := uuid.Parse(shopID)

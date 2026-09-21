@@ -188,6 +188,7 @@ import (
 	// 🆕 v5.1.0 : Delivery Zone Handler & Usecase
 	deliveryzoneusecase "Goshop/application/usecase/delivery_zone_usecase"
 	deliveryzoneservice "Goshop/domain/service"
+	platformrevenuerepository "Goshop/infrastructure/postgres/platform_revenue_repository" // 🆕 AJOUTE CETTE LIGNE
 	deliveryzonehandler "Goshop/interfaces/handler/delivery_zone_handler"
 
 	// 🆕 v5.2.0 : Customer Reliability Score Usecase & Handler
@@ -297,6 +298,8 @@ func (a *App) setupRouter() {
 
 	// 🆕 v3.0.0 : Repository Freeze
 	freezeRepo := freezeinfra.NewAccountFreezeRepositoryInfrastructure(a.DB)
+
+	platformRevenueRepo := platformrevenuerepository.NewPlatformRevenueRepositoryPostgres(a.DB)
 
 	// 🆕 v3.1.0 : Repository Commission Batches
 	batchRepo := commissionbatch.NewCommissionBatchRepositoryPostgres(a.DB)
@@ -1025,6 +1028,7 @@ func (a *App) setupRouter() {
 		shopRepo,
 		walletRepo,
 		walletTxnRepo,
+		platformRevenueRepo,
 		creditWalletUC,
 		a.Logger.Logger,
 	)
