@@ -1,15 +1,19 @@
 # ============================================================
-# GOSHOP E2E - YengaPay REAL PAY-IN (navigateur) + Escrow + Withdrawal
+# GOSHOP E2E - YengaPay REAL PAY-IN + Escrow Auto-Release + Withdrawal
 # ============================================================
 # Mode REAL_PAYIN:
-#   - Ouvre le lien checkout Yenga dans le navigateur
-#   - Tu paies manuellement (sandbox)
-#   - Le script poll le statut jusqu'a success (via API GoShop -> Yenga)
-#   - Ensuite shipping / delivery / wallet / withdrawal
+#   - Checkout navigateur Yenga (sandbox)
+#   - Poll statut success
+#   - Shipping + delivery (escrow RESTE funds_held)
+#   - Backdate delivery_date (>= 3 jours) puis trigger admin auto-release
+#   - PAS de SQL force status=released
+#   - Verifie platform_revenue (proof_id) + wallet marchand
+#   - Withdrawal + payout webhook
 #
-# IMPORTANT pour voir le Pay In sur le dashboard Yenga:
-#   - Tu DOIS finaliser le paiement sur la page checkout
-#   - Le webhook local n'est PAS utilise pour le pay-in (sauf fallback)
+# Env utiles:
+#   $env:YENGA_PAY_WEBHOOK_SECRET
+#   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:GOSHOP_BASE_URL
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -19,15 +23,16 @@ $ErrorActionPreference = "Stop"
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
 $WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "CHANGE_ME_YENGA_PAY_WEBHOOK_SECRET" }
+$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
+$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "CHANGE_ME_ADMIN_PASSWORD" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
-# true  = paiement reel via navigateur (visible sandbox Yenga)
-# false = ancien mode webhook simule local
-$RealPayIn = $true
-$PayInTimeoutSec = 300   # 5 min pour payer
-$PayInPollSec    = 5
+$RealPayIn         = $true
+$PayInTimeoutSec   = 300
+$PayInPollSec      = 5
+$SchedulerWaitSec  = 10
 
 $Timestamp         = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail     = "merchant.e2e.$Timestamp@goshop.com"
@@ -37,7 +42,7 @@ $ShopSlug          = "e2e-shop-$Timestamp"
 $CustomerPhone     = "+22670000000"
 $ProductPriceCents = 100000   # 1000 XOF
 $WithdrawCents     = 50000    # 500 XOF
-$feesFcfa          = 10
+$feesFcfa          = 25       # aligné sandbox Yenga ~2.5%
 
 $script:Passed = 0
 $script:Failed = 0
@@ -143,6 +148,16 @@ function Invoke-SafeApi {
             elseif ($parsed.error) { $errBody = $parsed.error }
         } catch {}
 
+        if ($status -eq 202) {
+            return @{
+                Success    = $true
+                Data       = $null
+                StatusCode = 202
+                Raw        = $errBody
+                Error      = $null
+            }
+        }
+
         return @{
             Success    = $false
             Error      = $errBody
@@ -154,7 +169,7 @@ function Invoke-SafeApi {
 }
 
 function Assert-Ok {
-    param($Res, [string]$Context, [int[]]$Codes = @(200, 201))
+    param($Res, [string]$Context, [int[]]$Codes = @(200, 201, 202))
     if (-not $Res.Success -or ($Codes -notcontains $Res.StatusCode)) {
         Write-Fail "$Context -> HTTP $($Res.StatusCode) - $($Res.Error)"
     }
@@ -180,6 +195,26 @@ function Invoke-Sql {
         return $false
     }
     return $true
+}
+
+function Invoke-SqlQuery {
+    param([string]$Sql)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $out = $Sql | & docker-compose exec -T $DbService psql -U $DbUser -d $DbName -t -A -v ON_ERROR_STOP=1 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($code -ne 0) {
+        Write-Warn "SQL query failed (exit $code): $out"
+        return $null
+    }
+    return ($out | Out-String).Trim()
+}
+
+function Get-LongSafe {
+    param($Value)
+    if ($null -eq $Value -or "$Value" -eq "") { return [int64]0 }
+    try { return [int64]("$Value".Trim()) } catch { return [int64]0 }
 }
 
 function Get-AuthToken {
@@ -275,19 +310,19 @@ function Send-SimulatedPaymentWebhook {
 # ============================================================
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Magenta
-Write-Host " GOSHOP E2E - YengaPay REAL PAY-IN + Escrow + Withdrawal" -ForegroundColor Magenta
+Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (no SQL force) + Withdrawal" -ForegroundColor Magenta
 Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn" -ForegroundColor DarkGray
 Write-Host "================================================================" -ForegroundColor Magenta
 
 try {
     # 01 Health
-    Write-Step "01/12" "Health check"
+    Write-Step "01/13" "Health check"
     $res = Invoke-SafeApi -Method Get -Uri "$BaseUrl/health/live"
     Assert-Ok $res "health/live"
     Write-Ok "API live"
 
-    # 02 Auth
-    Write-Step "02/12" "Register + login merchant"
+    # 02 Auth merchant
+    Write-Step "02/13" "Register + login merchant"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/register" -Body @{
         email = $MerchantEmail; password = $MerchantPassword
     }
@@ -308,7 +343,7 @@ try {
     Write-Ok "Merchant token OK ($MerchantEmail)"
 
     # 03 Shop + KYC
-    Write-Step "03/12" "Create shop + KYC verified (SQL)"
+    Write-Step "03/13" "Create shop + KYC verified (SQL)"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/shops" `
         -Headers $script:State.MerchantHeaders `
         -Body @{ name = $ShopName; slug = $ShopSlug }
@@ -329,7 +364,7 @@ try {
     $script:State.MerchantHeaders["Authorization"] = "Bearer $merchantToken"
 
     # 04 Product / customer / order
-    Write-Step "04/12" "Product, customer, order"
+    Write-Step "04/13" "Product, customer, order"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/products" `
         -Headers $script:State.MerchantHeaders `
         -Body @{
@@ -373,7 +408,7 @@ try {
     Write-Ok "Order $orderId"
 
     # 05 Init YengaPay
-    Write-Step "05/12" "Initiate YengaPay payment (indirect)"
+    Write-Step "05/13" "Initiate YengaPay payment (indirect)"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" `
         -Headers $script:State.MerchantHeaders `
         -Body @{
@@ -383,7 +418,6 @@ try {
             metadata = @{ flow = "indirect" }
         }
     Assert-Ok $res "pay yenga_pay"
-    $script:State.Provider = "yenga_pay"
 
     $paymentId   = Get-Prop $res.Data @("payment_id", "id", "data.payment_id", "data.id")
     $providerRef = Get-Prop $res.Data @("provider_ref", "data.provider_ref")
@@ -411,7 +445,7 @@ try {
     $amountFcfa = [int]($ProductPriceCents / 100)
 
     if ($RealPayIn) {
-        Write-Step "06/12" "REAL pay-in - checkout navigateur"
+        Write-Step "06/13" "REAL pay-in - checkout navigateur"
         Open-CheckoutUrl -Url $redirect
 
         Write-Host "  En attente du paiement (max ${PayInTimeoutSec}s)..." -ForegroundColor Yellow
@@ -438,7 +472,7 @@ try {
         }
     }
     else {
-        Write-Step "06/12" "Webhook payment SUCCESS simule (HMAC)"
+        Write-Step "06/13" "Webhook payment SUCCESS simule (HMAC)"
         $res = Send-SimulatedPaymentWebhook -PaymentId $paymentId -ProviderRef $providerRef -AmountFcfa $amountFcfa -FeesFcfa $feesFcfa
         if ($res.StatusCode -eq 200) { Write-Ok "Webhook payment.success 200" }
         else { Write-Warn "Webhook HTTP $($res.StatusCode): $($res.Error)" }
@@ -456,7 +490,7 @@ try {
     Write-Ok "Order status = $orderAfter"
 
     # 07 Shipping
-    Write-Step "07/12" "Shipping proof"
+    Write-Step "07/13" "Shipping proof"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/delivery/proof/shipping" `
         -Headers $script:State.MerchantHeaders `
         -Body @{
@@ -473,7 +507,7 @@ try {
     }
 
     # 08 Delivery
-    Write-Step "08/12" "Delivery proof"
+    Write-Step "08/13" "Delivery proof"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/delivery/proof/delivery" `
         -Headers $script:State.MerchantHeaders `
         -Body @{
@@ -489,53 +523,130 @@ try {
         Write-Ok "Delivery proof OK (escrow_status=$escrowSt)"
     }
 
-    # 09 Escrow + wallet SQL
-    Write-Step "09/12" "Release escrow -> wallet (SQL force)"
-    $sqlRelease = "UPDATE escrow_accounts SET status = 'released', released_amount_cents = total_amount_cents, updated_at = NOW() WHERE order_id::text = '" + $orderId + "';"
-    if (Invoke-Sql $sqlRelease) { Write-Ok "Escrow forced released" }
+    $escBefore = Invoke-SqlQuery "SELECT status || '|' || COALESCE(total_amount_cents::text,'') || '|' || COALESCE(commission_cents::text,'') FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
+    Write-Host "  Escrow before release: $escBefore" -ForegroundColor DarkGray
 
-    $netCents = $ProductPriceCents - ($feesFcfa * 100)
-    $sqlWallet = "INSERT INTO merchant_wallets (shop_id, balance_cents, held_cents, total_sales_cents, is_frozen, created_at, updated_at) " +
-                 "VALUES ('" + $shopId + "'::uuid, " + $netCents + ", 0, " + $netCents + ", false, NOW(), NOW()) " +
-                 "ON CONFLICT (shop_id) DO UPDATE SET " +
-                 "balance_cents = merchant_wallets.balance_cents + EXCLUDED.balance_cents, " +
-                 "held_cents = GREATEST(merchant_wallets.held_cents - EXCLUDED.balance_cents, 0), " +
-                 "total_sales_cents = merchant_wallets.total_sales_cents + EXCLUDED.total_sales_cents, " +
-                 "updated_at = NOW();"
-    if (Invoke-Sql $sqlWallet) { Write-Ok ("Wallet credited ~" + $netCents + " cents") }
-    else { Write-Warn "Wallet SQL failed" }
+    # 09 Auto-release scheduler
+    Write-Step "09/13" "Escrow auto-release via scheduler (real path)"
 
-    # 10 Withdrawal
-    Write-Step "10/12" "Create withdrawal"
-    $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" `
-        -Headers $script:State.MerchantHeaders `
-        -Body @{
-            amount_cents = $WithdrawCents
-            payment_method = "ORANGE_MONEY"
-            destination_number = "+22670123456"
-            destination_name = "Jean Test"
-            description = "E2E withdrawal $Timestamp"
-        }
-    if (-not $res.Success) {
-        Write-Warn "Withdrawal failed: HTTP $($res.StatusCode) - $($res.Error)"
+    $sqlElig = @"
+UPDATE delivery_proofs
+SET delivery_date = NOW() - INTERVAL '4 days',
+    updated_at    = NOW() - INTERVAL '4 days'
+WHERE order_id = '$orderId'::uuid
+  AND escrow_status = 'delivered';
+
+UPDATE escrow_accounts
+SET updated_at = NOW() - INTERVAL '4 days'
+WHERE order_id = '$orderId'::uuid
+  AND status = 'funds_held';
+"@
+    if (Invoke-Sql $sqlElig) {
+        Write-Ok "Eligibility: delivery_date backdated 4 days (status NOT forced released)"
     }
     else {
-        $script:State.WithdrawalId  = [string](Get-Prop $res.Data @("id", "data.id"))
-        $script:State.WithdrawalRef = [string](Get-Prop $res.Data @("provider_ref", "data.provider_ref"))
-        $wStatus = Get-Prop $res.Data @("status", "data.status")
-        Write-Ok "Withdrawal $($script:State.WithdrawalId) | ref=$($script:State.WithdrawalRef) | status=$wStatus"
+        Write-Warn "Eligibility SQL failed - scheduler may skip"
     }
 
-    # 11 Payout webhook (simule - le cash-out API est deja reel cote Yenga)
-    Write-Step "11/12" "Webhook payout.success"
+    $proofSnap = Invoke-SqlQuery "SELECT COALESCE(escrow_status,'') || '|' || COALESCE(delivery_date::text,'') FROM delivery_proofs WHERE order_id = '$orderId'::uuid LIMIT 1;"
+    Write-Host "  Proof after backdate: $proofSnap" -ForegroundColor DarkGray
+
+    $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/login" -Body @{
+        email = $AdminEmail; password = $AdminPassword
+    }
+    Assert-Ok $res "admin login"
+    $adminToken = Get-AuthToken $res.Data
+    $adminHeaders = @{ "Authorization" = "Bearer $adminToken" }
+    Write-Ok "Admin token OK ($AdminEmail)"
+
+    $res = Invoke-SafeApi -Method Post `
+        -Uri "$BaseUrl/api/admin/scheduler/trigger-escrow-auto-release" `
+        -Headers $adminHeaders
+    Assert-Ok $res "trigger-escrow-auto-release" -Codes @(200, 201, 202)
+    Write-Ok "Scheduler triggered (HTTP $($res.StatusCode) background)"
+
+    Write-Host "  Wait ${SchedulerWaitSec}s for background job..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds $SchedulerWaitSec
+
+    $escAfter = Invoke-SqlQuery "SELECT status || '|' || COALESCE(total_amount_cents::text,'') || '|' || COALESCE(commission_cents::text,'') || '|' || COALESCE(released_amount_cents::text,'') FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
+    Write-Host "  Escrow after: $escAfter" -ForegroundColor White
+
+    $platBal = Invoke-SqlQuery "SELECT COALESCE(balance_cents,0)::text FROM platform_revenue_accounts LIMIT 1;"
+    # CreditRevenue stocke reference_id = proof_id (pas escrow_id)
+    $platTxn = Invoke-SqlQuery @"
+SELECT COUNT(*)::text
+FROM platform_revenue_transactions prt
+JOIN delivery_proofs dp ON prt.reference_id = dp.id
+WHERE dp.order_id = '$orderId'::uuid
+  AND prt.reference_type = 'escrow_auto_release';
+"@
+    Write-Host "  Platform balance_cents: $platBal | txn for order proof: $platTxn" -ForegroundColor White
+
+    $walletBal = Invoke-SqlQuery "SELECT COALESCE(balance_cents,0)::text FROM merchant_wallets WHERE shop_id = '$shopId'::uuid;"
+    Write-Host "  Merchant wallet_cents: $walletBal" -ForegroundColor White
+
+    if ("$escAfter" -match "released") {
+        Write-Ok "Escrow status = released (scheduler path)"
+    }
+    else {
+        Write-Warn "Escrow not released - check logs: ClaimRelease / eligible proofs"
+        Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release'" -ForegroundColor DarkGray
+    }
+
+    $platBalN = Get-LongSafe $platBal
+    $platTxnN = Get-LongSafe $platTxn
+    $walletN  = Get-LongSafe $walletBal
+
+    if ($platBalN -gt 0 -or $platTxnN -gt 0) {
+        Write-Ok "Platform revenue updated (Split Payment) balance=$platBalN txn=$platTxnN"
+    }
+    else {
+        Write-Warn "Platform revenue still 0 - CreditRevenue non appele ou echec"
+    }
+
+    if ($walletN -gt 0) {
+        Write-Ok "Merchant wallet credited by scheduler (balance=$walletN cents)"
+    }
+    else {
+        Write-Warn "Merchant wallet still 0 - credit failed or skipped after claim"
+    }
+
+    # 10 Withdrawal
+    Write-Step "10/13" "Create withdrawal"
+    if ($walletN -lt $WithdrawCents) {
+        Write-Warn "Wallet $walletN < $WithdrawCents - skip withdrawal (release/credit incomplete)"
+    }
+    else {
+        $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" `
+            -Headers $script:State.MerchantHeaders `
+            -Body @{
+                amount_cents = $WithdrawCents
+                payment_method = "ORANGE_MONEY"
+                destination_number = "+22670123456"
+                destination_name = "Jean Test"
+                description = "E2E withdrawal $Timestamp"
+            }
+        if (-not $res.Success) {
+            Write-Warn "Withdrawal failed: HTTP $($res.StatusCode) - $($res.Error)"
+        }
+        else {
+            $script:State.WithdrawalId  = [string](Get-Prop $res.Data @("id", "data.id"))
+            $script:State.WithdrawalRef = [string](Get-Prop $res.Data @("provider_ref", "data.provider_ref"))
+            $wStatus = Get-Prop $res.Data @("status", "data.status")
+            Write-Ok "Withdrawal $($script:State.WithdrawalId) | ref=$($script:State.WithdrawalRef) | status=$wStatus"
+        }
+    }
+
+    # 11 Payout webhook
+    Write-Step "11/13" "Webhook payout.success"
     if ($script:State.WithdrawalRef -or $script:State.WithdrawalId) {
         $payoutRef = if ($script:State.WithdrawalRef) { $script:State.WithdrawalRef } else { $script:State.WithdrawalId }
         $opTx = "OP-E2E-$Timestamp"
         $payoutJson = "{`"id`":`"$payoutRef`",`"transId`":`"$payoutRef`",`"projectId`":`"00000`",`"amount`":$([int]($WithdrawCents / 100)),`"fees`":5,`"currency`":`"XOF`",`"paymentMethod`":`"ORANGE_MONEY`",`"destNumber`":`"+22670123456`",`"status`":`"SUCCESS`",`"operatorTransId`":`"$opTx`",`"paymentStatus`":`"DONE`"}"
         $pHash = Get-HmacSha256Hex -Payload $payoutJson -Secret $WebhookSecret
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
-            "Content-Type" = "application/json; charset=utf-8"
-            "x-webhook-hash" = $pHash
+            "Content-Type"     = "application/json; charset=utf-8"
+            "x-webhook-hash"   = $pHash
             "x-yengapay-event" = "payout.success"
         } -Body $payoutJson
         if ($res.StatusCode -eq 200) { Write-Ok "Payout webhook 200" }
@@ -549,8 +660,8 @@ try {
         Write-Warn "No withdrawal - skip payout webhook"
     }
 
-    # 12 Final
-    Write-Step "12/12" "Final verification"
+    # 12 Final API
+    Write-Step "12/13" "Final API verification"
     if ($script:State.PaymentId) {
         $res = Invoke-SafeApi -Method Get -Uri "$BaseUrl/api/payments/$($script:State.PaymentId)" -Headers $script:State.MerchantHeaders
         Write-Host "  Payment status  : $(Get-Prop $res.Data @('status','data.status'))" -ForegroundColor White
@@ -564,9 +675,13 @@ try {
         Write-Host "  Withdrawal      : $(Get-Prop $res.Data @('status','data.status'))" -ForegroundColor White
         Write-Host "  Operator TX     : $(Get-Prop $res.Data @('operator_transaction_id','data.operator_transaction_id'))" -ForegroundColor White
     }
-    if ($script:State.RedirectUrl) {
-        Write-Host "  Checkout used   : $($script:State.RedirectUrl)" -ForegroundColor DarkGray
-    }
+
+    # 13 Split summary
+    Write-Step "13/13" "Split Payment summary (SQL)"
+    Write-Host "  Escrow   : $escAfter" -ForegroundColor White
+    Write-Host "  Platform : balance=$platBal cents | txns=$platTxn" -ForegroundColor White
+    Write-Host "  Wallet   : $walletBal cents" -ForegroundColor White
+    Write-Host "  Shop     : $shopId | Order=$orderId | Payment=$paymentId" -ForegroundColor DarkGray
 
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Magenta
@@ -574,8 +689,8 @@ try {
     Write-Host " RESULT : $($script:Passed) OK | $($script:Failed) FAIL" -ForegroundColor $resultColor
     Write-Host "================================================================" -ForegroundColor Magenta
     Write-Host ""
-    Write-Host "  Dashboard Yenga sandbox -> Historique Pay In :" -ForegroundColor Cyan
-    Write-Host "  Si tu as complete le checkout, la transaction doit apparaitre." -ForegroundColor DarkGray
+    Write-Host "  Si platform=0 ou escrow pas released:" -ForegroundColor Yellow
+    Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release|CreditRevenue'" -ForegroundColor DarkGray
 }
 catch {
     Write-Host ""

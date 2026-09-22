@@ -33,7 +33,7 @@ type EscrowAutoReleaseScheduler struct {
 	shopRepo            repository.ShopRepository
 	walletRepo          repository.MerchantWalletRepository
 	walletTxnRepo       repository.WalletTransactionRepository
-	platformRevenueRepo repository.PlatformRevenueRepository // 🆕 Ajouté pour le Split Payment
+	platformRevenueRepo repository.PlatformRevenueRepository // 🆕 Pour le Split Payment
 	creditWalletUC      *walletusecase.CreditWalletUsecase
 	batchSize           int
 	maxRetries          int
@@ -201,13 +201,24 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	itemLogger.Info().Msg("🔒 Escrow claimed successfully")
 
 	// 🆕 5. SPLIT PAYMENT : Créditer le compte de revenus de la plateforme avec la commission
+	// 5. SPLIT PAYMENT — commission plateforme
 	if escrow.CommissionCents > 0 && s.platformRevenueRepo != nil {
-		if err := s.platformRevenueRepo.CreditRevenue(ctx, escrow.CommissionCents, proof.ID, escrow.ID); err != nil {
-			itemLogger.Error().Err(err).Msg("Failed to credit platform revenue")
-			// On ne bloque pas le crédit du marchand, mais on logue l'erreur pour réconciliation
+		const refType = "escrow_auto_release"
+		// referenceID = proof.ID (idempotence 1 crédit / preuve)
+		if err := s.platformRevenueRepo.CreditRevenue(ctx, escrow.CommissionCents, refType, proof.ID); err != nil {
+			itemLogger.Error().Err(err).
+				Int64("commission_cents", escrow.CommissionCents).
+				Str("reference_type", refType).
+				Str("reference_id", proof.ID).
+				Msg("Failed to credit platform revenue")
+			// ne bloque pas le crédit marchand
 		} else {
-			itemLogger.Info().Int64("commission_cents", escrow.CommissionCents).Msg("✅ Platform revenue credited (Split)")
+			itemLogger.Info().
+				Int64("commission_cents", escrow.CommissionCents).
+				Msg("✅ Platform revenue credited (Split)")
 		}
+	} else if escrow.CommissionCents > 0 && s.platformRevenueRepo == nil {
+		itemLogger.Warn().Msg("platformRevenueRepo is nil — commission not credited")
 	}
 
 	// 6. Crédit wallet UNIQUEMENT pour les commandes (orders).
