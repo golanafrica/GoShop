@@ -410,6 +410,52 @@ try {
     $script:State.OrderId = $orderId
     Write-Ok "Order $orderId"
 
+        # 04b Assign delivery zone (rural 10j) — zones seedées BF
+    # Préférer une zone existante delay=10 (ex. BF-OUAHIGOUYA)
+    $zoneRow = Invoke-SqlQuery @"
+SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
+FROM delivery_zones
+WHERE is_active = true
+  AND installment_release_delay_days >= 10
+ORDER BY installment_release_delay_days ASC, priority DESC
+LIMIT 1;
+"@
+    if ($zoneRow -and $zoneRow -match '^([^|]+)\|([^|]+)\|(\d+)') {
+        $zoneId   = $Matches[1]
+        $zoneCode = $Matches[2]
+        $zoneDays = $Matches[3]
+        if (Invoke-Sql "UPDATE orders SET delivery_zone_id = '$zoneId'::uuid WHERE id = '$orderId'::uuid;") {
+            Write-Ok "Order zone = $zoneCode (delay=${zoneDays}d) id=$zoneId"
+        }
+        else {
+            Write-Warn "UPDATE orders.delivery_zone_id failed"
+        }
+    }
+    else {
+        # Fallback INSERT si seed vide (rare)
+        $zoneId = Invoke-SqlQuery @"
+INSERT INTO delivery_zones (
+  zone_code, zone_name, country, zone_type,
+  delivery_delay_days, return_delay_days, warranty_response_days,
+  cod_confirmation_delay_days, installment_release_delay_days,
+  is_active, priority, created_at, updated_at
+) VALUES (
+  'E2E-RURAL-10', 'E2E Rural 10j', 'BF', 'rural',
+  10, 14, 7, 7, 10,
+  true, 0, NOW(), NOW()
+)
+ON CONFLICT (zone_code) DO UPDATE SET updated_at = NOW()
+RETURNING id::text;
+"@
+        if ($zoneId) {
+            Invoke-Sql "UPDATE orders SET delivery_zone_id = '$zoneId'::uuid WHERE id = '$orderId'::uuid;" | Out-Null
+            Write-Ok "Order zone = E2E-RURAL-10 (delay=10d) id=$zoneId"
+        }
+        else {
+            Write-Warn "No delivery zone available - order stays NO_ZONE (fallback 3d)"
+        }
+    }
+
     # 05 Init YengaPay
     Write-Step "05/13" "Initiate YengaPay payment (indirect)"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" `
