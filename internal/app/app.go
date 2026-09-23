@@ -59,6 +59,10 @@ import (
 	// 🆕 v3.1.0 : Scheduler
 	appscheduler "Goshop/application/scheduler"
 
+	// 🆕 v6.0.0 : Reporting Usecases & Handlers
+	reportusecase "Goshop/application/usecase/platform_revenue_report"
+	reporthandling "Goshop/interfaces/handler/report_handler"
+
 	// 🆕 v4.3.2 : Configuration Email
 	"Goshop/config"
 
@@ -659,6 +663,15 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 	a.Logger.Info().Msg("✅ v4.7.0 Delivery proof usecases initialized (shipping + delivery + tontine)")
+
+	// ============ 🆕 v6.0.0 : REPORTING USECASES & HANDLERS ============
+	merchantStatementUC := reportusecase.NewMerchantWalletStatementUsecase(walletRepo, walletTxnRepo)
+	platformRevenueReportUC := reportusecase.NewPlatformRevenueReportUsecase(platformRevenueRepo)
+
+	merchantReportHandler := reporthandling.NewMerchantReportHandler(merchantStatementUC)
+	adminFinanceHandler := reporthandling.NewAdminFinanceHandler(platformRevenueReportUC)
+
+	a.Logger.Info().Msg("✅ v6.0.0 Reporting handlers initialized")
 
 	// ============ 🆕 v2.9.0 : TONTINE USECASES ============
 	createTontineGroupUC := tontineusecase.NewCreateTontineGroupUsecase(
@@ -1374,6 +1387,25 @@ func (a *App) setupRouter() {
 			TTL:             24 * time.Hour,
 		}))
 
+		// ============ 🆕 v6.0.0 : REPORTING ROUTES ============
+		r.Route("/reports", func(r chi.Router) {
+			// 1. Routes Admin (nécessite rôle super_admin ou admin)
+			r.Group(func(r chi.Router) {
+				r.Use(middl.RequireRoles("super_admin", "admin"))
+				r.Get("/platform/balance", adminFinanceHandler.GetBalance)
+				r.Get("/platform/commissions", adminFinanceHandler.ListCommissions)
+				r.Get("/platform/commissions/export", adminFinanceHandler.ExportCommissionsCSV)
+			})
+
+			// 2. Routes Marchand (nécessite contexte tenant et accès boutique)
+			r.Group(func(r chi.Router) {
+				r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
+				r.Use(middl.RequireShopAccess(shopCollabRepo))
+				r.Get("/merchant/statement", merchantReportHandler.GetStatement)
+				r.Get("/merchant/statement/export", merchantReportHandler.ExportStatementCSV)
+			})
+		})
+
 		r.Route("/shops", func(r chi.Router) {
 			r.Post("/", middl.ErrorHandler(shopHandler.CreateShop))
 			r.Get("/", middl.ErrorHandler(shopHandler.ListShops))
@@ -1476,6 +1508,7 @@ func (a *App) setupRouter() {
 				r.Post("/delivery", deliveryProofHandler.SubmitDeliveryProof)
 				r.Post("/tontine-delivery", deliveryProofHandler.SubmitTontineDeliveryProof)
 			})
+
 		})
 
 		r.Group(func(r chi.Router) {
