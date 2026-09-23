@@ -408,15 +408,29 @@ func (p *DeliveryProof) DisputeDeadline() *time.Time {
 	return &deadline
 }
 
-// AutoReleaseEligible vérifie si le déblocage auto est possible
+// AutoReleaseEligible garde le comportement par défaut (fallback à 3 jours)
 func (p *DeliveryProof) AutoReleaseEligible() bool {
+	return p.AutoReleaseEligibleAfterDays(AutoReleaseDays)
+}
+
+// AutoReleaseEligibleAfterDays permet de passer le délai spécifique de la zone
+func (p *DeliveryProof) AutoReleaseEligibleAfterDays(days int) bool {
 	if p.EscrowStatus != EscrowDelivered {
 		return false
 	}
 	if p.DeliveryDate == nil {
 		return false
 	}
-	autoReleaseDate := p.DeliveryDate.AddDate(0, 0, AutoReleaseDays)
+
+	// Sécurité : bornes min/max
+	if days < 1 {
+		days = AutoReleaseDays
+	}
+	if days > 30 {
+		days = 30
+	}
+
+	autoReleaseDate := p.DeliveryDate.AddDate(0, 0, days)
 	return time.Now().UTC().After(autoReleaseDate)
 }
 

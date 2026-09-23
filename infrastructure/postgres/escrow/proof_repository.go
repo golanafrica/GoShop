@@ -595,27 +595,47 @@ func (r *DeliveryProofRepositoryInfrastructure) FindDisputedByShopID(ctx context
 	return r.scanProofs(ctx, query, shopID)
 }
 
-// FindAutoReleaseEligible retourne les preuves éligibles au déblocage automatique
+// /////
+// FindAutoReleaseEligible récupère les preuves éligibles en fonction du délai de la zone de livraison.
+// Si aucune zone n'est définie, fallback sur 3 jours (AutoReleaseDays).
 func (r *DeliveryProofRepositoryInfrastructure) FindAutoReleaseEligible(ctx context.Context) ([]*entity.DeliveryProof, error) {
 	query := `
-		SELECT id, order_id, credit_contract_id, tontine_voucher_id,
-		       shipping_proof_url, shipping_tracking_number, shipping_carrier,
-		       shipping_date, shipping_notes,
-		       delivery_proof_url, delivery_signature, delivery_date,
-		       delivery_notes, delivery_rating,
-		       escrow_status,
-		       dispute_raised_at, dispute_reason, dispute_resolved_at,
-		       created_at, updated_at
-		FROM delivery_proofs
-		WHERE escrow_status = 'delivered'
-		  AND delivery_date IS NOT NULL
-		  AND delivery_date < NOW() - INTERVAL '3 days'
-		  AND (dispute_raised_at IS NULL OR dispute_resolved_at IS NOT NULL)
-		ORDER BY delivery_date ASC
+		SELECT
+			dp.id, dp.order_id, dp.credit_contract_id, dp.tontine_voucher_id,
+			dp.shipping_proof_url, dp.shipping_tracking_number, dp.shipping_carrier,
+			dp.shipping_date, dp.shipping_notes,
+			dp.delivery_proof_url, dp.delivery_signature, dp.delivery_date,
+			dp.delivery_notes, dp.delivery_rating,
+			dp.escrow_status,
+			dp.dispute_raised_at, dp.dispute_reason, dp.dispute_resolved_at,
+			dp.created_at, dp.updated_at
+		FROM delivery_proofs dp
+		LEFT JOIN orders o 
+			ON o.id = dp.order_id
+		LEFT JOIN delivery_zones dz_o 
+			ON dz_o.id = o.delivery_zone_id AND dz_o.is_active = true
+		LEFT JOIN tontine_vouchers tv 
+			ON tv.id = dp.tontine_voucher_id
+		LEFT JOIN tontine_groups tg 
+			ON tg.id = tv.group_id
+		LEFT JOIN delivery_zones dz_t 
+			ON dz_t.id = tg.delivery_zone_id AND dz_t.is_active = true
+		WHERE dp.escrow_status = 'delivered'
+		  AND dp.delivery_date IS NOT NULL
+		  AND dp.delivery_date + (
+		        COALESCE(
+		            dz_o.installment_release_delay_days,
+		            dz_t.installment_release_delay_days,
+		            3
+		        ) * INTERVAL '1 day'
+		      ) < NOW()
+		  AND (dp.dispute_raised_at IS NULL OR dp.dispute_resolved_at IS NOT NULL)
+		ORDER BY dp.delivery_date ASC
 	`
-
 	return r.scanProofs(ctx, query)
 }
+
+//
 
 // FindDisputeDeadlineExpired retourne les preuves dont le délai de litige est expiré
 func (r *DeliveryProofRepositoryInfrastructure) FindDisputeDeadlineExpired(ctx context.Context) ([]*entity.DeliveryProof, error) {
@@ -996,34 +1016,44 @@ func (r *DeliveryProofRepositoryInfrastructure) ForceDeliveryDate(ctx context.Co
 
 // FindAutoReleaseEligibleForUpdate retourne les preuves éligibles avec verrouillage pessimiste
 // Utilise FOR UPDATE SKIP LOCKED pour éviter les race conditions entre instances du scheduler
+// FindAutoReleaseEligibleForUpdate retourne les preuves éligibles avec verrouillage pessimiste.
+// Utilise le délai de la zone de livraison (fallback 3 jours).
 func (r *DeliveryProofRepositoryInfrastructure) FindAutoReleaseEligibleForUpdate(ctx context.Context) ([]*entity.DeliveryProof, error) {
 	query := `
 		SELECT 
 			dp.id, dp.order_id, dp.tontine_voucher_id, dp.credit_contract_id,
-			dp.reference_type, dp.reference_id,
-			dp.proof_type, dp.proof_url, dp.tracking_number, dp.carrier,
-			dp.escrow_status, dp.shipping_date, dp.delivery_date,
-			dp.submitted_by, dp.created_at, dp.updated_at
+			dp.shipping_proof_url, dp.shipping_tracking_number, dp.shipping_carrier,
+			dp.shipping_date, dp.shipping_notes,
+			dp.delivery_proof_url, dp.delivery_signature, dp.delivery_date,
+			dp.delivery_notes, dp.delivery_rating,
+			dp.escrow_status,
+			dp.dispute_raised_at, dp.dispute_reason, dp.dispute_resolved_at,
+			dp.created_at, dp.updated_at
 		FROM delivery_proofs dp
-		JOIN escrow_accounts ea ON (
-			(dp.order_id IS NOT NULL AND ea.order_id = dp.order_id) OR
-			(dp.tontine_voucher_id IS NOT NULL AND ea.tontine_group_id = (
-				SELECT tg.id FROM tontine_groups tg 
-				JOIN tontine_vouchers tv ON tv.group_id = tg.id 
-				WHERE tv.id = dp.tontine_voucher_id
-			))
-		)
+		LEFT JOIN orders o 
+			ON o.id = dp.order_id
+		LEFT JOIN delivery_zones dz_o 
+			ON dz_o.id = o.delivery_zone_id AND dz_o.is_active = true
+		LEFT JOIN tontine_vouchers tv 
+			ON tv.id = dp.tontine_voucher_id
+		LEFT JOIN tontine_groups tg 
+			ON tg.id = tv.group_id
+		LEFT JOIN delivery_zones dz_t 
+			ON dz_t.id = tg.delivery_zone_id AND dz_t.is_active = true
 		WHERE dp.escrow_status = 'delivered'
-		  AND dp.delivery_date <= NOW() - INTERVAL '3 days'
-		  AND ea.status = 'funds_held'
-		  AND NOT EXISTS (
-			  SELECT 1 FROM disputes d 
-			  WHERE d.order_id = dp.order_id 
-			  AND d.status NOT IN ('resolved_customer', 'resolved_merchant', 'closed')
-		  )
+		  AND dp.delivery_date IS NOT NULL
+		  AND dp.delivery_date + (
+		        COALESCE(
+		            dz_o.installment_release_delay_days,
+		            dz_t.installment_release_delay_days,
+		            3
+		        ) * INTERVAL '1 day'
+		      ) < NOW()
+		  AND (dp.dispute_raised_at IS NULL OR dp.dispute_resolved_at IS NOT NULL)
 		FOR UPDATE SKIP LOCKED
 		LIMIT 100
 	`
+	// Note: J'ai harmonisé les colonnes SELECT avec scanProofs pour éviter les erreurs de scan
 	return r.scanProofs(ctx, query)
 }
 
