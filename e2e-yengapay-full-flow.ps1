@@ -5,7 +5,8 @@
 #   - Checkout navigateur Yenga (sandbox)
 #   - Poll statut success
 #   - Shipping + delivery (escrow RESTE funds_held)
-#   - Backdate delivery_date (>= 3 jours) puis trigger admin auto-release
+#   - Backdate delivery_date (10 jours) pour couvrir delai zone rurale
+#     puis trigger admin auto-release
 #   - PAS de SQL force status=released
 #   - Verifie platform_revenue (proof_id) + wallet marchand
 #   - Withdrawal + payout webhook
@@ -33,6 +34,8 @@ $RealPayIn         = $true
 $PayInTimeoutSec   = 300
 $PayInPollSec      = 5
 $SchedulerWaitSec  = 10
+# Delai backdate: >= delai max zone rurale seedee (10j). International = 14-30j.
+$EligibilityBackdateDays = 10
 
 $Timestamp         = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail     = "merchant.e2e.$Timestamp@goshop.com"
@@ -42,7 +45,7 @@ $ShopSlug          = "e2e-shop-$Timestamp"
 $CustomerPhone     = "+22670000000"
 $ProductPriceCents = 100000   # 1000 XOF
 $WithdrawCents     = 50000    # 500 XOF
-$feesFcfa          = 25       # aligné sandbox Yenga ~2.5%
+$feesFcfa          = 25       # aligne sandbox Yenga ~2.5%
 
 $script:Passed = 0
 $script:Failed = 0
@@ -310,8 +313,8 @@ function Send-SimulatedPaymentWebhook {
 # ============================================================
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Magenta
-Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (no SQL force) + Withdrawal" -ForegroundColor Magenta
-Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn" -ForegroundColor DarkGray
+Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (zone delay) + Withdrawal" -ForegroundColor Magenta
+Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn | BackdateDays=$EligibilityBackdateDays" -ForegroundColor DarkGray
 Write-Host "================================================================" -ForegroundColor Magenta
 
 try {
@@ -526,23 +529,25 @@ try {
     $escBefore = Invoke-SqlQuery "SELECT status || '|' || COALESCE(total_amount_cents::text,'') || '|' || COALESCE(commission_cents::text,'') FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
     Write-Host "  Escrow before release: $escBefore" -ForegroundColor DarkGray
 
-    # 09 Auto-release scheduler
+    # 09 Auto-release scheduler (zone-aware)
     Write-Step "09/13" "Escrow auto-release via scheduler (real path)"
 
+    # Simuler une livraison il y a N jours (10 = couvre delai max zone rurale seedee)
+    # NE PAS forcer status=released : le scheduler ClaimRelease doit le faire
     $sqlElig = @"
 UPDATE delivery_proofs
-SET delivery_date = NOW() - INTERVAL '4 days',
-    updated_at    = NOW() - INTERVAL '4 days'
+SET delivery_date = NOW() - INTERVAL '$EligibilityBackdateDays days',
+    updated_at    = NOW() - INTERVAL '$EligibilityBackdateDays days'
 WHERE order_id = '$orderId'::uuid
   AND escrow_status = 'delivered';
 
 UPDATE escrow_accounts
-SET updated_at = NOW() - INTERVAL '4 days'
+SET updated_at = NOW() - INTERVAL '$EligibilityBackdateDays days'
 WHERE order_id = '$orderId'::uuid
   AND status = 'funds_held';
 "@
     if (Invoke-Sql $sqlElig) {
-        Write-Ok "Eligibility: delivery_date backdated 4 days (status NOT forced released)"
+        Write-Ok "Eligibility: delivery_date backdated $EligibilityBackdateDays days (status NOT forced released)"
     }
     else {
         Write-Warn "Eligibility SQL failed - scheduler may skip"
@@ -550,6 +555,16 @@ WHERE order_id = '$orderId'::uuid
 
     $proofSnap = Invoke-SqlQuery "SELECT COALESCE(escrow_status,'') || '|' || COALESCE(delivery_date::text,'') FROM delivery_proofs WHERE order_id = '$orderId'::uuid LIMIT 1;"
     Write-Host "  Proof after backdate: $proofSnap" -ForegroundColor DarkGray
+
+    # Zone eventuelle liee a la commande (info diagnostic)
+    $zoneInfo = Invoke-SqlQuery @"
+SELECT COALESCE(dz.zone_code, 'NO_ZONE') || '|' || COALESCE(dz.installment_release_delay_days::text, '3')
+FROM orders o
+LEFT JOIN delivery_zones dz ON dz.id = o.delivery_zone_id
+WHERE o.id = '$orderId'::uuid
+LIMIT 1;
+"@
+    Write-Host "  Order zone|delayDays: $zoneInfo (fallback 3 si NO_ZONE)" -ForegroundColor DarkGray
 
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/login" -Body @{
         email = $AdminEmail; password = $AdminPassword
@@ -572,7 +587,6 @@ WHERE order_id = '$orderId'::uuid
     Write-Host "  Escrow after: $escAfter" -ForegroundColor White
 
     $platBal = Invoke-SqlQuery "SELECT COALESCE(balance_cents,0)::text FROM platform_revenue_accounts LIMIT 1;"
-    # CreditRevenue stocke reference_id = proof_id (pas escrow_id)
     $platTxn = Invoke-SqlQuery @"
 SELECT COUNT(*)::text
 FROM platform_revenue_transactions prt
@@ -589,7 +603,7 @@ WHERE dp.order_id = '$orderId'::uuid
         Write-Ok "Escrow status = released (scheduler path)"
     }
     else {
-        Write-Warn "Escrow not released - check logs: ClaimRelease / eligible proofs"
+        Write-Warn "Escrow not released - check logs: ClaimRelease / eligible proofs / zone delay"
         Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release'" -ForegroundColor DarkGray
     }
 
@@ -681,6 +695,7 @@ WHERE dp.order_id = '$orderId'::uuid
     Write-Host "  Escrow   : $escAfter" -ForegroundColor White
     Write-Host "  Platform : balance=$platBal cents | txns=$platTxn" -ForegroundColor White
     Write-Host "  Wallet   : $walletBal cents" -ForegroundColor White
+    Write-Host "  Zone     : $zoneInfo" -ForegroundColor White
     Write-Host "  Shop     : $shopId | Order=$orderId | Payment=$paymentId" -ForegroundColor DarkGray
 
     Write-Host ""
@@ -691,6 +706,7 @@ WHERE dp.order_id = '$orderId'::uuid
     Write-Host ""
     Write-Host "  Si platform=0 ou escrow pas released:" -ForegroundColor Yellow
     Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release|CreditRevenue'" -ForegroundColor DarkGray
+    Write-Host "  Zones internationales (14-30j): augmente `$EligibilityBackdateDays" -ForegroundColor DarkGray
 }
 catch {
     Write-Host ""
