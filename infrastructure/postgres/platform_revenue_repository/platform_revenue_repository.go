@@ -18,14 +18,7 @@ func NewPlatformRevenueRepositoryPostgres(db *sql.DB) repository.PlatformRevenue
 	return &PlatformRevenueRepositoryPostgres{db: db}
 }
 
-// CreditRevenue crédite le solde plateforme + ligne d'audit, en une seule TX.
-// Schéma réel:
-//
-//	platform_revenue_accounts(id, balance_cents, total_collected_cents, updated_at)
-//	platform_revenue_transactions(id, transaction_type, amount_cents, reference_type, reference_id, description, created_at)
-//
-// referenceType : type métier (ex: "escrow_auto_release")
-// referenceID   : UUID (ex: proof_id)
+// CreditRevenue crédite le solde plateforme + ligne d'audit, en une seule transaction atomique.
 func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 	ctx context.Context,
 	amountCents int64,
@@ -33,7 +26,7 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 	referenceID string,
 ) error {
 	if amountCents <= 0 {
-		return nil
+		return nil // No-op pour montant nul ou négatif
 	}
 	if referenceType == "" {
 		referenceType = "escrow_auto_release"
@@ -41,18 +34,19 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 	if referenceID == "" {
 		return fmt.Errorf("referenceID is required for platform revenue credit")
 	}
-	// reference_id est uuid en base
+	// Validation stricte de l'UUID pour éviter les erreurs SQL
 	if _, err := uuid.Parse(referenceID); err != nil {
 		return fmt.Errorf("referenceID must be a valid UUID: %w", err)
 	}
 
+	// 1. Démarrer la transaction
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = tx.Rollback() }() // Rollback de sécurité
 
-	// Compte global (pas de created_at sur cette table)
+	// 2. Verrouiller le compte de revenus pour éviter les race conditions
 	var accountID string
 	err = tx.QueryRowContext(ctx, `
 		SELECT id::text
@@ -62,6 +56,7 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 		FOR UPDATE
 	`).Scan(&accountID)
 
+	// Fallback : si aucun compte n'existe (ne devrait pas arriver grâce à la migration, mais sécurité maximale)
 	if err == sql.ErrNoRows {
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO platform_revenue_accounts (balance_cents, total_collected_cents, updated_at)
@@ -75,6 +70,7 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 		return fmt.Errorf("lock platform_revenue_accounts: %w", err)
 	}
 
+	// 3. Insérer la ligne d'audit (Audit Trail)
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO platform_revenue_transactions (
 			transaction_type, amount_cents, reference_type, reference_id, description, created_at
@@ -87,6 +83,7 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 		return fmt.Errorf("insert platform_revenue_transactions: %w", err)
 	}
 
+	// 4. Mettre à jour le solde du compte
 	res, err := tx.ExecContext(ctx, `
 		UPDATE platform_revenue_accounts
 		SET balance_cents = balance_cents + $1,
@@ -97,13 +94,16 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 	if err != nil {
 		return fmt.Errorf("update platform_revenue_accounts: %w", err)
 	}
+
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("platform_revenue_accounts update matched 0 rows (id=%s)", accountID)
 	}
 
+	// 5. Commit de la transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit platform revenue: %w", err)
 	}
+
 	return nil
 }
