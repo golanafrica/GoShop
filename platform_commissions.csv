@@ -1,6 +1,0 @@
-﻿id,transaction_type,amount_cents,amount_xof,reference_type,reference_id,description,created_at
-9b6c912b-6b7b-497c-837c-8612b3be41f9,commission_collected,2500,25.00,escrow_auto_release,e30aab12-6d71-490a-afdc-51aede8a4b10,Commission collected from escrow auto-release,2026-09-23T09:40:18Z
-575351a8-f895-4d21-a452-2b43935e67a6,commission_collected,2500,25.00,escrow_auto_release,fd589ffc-018c-4caf-9015-f52a930a7387,Commission collected from escrow auto-release,2026-09-23T09:40:18Z
-416d7276-d28e-4093-8c45-9f3211a3d8aa,commission_collected,2500,25.00,escrow_auto_release,3e63316f-6864-4e90-b9f8-a122512725a6,Commission collected from escrow auto-release,2026-09-22T22:11:58Z
-d5b00493-9cc6-44fe-8295-1d6489018777,commission_collected,2500,25.00,escrow_auto_release,a2ec977d-d54e-439c-8106-631649f429df,Commission collected from escrow auto-release,2026-09-22T13:29:22Z
-1810defc-7863-4c11-adca-7e0a0dbee283,commission_collected,2500,25.00,escrow_auto_release,8b2f363a-55cb-4398-962b-a2c82513fb10,Commission collected from escrow auto-release,2026-09-22T12:54:38Z

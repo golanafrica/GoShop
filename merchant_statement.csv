@@ -1,3 +1,0 @@
-﻿id,shop_id,transaction_type,amount_cents,amount_xof,balance_after_cents,status,reference_type,reference_id,description,created_at
-1da1d26d-6756-487d-97d9-a05678544041,b16c17cd-3449-4556-a0c2-ce2d5db8139f,payout,-50000,-500.00,45000,completed,,,,2026-09-22T22:12:10Z
-2a44257f-de19-4659-93bc-939d9500528e,b16c17cd-3449-4556-a0c2-ce2d5db8139f,sale_credit,95000,950.00,95000,completed,escrow_auto_release,3e63316f-6864-4e90-b9f8-a122512725a6,"Auto-release after 3 days (Proof: 3e63316f-6864-4e90-b9f8-a122512725a6, Escrow: 6e0883cc-70e4-4a59-a6ac-47bc9d311e82)",2026-09-22T22:11:59Z
