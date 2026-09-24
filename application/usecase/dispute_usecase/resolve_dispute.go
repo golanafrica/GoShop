@@ -35,6 +35,9 @@ var (
 //  - ClaimRelease atomique disputed → released (merchant_wins)
 //  - Pré-check FindByReferenceIDAdmin(dispute_resolution, disputeID)
 //  - Unique index uq_wallet_txn_ref_completed en filet
+// Clawback post-release (customer_wins + escrow released) :
+//  - ApplyClawback sur le net marchand (pas de freeze)
+//  - Ledger type clawback, ref dispute_clawback + disputeID
 // ============================================================
 
 type ResolveDisputeUsecase struct {
@@ -98,8 +101,17 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		return nil, fmt.Errorf("escrow not found for dispute order: %w", err)
 	}
 
-	if escrow.Status != entity.EscrowAccountDisputed {
+	// Litige classique : escrow disputed.
+	// Post-release : escrow released → customer_wins + clawback wallet uniquement.
+	escrowAlreadyReleased := escrow.Status == entity.EscrowAccountFullyReleased
+	if escrow.Status != entity.EscrowAccountDisputed && !escrowAlreadyReleased {
 		return nil, fmt.Errorf("%w: status is %s", ErrEscrowNotDisputed, escrow.Status)
+	}
+	if escrowAlreadyReleased && req.Resolution != "customer_wins" {
+		return nil, fmt.Errorf(
+			"escrow already released: only customer_wins (clawback) is allowed, got %s",
+			req.Resolution,
+		)
 	}
 
 	tx, err := uc.txManager.BeginTx(ctx)
@@ -211,7 +223,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("payment provider not found: %w", err)
 		}
 
-		// Client = net escrow (brut - frais Yenga). Frais PSP non rembourses.
+		// Client = net escrow (brut - frais Yenga). Frais PSP non remboursés.
 		refundAmount := escrow.TotalAmountCents
 		if refundAmount <= 0 {
 			refundAmount = successPayment.AmountCents - successPayment.ProviderFeesCents
@@ -221,7 +233,6 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 		}
 		refundedAmount = refundAmount
 
-		// Meme canal que le pay-in : telephone + operateur issus du paiement reel
 		customerPhone, operator, sourceHint := resolveRefundDestination(successPayment)
 
 		logger.Info().
@@ -243,13 +254,88 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			return nil, fmt.Errorf("failed to process refund with provider: %w", err)
 		}
 
-		if err := escrow.ResolveDispute(false); err != nil {
-			return nil, fmt.Errorf("failed to resolve escrow for customer: %w", err)
-		}
-		if err := escrowRepoTx.Update(ctx, escrow); err != nil {
-			return nil, fmt.Errorf("failed to update escrow to refunded: %w", err)
-		}
+		shopIDStr := dispute.ShopID.String()
+		merchantAmount := escrow.GetMerchantAmount()
 
+		switch escrow.Status {
+		case entity.EscrowAccountDisputed:
+			// Fonds encore en séquestre → refund escrow classique
+			if err := escrow.ResolveDispute(false); err != nil {
+				return nil, fmt.Errorf("failed to resolve escrow for customer: %w", err)
+			}
+			if err := escrowRepoTx.Update(ctx, escrow); err != nil {
+				return nil, fmt.Errorf("failed to update escrow to refunded: %w", err)
+			}
+
+		case entity.EscrowAccountFullyReleased:
+			// Post-release : escrow déjà libéré → marquer refunded + clawback wallet
+			now := time.Now().UTC()
+			escrow.Status = entity.EscrowAccountRefunded
+			escrow.ReleasedAmountCents = 0
+			escrow.FundsReleasedAt = &now
+			escrow.UpdatedAt = now
+			if err := escrowRepoTx.Update(ctx, escrow); err != nil {
+				return nil, fmt.Errorf("failed to mark escrow refunded after release: %w", err)
+			}
+
+			clawRefType := "dispute_clawback"
+			existingClaw, findErr := walletTxnRepoTx.FindByReferenceIDAdmin(ctx, clawRefType, disputeIDStr)
+			if findErr == nil && existingClaw != nil && existingClaw.Status == entity.WalletTxCompleted {
+				logger.Info().
+					Str("dispute_id", disputeIDStr).
+					Msg("⏭️ Clawback already applied for this dispute — skip")
+			} else if merchantAmount > 0 {
+				wallet, wErr := walletRepoTx.FindByShopIDForUpdateAdmin(ctx, shopIDStr)
+				if wErr != nil {
+					return nil, fmt.Errorf("failed to find merchant wallet for clawback: %w", wErr)
+				}
+
+				if err := wallet.ApplyClawback(merchantAmount); err != nil {
+					return nil, fmt.Errorf("failed to apply clawback: %w", err)
+				}
+				if err := walletRepoTx.UpdateAdmin(ctx, wallet); err != nil {
+					return nil, fmt.Errorf("failed to update wallet after clawback: %w", err)
+				}
+
+				desc := fmt.Sprintf(
+					"Clawback litige customer_wins post-release (Order: %s, dette: %d cents)",
+					orderIDStr, wallet.GetDebt(),
+				)
+				clawAmount := -merchantAmount
+				txn := &entity.WalletTransaction{
+					ID:                uuid.New().String(),
+					ShopID:            shopIDStr,
+					TransactionType:   entity.WalletTxClawback,
+					AmountCents:       clawAmount,
+					BalanceAfterCents: wallet.BalanceCents,
+					ReferenceType:     &clawRefType,
+					ReferenceID:       &disputeIDStr,
+					Description:       &desc,
+					Status:            entity.WalletTxCompleted,
+					CreatedAt:         time.Now().UTC(),
+				}
+				if err := walletTxnRepoTx.CreateAdmin(ctx, txn); err != nil {
+					msg := strings.ToLower(err.Error())
+					if strings.Contains(msg, "duplicate key") ||
+						strings.Contains(msg, "unique constraint") ||
+						strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+						strings.Contains(msg, "23505") {
+						logger.Info().
+							Str("dispute_id", disputeIDStr).
+							Msg("⏭️ Clawback concurrent — treat as success")
+					} else {
+						return nil, fmt.Errorf("failed to create clawback wallet transaction: %w", err)
+					}
+				}
+
+				logger.Info().
+					Str("shop_id", shopIDStr).
+					Int64("clawback_cents", merchantAmount).
+					Int64("balance_after", wallet.BalanceCents).
+					Int64("debt_cents", wallet.GetDebt()).
+					Msg("✅ Clawback post-release applied (no freeze)")
+			}
+		}
 		logger.Info().
 			Str("order_id", orderIDStr).
 			Str("dispute_id", dispute.ID.String()).
@@ -300,16 +386,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 }
 
 // resolveRefundDestination priorise les infos du pay-in Yenga (webhook / CheckStatus)
-// pour reutiliser le meme telephone et le meme operateur au cash-out.
-//
-// Priorite telephone :
-//  1. payment.CustomerPhone
-//  2. metadata.customer_number / customerNumber / customer_phone
-//
-// Priorite operateur :
-//  1. metadata.payment_source / paymentSource (ex: OrangeMoneyAPI, SankMoneyAPI)
-//  2. metadata.operator / cashout_method
-//  3. defaut vide → le provider Refund applique son fallback (ORANGE_MONEY)
+// pour réutiliser le même téléphone et le même opérateur au cash-out.
 func resolveRefundDestination(p *entity.Payment) (phone string, operator string, sourceHint string) {
 	if p.CustomerPhone != nil && strings.TrimSpace(*p.CustomerPhone) != "" {
 		phone = strings.TrimSpace(*p.CustomerPhone)
@@ -344,10 +421,6 @@ func firstMetaString(meta map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// mapPayInSourceToCashoutOperator convertit les libelles Yenga pay-in vers cashoutMethod.
-// Ex: "OrangeMoneyAPI" / "ORANGE" → "ORANGE"
-//
-//	"SankMoneyAPI" / "SANK" → "SANK"
 func mapPayInSourceToCashoutOperator(src string) string {
 	s := strings.ToUpper(strings.TrimSpace(src))
 	if s == "" {
@@ -368,7 +441,6 @@ func mapPayInSourceToCashoutOperator(src string) string {
 	case strings.Contains(s, "SANK"):
 		return "SANK"
 	default:
-		// deja un code cash-out explicite
 		switch s {
 		case "ORANGE_MONEY", "MOOV_MONEY", "TELECEL", "CORIS_MONEY", "SANK_MONEY":
 			return s
@@ -382,12 +454,10 @@ func normalizeMSISDN(phone string) string {
 	if phone == "" {
 		return ""
 	}
-	// Yenga cash-out attend souvent +226...
 	if strings.HasPrefix(phone, "00") {
 		phone = "+" + phone[2:]
 	}
 	if phone[0] != '+' && len(phone) >= 8 {
-		// BF local 70xxxxxx → +22670xxxxxx
 		if len(phone) == 8 {
 			phone = "+226" + phone
 		} else if !strings.HasPrefix(phone, "226") {

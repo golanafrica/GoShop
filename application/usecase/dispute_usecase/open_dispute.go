@@ -15,10 +15,13 @@ import (
 // ============================================================
 // OPEN DISPUTE USECASE
 // ============================================================
-// Phase 3.2 : ouverture de litige atomique.
-// Create(dispute) + escrow.Dispute() + Update(escrow) dans la même TX.
-// Si un des écritures échoue → rollback complet (pas de litige orphelin
-// ni d'escrow resté funds_held alors qu'un pending dispute existe).
+// Ouverture de litige atomique.
+//
+// Chemins :
+//  1. escrow funds_held  → Create(dispute) + escrow.Dispute() (bloque auto-release)
+//  2. escrow released    → Create(dispute) SEULEMENT (fonds déjà chez le marchand ;
+//                         resolve customer_wins fera refund + clawback)
+//  Autres statuts (refunded, disputed, partial…) → refus
 // ============================================================
 
 type OpenDisputeUsecase struct {
@@ -64,7 +67,6 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
-	// Autoriser litige uniquement sur commandes déjà payées / en livraison
 	validStatuses := map[string]bool{
 		string(entity.OrderStatusConfirmed):      true,
 		string(entity.OrderStatusOutForDelivery): true,
@@ -74,22 +76,30 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 		return nil, fmt.Errorf("cannot open dispute for order status: %s", order.Status)
 	}
 
-	// 2. Escrow doit exister et être funds_held (pas déjà released / refunded / disputed)
+	// 2. Escrow : funds_held (classique) OU released (post-libération → clawback possible)
 	escrow, err := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("escrow not found for this order: %w", err)
 	}
-	if escrow.Status != entity.EscrowAccountFundsHeld {
+
+	switch escrow.Status {
+	case entity.EscrowAccountFundsHeld, entity.EscrowAccountFullyReleased:
+		// OK
+	default:
 		return nil, fmt.Errorf("cannot open dispute: escrow is already %s", escrow.Status)
 	}
 
+	postRelease := escrow.Status == entity.EscrowAccountFullyReleased
+
 	// 3. Pas de litige pending déjà ouvert
 	existingDispute, _ := uc.disputeRepo.FindByOrderID(ctx, orderUUID)
-	if existingDispute != nil && existingDispute.Status == entity.DisputeStatusPending {
+	if existingDispute != nil &&
+		(existingDispute.Status == entity.DisputeStatusPending ||
+			existingDispute.Status == entity.DisputeStatusUnderReview) {
 		return nil, fmt.Errorf("a pending dispute already exists for this order")
 	}
 
-	// 4. Transaction atomique : dispute + escrow disputed
+	// 4. Transaction atomique
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -116,13 +126,16 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 		return nil, fmt.Errorf("failed to create dispute: %w", err)
 	}
 
-	// Machine à états domain : funds_held → disputed (bloque auto-release 3.1)
-	if err := escrow.Dispute(); err != nil {
-		return nil, fmt.Errorf("failed to mark escrow as disputed: %w", err)
+	if !postRelease {
+		// funds_held → disputed (bloque le scheduler auto-release)
+		if err := escrow.Dispute(); err != nil {
+			return nil, fmt.Errorf("failed to mark escrow as disputed: %w", err)
+		}
+		if err := escrowRepoTx.Update(ctx, escrow); err != nil {
+			return nil, fmt.Errorf("failed to update escrow status: %w", err)
+		}
 	}
-	if err := escrowRepoTx.Update(ctx, escrow); err != nil {
-		return nil, fmt.Errorf("failed to update escrow status: %w", err)
-	}
+	// postRelease : on laisse status=released ; resolve customer_wins fera clawback
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit open dispute: %w", err)
@@ -132,8 +145,9 @@ func (uc *OpenDisputeUsecase) Execute(ctx context.Context, req *OpenDisputeReque
 		Str("dispute_id", newDispute.ID.String()).
 		Str("order_id", req.OrderID).
 		Str("escrow_status", string(escrow.Status)).
+		Bool("post_release", postRelease).
 		Str("initiator_role", string(req.InitiatorRole)).
-		Msg("Dispute opened successfully, escrow locked (atomic)")
+		Msg("Dispute opened successfully (atomic)")
 
 	return newDispute, nil
 }
