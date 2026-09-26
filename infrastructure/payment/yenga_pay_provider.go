@@ -631,13 +631,13 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) (*PaymentStatus, error) {
 	logger := zerolog.Ctx(ctx)
 
-	url := fmt.Sprintf("%s/groups/%s/payment-intent/project/%s/intent/%s", p.baseURL, p.organizationID, p.projectID, providerRef)
+	url := fmt.Sprintf("%s/groups/%s/payment-intent/project/%s/intent/%s",
+		p.baseURL, p.organizationID, p.projectID, providerRef)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	httpReq.Header.Set("x-api-key", p.apiKey)
 
 	resp, err := p.httpClient.Do(httpReq)
@@ -654,26 +654,22 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		url = fmt.Sprintf("%s/groups/%s/merchant-payment/project/%s/payment/%s", p.baseURL, p.organizationID, p.projectID, providerRef)
-
+		url = fmt.Sprintf("%s/groups/%s/merchant-payment/project/%s/payment/%s",
+			p.baseURL, p.organizationID, p.projectID, providerRef)
 		httpReq, err = http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-
 		httpReq.Header.Set("x-api-key", p.apiKey)
-
 		resp, err = p.httpClient.Do(httpReq)
 		if err != nil {
 			return nil, fmt.Errorf("failed to send request: %w", err)
 		}
 		defer resp.Body.Close()
-
 		respBody, err = io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read response: %w", err)
 		}
-
 		if resp.StatusCode != http.StatusOK {
 			logger.Error().
 				Int("status_code", resp.StatusCode).
@@ -689,7 +685,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	// Debug temporaire : retirer en prod une fois le canal stabilise
 	logger.Info().
 		Str("reference", providerRef).
 		Str("raw_body", string(respBody)).
@@ -704,14 +699,14 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		PaymentStatus       string `json:"paymentStatus"`
 		PaymentAmount       int64  `json:"paymentAmount"`
 		Amount              int64  `json:"amount"`
-		PaymentFees         int64  `json:"paymentFees"` // XOF
+		PaymentFees         int64  `json:"paymentFees"`
 		Currency            string `json:"currency"`
 		PaymentSource       string `json:"paymentSource"`
 		CustomerNumber      string `json:"customerNumber"`
 		Operator            string `json:"operator"`
 		CustomerPhone       string `json:"customerPhone"`
-		SelectedOperator    string `json:"selectedOperator"`    // ex: TELECEL, ORANGE, MOOV, CORISM
-		SelectedCountryCode string `json:"selectedCountryCode"` // ex: BF
+		SelectedOperator    string `json:"selectedOperator"`
+		SelectedCountryCode string `json:"selectedCountryCode"`
 		SelectedFees        int64  `json:"selectedFees"`
 		SelectedNetAmount   int64  `json:"selectedNetAmount"`
 		SelectedGrossAmount int64  `json:"selectedGrossAmount"`
@@ -728,7 +723,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 	if statusStr == "" {
 		statusStr = yengaResp.PaymentStatus
 	}
-
 	status := mapYengaStatus(statusStr)
 
 	amount := yengaResp.PaymentAmount
@@ -743,7 +737,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		"currency": yengaResp.Currency,
 	}
 
-	// Frais PSP (XOF) — paymentFees ou selectedFees
 	feesXOF := yengaResp.PaymentFees
 	if feesXOF == 0 {
 		feesXOF = yengaResp.SelectedFees
@@ -752,8 +745,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		meta["payment_fees"] = float64(feesXOF)
 	}
 
-	// Canal pay-in : paymentSource est souvent null sur intent apres checkout
-	// → fallback selectedOperator (TELECEL, ORANGE, MOOV, CORISM, SANKM, ...)
 	src := strings.TrimSpace(yengaResp.PaymentSource)
 	opRaw := strings.TrimSpace(yengaResp.SelectedOperator)
 	if opRaw == "" {
@@ -799,11 +790,79 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		meta["selected_country_code"] = cc
 	}
 
-	// MSISDN : souvent null sur payment-intent meme en DONE (webhook / merchant-payment requis)
 	custNum := strings.TrimSpace(yengaResp.CustomerNumber)
 	if custNum == "" {
 		custNum = strings.TrimSpace(yengaResp.CustomerPhone)
 	}
+
+	// Intent 200 DONE mais MSISDN souvent absent → 2e appel merchant-payment
+	isSuccess := status == entity.PaymentStatusSuccess ||
+		strings.EqualFold(statusStr, "DONE") ||
+		strings.EqualFold(statusStr, "SUCCESS") ||
+		strings.EqualFold(statusStr, "COMPLETED") ||
+		strings.EqualFold(statusStr, "paid")
+
+	if custNum == "" && isSuccess {
+		payURL := fmt.Sprintf("%s/groups/%s/merchant-payment/project/%s/payment/%s",
+			p.baseURL, p.organizationID, p.projectID, providerRef)
+
+		httpReq2, err2 := http.NewRequestWithContext(ctx, "GET", payURL, nil)
+		if err2 == nil {
+			httpReq2.Header.Set("x-api-key", p.apiKey)
+			if resp2, err2 := p.httpClient.Do(httpReq2); err2 == nil {
+				body2, readErr := io.ReadAll(resp2.Body)
+				_ = resp2.Body.Close()
+				if readErr == nil && resp2.StatusCode == http.StatusOK {
+					logger.Info().
+						Str("reference", providerRef).
+						Str("raw_body", string(body2)).
+						Msg("Yenga merchant-payment raw (MSISDN fallback)")
+
+					var payDetail struct {
+						CustomerNumber   string `json:"customerNumber"`
+						CustomerPhone    string `json:"customerPhone"`
+						PaymentSource    string `json:"paymentSource"`
+						Operator         string `json:"operator"`
+						SelectedOperator string `json:"selectedOperator"`
+						PaymentFees      int64  `json:"paymentFees"`
+					}
+					if json.Unmarshal(body2, &payDetail) == nil {
+						custNum = strings.TrimSpace(payDetail.CustomerNumber)
+						if custNum == "" {
+							custNum = strings.TrimSpace(payDetail.CustomerPhone)
+						}
+						if src == "" && strings.TrimSpace(payDetail.PaymentSource) != "" {
+							src = strings.TrimSpace(payDetail.PaymentSource)
+							meta["payment_source"] = src
+						}
+						if opUpper == "" {
+							op2 := strings.TrimSpace(payDetail.SelectedOperator)
+							if op2 == "" {
+								op2 = strings.TrimSpace(payDetail.Operator)
+							}
+							if op2 != "" {
+								opUpper = strings.ToUpper(op2)
+								meta["operator"] = opUpper
+							}
+						}
+						if feesXOF == 0 && payDetail.PaymentFees > 0 {
+							feesXOF = payDetail.PaymentFees
+							meta["payment_fees"] = float64(feesXOF)
+						}
+						logger.Info().
+							Str("customer_number", custNum).
+							Str("payment_source", src).
+							Msg("MSISDN enriched from merchant-payment API")
+					}
+				} else if resp2 != nil {
+					logger.Debug().
+						Int("status_code", resp2.StatusCode).
+						Msg("merchant-payment fallback non-OK (ignored)")
+				}
+			}
+		}
+	}
+
 	if custNum != "" {
 		meta["customer_number"] = custNum
 	}

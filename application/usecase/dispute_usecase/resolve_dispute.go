@@ -387,24 +387,66 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 
 // resolveRefundDestination priorise les infos du pay-in Yenga (webhook / CheckStatus)
 // pour réutiliser le même téléphone et le même opérateur au cash-out.
+// resolveRefundDestination priorise le vrai MSISDN Yenga (metadata) sur le seed E2E.
+// Ordre :
+//  1. metadata.customer_number (CheckStatus / webhook)
+//  2. CustomerPhone s'il n'est PAS un seed
+//  3. sinon vide → refund refusé en amont
 func resolveRefundDestination(p *entity.Payment) (phone string, operator string, sourceHint string) {
-	if p.CustomerPhone != nil && strings.TrimSpace(*p.CustomerPhone) != "" {
-		phone = strings.TrimSpace(*p.CustomerPhone)
-	}
-
 	if p.Metadata != nil {
-		if phone == "" {
-			phone = firstMetaString(p.Metadata, "customer_number", "customerNumber", "customer_phone")
+		phone = firstMetaString(p.Metadata, "customer_number", "customerNumber", "customer_phone", "customerPhone")
+		if isSeedPhoneLocal(phone) {
+			phone = ""
 		}
+
 		sourceHint = firstMetaString(p.Metadata, "payment_source", "paymentSource", "payment_source_raw")
 		operator = mapPayInSourceToCashoutOperator(sourceHint)
 		if operator == "" {
-			operator = mapPayInSourceToCashoutOperator(firstMetaString(p.Metadata, "operator", "cashout_method", "cashoutMethod"))
+			operator = mapPayInSourceToCashoutOperator(
+				firstMetaString(p.Metadata, "operator", "cashout_method", "cashoutMethod"),
+			)
+		}
+	}
+
+	if phone == "" && p.CustomerPhone != nil {
+		cand := strings.TrimSpace(*p.CustomerPhone)
+		if cand != "" && !isSeedPhoneLocal(cand) {
+			phone = cand
 		}
 	}
 
 	phone = normalizeMSISDN(phone)
 	return phone, operator, sourceHint
+}
+
+func isSeedPhoneLocal(phone string) bool {
+	d := digitsOnlyLocal(phone)
+	if d == "" {
+		return true
+	}
+	seeds := []string{
+		"70000000",
+		"70123456",
+		"70707070",
+		"78787878",
+		"76658060",
+	}
+	for _, s := range seeds {
+		if strings.HasSuffix(d, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func digitsOnlyLocal(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func firstMetaString(meta map[string]interface{}, keys ...string) string {
@@ -457,13 +499,20 @@ func normalizeMSISDN(phone string) string {
 	if strings.HasPrefix(phone, "00") {
 		phone = "+" + phone[2:]
 	}
-	if phone[0] != '+' && len(phone) >= 8 {
-		if len(phone) == 8 {
-			phone = "+226" + phone
-		} else if !strings.HasPrefix(phone, "226") {
-			phone = "+" + phone
-		} else {
-			phone = "+" + phone
+	if len(phone) == 0 {
+		return ""
+	}
+	if phone[0] != '+' {
+		d := digitsOnlyLocal(phone)
+		switch {
+		case len(d) == 8:
+			phone = "+226" + d
+		case strings.HasPrefix(d, "226") && len(d) >= 11:
+			phone = "+" + d
+		default:
+			if d != "" {
+				phone = "+" + d
+			}
 		}
 	}
 	return phone

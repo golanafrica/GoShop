@@ -737,6 +737,17 @@ go test ./tests/loadtest/... -v
 | `033_add_user_id_to_customers` | Liaison User ↔ Customer (v4.5.0) |
 | `034_fix_users_role_check` | Correction contrainte rôle user (v4.5.0) |
 
+Migration
+Description
+...
+(Garde les lignes existantes jusqu'à 034)
+051_create_delivery_zones
+Table delivery_zones avec 47+ zones africaines et délais configurables
+052_add_delivery_zone_to_orders
+Ajout de delivery_zone_id aux tables orders, tontine_groups, cod_proofs, installment_plans
+053_add_dispute_index
+Index de performance sur disputes(order_id, status) pour le blocage rapide des releases
+
 ### Tables Principales
 - `users` : Utilisateurs authentifiés (avec 2FA, sessions)
 - `shops` : Boutiques multi-tenant

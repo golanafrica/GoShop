@@ -147,7 +147,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				orderIDStr = strings.TrimPrefix(ref, "ORDER-")
 				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Extracted order_id from reference")
 			} else if _, err := uuid.Parse(ref); err == nil {
-				// ✅ CORRECTION : Si la référence est déjà un UUID valide, on l'utilise directement comme orderID
 				orderIDStr = ref
 				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Reference is a valid UUID, using as order_id")
 			}
@@ -201,6 +200,13 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		}
 
 		if escrowAlreadyCreated {
+			// Même si déjà traité : enrichir MSISDN / canal si le webhook les apporte
+			channelChanged := ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
+			if channelChanged {
+				if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+					logger.Error().Err(updateErr).Msg("Failed to persist pay-in channel on already-processed payment")
+				}
+			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
 			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
 			return nil
@@ -214,6 +220,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			if err := paymentEntity.MarkSuccess(event.ProviderRef); err != nil {
 				return fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, err)
 			}
+			// Vrai MSISDN + payment_source / operator depuis le payload Yenga
+			ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as SUCCESS")
 			needsEscrowCreation = true
 
@@ -248,19 +256,17 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	}
 
 	if needsEscrowCreation && (event.Status == entity.PaymentStatusSuccess || paymentEntity.Status == entity.PaymentStatusSuccess) {
+		// Enrichir le canal avant settlement (cas déjà terminal sans escrow)
+		ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
+
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
 
 		if !isCredit && paymentEntity.OrderID != uuid.Nil {
-			// --------------------------------------------------------
-			// Phase 2 : settlement unique (frais Yenga + commission GoShop)
-			// --------------------------------------------------------
 			shopIDStr := paymentEntity.ShopID.String()
 			rateBps := ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
 
-			// Frais PSP (Yenga) — metadata webhook ; 0 si absent
 			providerFeesCents := int64(0)
 			if fees, ok := event.Metadata["payment_fees"].(float64); ok {
-				// Yenga envoie souvent les frais en unités monétaires (XOF), pas en centimes
 				providerFeesCents = int64(fees * 100)
 			}
 
@@ -270,7 +276,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				rateBps,
 			)
 
-			// Persister sur le payment (traçabilité audit / commission_scheduler)
 			paymentEntity.ProviderFeesCents = settlement.ProviderFeesCents
 			paymentEntity.CommissionRateBps = settlement.CommissionRateBps
 			paymentEntity.CommissionCents = settlement.CommissionCents
@@ -282,9 +287,9 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				escrow := &entity.EscrowAccount{
 					OrderID:             &orderIDStr,
 					SourceType:          entity.EscrowSourceOrder,
-					TotalAmountCents:    settlement.EscrowTotalCents, // brut - frais PSP
+					TotalAmountCents:    settlement.EscrowTotalCents,
 					ReleasedAmountCents: 0,
-					CommissionCents:     settlement.CommissionCents, // commission GoShop
+					CommissionCents:     settlement.CommissionCents,
 					Status:              entity.EscrowAccountFundsHeld,
 					FundsHeldAt:         now,
 					CreatedAt:           now,

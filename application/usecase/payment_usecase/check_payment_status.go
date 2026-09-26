@@ -3,7 +3,6 @@ package paymentusecase
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	paymentdto "Goshop/application/dto/payment_dto"
@@ -42,7 +41,8 @@ func NewCheckPaymentStatusUsecase(
 	}
 }
 
-// Execute vérifie le statut
+// Execute vérifie le statut auprès du provider et enrichit le canal pay-in
+// (payment_source, operator, MSISDN réel) pour les refunds customer_wins.
 func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID string) (*paymentdto.PaymentResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -61,34 +61,52 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
-	if !paymentEntity.IsTerminal() && paymentEntity.ProviderRef != nil {
+	// Poll provider tant que non terminal, OU déjà terminal mais MSISDN encore seed
+	// (RealPayIn : le 1er poll peut passer success sans customerNumber).
+	needsProviderPoll := paymentEntity.ProviderRef != nil &&
+		(!paymentEntity.IsTerminal() || paymentNeedsChannelEnrichment(paymentEntity))
+
+	if needsProviderPoll {
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err == nil {
 			status, err := provider.CheckStatus(ctx, *paymentEntity.ProviderRef)
-			if err == nil && status.Status != paymentEntity.Status {
-				switch status.Status {
-				case entity.PaymentStatusSuccess:
-					if err := paymentEntity.MarkSuccess(*paymentEntity.ProviderRef); err == nil {
-						// Canal pay-in reel (meme moyen au refund)
-						applyPayInChannelFromStatus(paymentEntity, status, logger)
+			if err == nil && status != nil {
+				// Toujours tenter d'appliquer le canal (source + vrai MSISDN)
+				channelChanged := ApplyPayInChannelFromStatus(paymentEntity, status, logger)
 
-						if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, string(entity.OrderStatusConfirmed)); err != nil {
-							logger.Error().Err(err).
-								Str("order_id", paymentEntity.OrderID.String()).
-								Msg("Failed to update order status to confirmed")
-						} else {
-							logger.Info().
-								Str("order_id", paymentEntity.OrderID.String()).
-								Str("payment_id", paymentID).
-								Msg("Order status updated to confirmed after provider success")
+				if status.Status != paymentEntity.Status {
+					switch status.Status {
+					case entity.PaymentStatusSuccess:
+						if err := paymentEntity.MarkSuccess(*paymentEntity.ProviderRef); err == nil {
+							_ = ApplyPayInChannelFromStatus(paymentEntity, status, logger)
+
+							if err := uc.orderRepo.UpdateStatus(ctx, paymentEntity.OrderID, string(entity.OrderStatusConfirmed)); err != nil {
+								logger.Error().Err(err).
+									Str("order_id", paymentEntity.OrderID.String()).
+									Msg("Failed to update order status to confirmed")
+							} else {
+								logger.Info().
+									Str("order_id", paymentEntity.OrderID.String()).
+									Str("payment_id", paymentID).
+									Msg("Order status updated to confirmed after provider success")
+							}
+
+							// Fallback escrow si webhook manquant
+							uc.ensureEscrowOnSuccess(ctx, paymentEntity, status, logger)
 						}
-
-						// Fallback escrow si webhook manquant (meme settlement que process_webhook)
-						uc.ensureEscrowOnSuccess(ctx, paymentEntity, status, logger)
+					case entity.PaymentStatusFailed:
+						if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
+							_ = uc.paymentRepo.Update(ctx, paymentEntity)
+						}
 					}
-				case entity.PaymentStatusFailed:
-					if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
-						_ = uc.paymentRepo.Update(ctx, paymentEntity)
+				} else if channelChanged {
+					// Déjà success : MSISDN / source viennent d'arriver → persister
+					if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
+						logger.Error().Err(err).Msg("Failed to persist pay-in channel on already-success payment")
+					} else {
+						logger.Info().
+							Str("payment_id", paymentID).
+							Msg("Pay-in channel persisted on already-success payment")
 					}
 				}
 			}
@@ -101,49 +119,6 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 		Msg("Payment status checked")
 
 	return mapPaymentToResponse(paymentEntity), nil
-}
-
-// applyPayInChannelFromStatus ecrit payment_source + customer_number sur le payment
-// pour que customer_wins refund utilise le meme canal que le pay-in.
-func applyPayInChannelFromStatus(p *entity.Payment, status *paymentinfra.PaymentStatus, logger *zerolog.Logger) {
-	if status == nil || status.Metadata == nil {
-		return
-	}
-	if p.Metadata == nil {
-		p.Metadata = make(map[string]interface{})
-	}
-
-	if src, ok := status.Metadata["payment_source"].(string); ok && strings.TrimSpace(src) != "" {
-		p.Metadata["payment_source"] = strings.TrimSpace(src)
-		delete(p.Metadata, "seed_fallback")
-	}
-	if op, ok := status.Metadata["operator"].(string); ok && strings.TrimSpace(op) != "" {
-		p.Metadata["operator"] = strings.TrimSpace(op)
-	}
-	if num, ok := status.Metadata["customer_number"].(string); ok && strings.TrimSpace(num) != "" {
-		num = strings.TrimSpace(num)
-		p.Metadata["customer_number"] = num
-		ph := num
-		if len(ph) > 0 && ph[0] != '+' {
-			if len(ph) == 8 {
-				ph = "+226" + ph
-			} else {
-				ph = "+" + ph
-			}
-		}
-		p.CustomerPhone = &ph
-	}
-
-	logger.Info().
-		Interface("payment_source", p.Metadata["payment_source"]).
-		Interface("customer_number", p.Metadata["customer_number"]).
-		Str("customer_phone", func() string {
-			if p.CustomerPhone != nil {
-				return *p.CustomerPhone
-			}
-			return ""
-		}()).
-		Msg("Pay-in channel applied from CheckStatus")
 }
 
 // ensureEscrowOnSuccess crée l'escrow + commission si absent (aligné process_webhook).

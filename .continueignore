@@ -1,0 +1,48 @@
+# Binaires et builds
+*.exe
+*.test
+*.out
+cover
+coverage
+bin/
+build/
+dist/
+
+# Résultats de tests et load tests (TRÈS IMPORTANT)
+tests/loadtest/results/
+tests/loadtest/archive.tar
+*.html
+*.tar
+
+# Mocks générés (optionnel — enlève ces lignes si tu veux les indexer)
+
+
+# Fichiers volumineux / pas utiles pour l'IA
+go.sum
+*.csv
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*
+!.env.example
+
+# Swagger généré
+docs/swagger.json
+docs/swagger.yaml
+docsclear/
+
+# IDE
+.idea/
+.vscode/
+.git/
+
+# Infra
+k8s/
+grafana/
+prometheus.yml*
+loki-*.yaml
+promtail-config.yml
+
+# Scripts PowerShell E2E (optionnel, tu peux les garder)

@@ -78,7 +78,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("Creating withdrawal")
 
 	// ============================================================
-	// KYC
+	// KYC (messages FR pour le frontend)
 	// ============================================================
 	if !shop.CanWithdraw() {
 		logger.Warn().
@@ -91,20 +91,20 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		var message string
 		switch shop.KYCStatus {
 		case entity.ShopKYCStatusUnverified:
-			message = "Merchant KYC verification required for withdrawals. Please submit your identity document and business registry to unlock withdrawals."
+			message = "Vérification KYC requise pour les retraits. Veuillez soumettre votre pièce d'identité et le registre de commerce."
 		case entity.ShopKYCStatusPending:
-			message = "Your KYC documents are currently under review. Withdrawals will be available once verification is complete."
+			message = "Vos documents KYC sont en cours d'examen. Les retraits seront disponibles une fois la vérification terminée."
 		case entity.ShopKYCStatusRejected:
 			if shop.KYCRejectionReason != nil {
-				message = fmt.Sprintf("Your KYC was rejected: %s. Please resubmit corrected documents.", *shop.KYCRejectionReason)
+				message = fmt.Sprintf("Votre KYC a été rejeté : %s. Veuillez renvoyer des documents corrigés.", *shop.KYCRejectionReason)
 			} else {
-				message = "Your KYC was rejected. Please resubmit corrected documents to unlock withdrawals."
+				message = "Votre KYC a été rejeté. Veuillez renvoyer des documents corrigés pour débloquer les retraits."
 			}
 		default:
-			message = "Merchant KYC verification required for withdrawals."
+			message = "Vérification KYC marchand requise pour les retraits."
 		}
 
-		return nil, fmt.Errorf("%s (current status: %s)", message, shop.KYCStatus)
+		return nil, fmt.Errorf("%s (statut actuel : %s)", message, shop.KYCStatus)
 	}
 
 	logger.Debug().
@@ -116,19 +116,42 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	// Phase 2 : retrait UNIQUEMENT sur available = balance - held
 	// ============================================================
 	if req.AmountCents <= 0 {
-		return nil, fmt.Errorf("amount_cents must be positive")
+		return nil, fmt.Errorf("Le montant du retrait doit être positif")
 	}
 
-	// ℹ️ Ce check est un "fail-fast" pour l'UX (éviter d'appeler YengaPay pour rien).
-	// La garde de sécurité réelle est dans DebitWalletUsecase.Execute (vérif atomique
-	// sous FOR UPDATE). Ne pas supprimer ce bloc pour autant : il évite un appel API inutile.
+	// Fail-fast UX (garde atomique réelle dans DebitWalletUsecase sous FOR UPDATE).
 	if uc.walletRepo != nil {
 		wallet, err := uc.walletRepo.FindByShopID(ctx, shop.ID.String())
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to load wallet for available check")
-			return nil, fmt.Errorf("failed to load wallet: %w", err)
+			return nil, fmt.Errorf("impossible de charger le portefeuille : %w", err)
 		}
+
+		if wallet.IsFrozen {
+			logger.Warn().
+				Str("shop_id", shop.ID.String()).
+				Msg("❌ Retrait bloqué : portefeuille gelé")
+			return nil, fmt.Errorf(
+				"Retrait impossible : votre portefeuille est temporairement gelé. Contactez le support si besoin",
+			)
+		}
+
 		available := wallet.AvailableCents()
+
+		// Solde ledger ≤ 0 (après clawback / dette) → aucun retrait possible
+		if wallet.BalanceCents <= 0 || available <= 0 {
+			logger.Warn().
+				Str("shop_id", shop.ID.String()).
+				Int64("balance_cents", wallet.BalanceCents).
+				Int64("held_cents", wallet.HeldCents).
+				Int64("available_cents", available).
+				Msg("❌ Retrait bloqué : solde disponible nul ou négatif")
+			return nil, fmt.Errorf(
+				"Solde insuffisant pour un retrait (disponible : %d XOF, solde : %d XOF, gelé : %d XOF)",
+				available/100, wallet.BalanceCents/100, wallet.HeldCents/100,
+			)
+		}
+
 		if req.AmountCents > available {
 			logger.Warn().
 				Str("shop_id", shop.ID.String()).
@@ -138,8 +161,8 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 				Int64("available_cents", available).
 				Msg("❌ Retrait bloqué : fonds insuffisants (held inclus)")
 			return nil, fmt.Errorf(
-				"insufficient available balance: requested=%d available=%d (balance=%d held=%d)",
-				req.AmountCents, available, wallet.BalanceCents, wallet.HeldCents,
+				"Solde disponible insuffisant : demandé %d XOF, disponible %d XOF (solde %d XOF, dont %d XOF gelés)",
+				req.AmountCents/100, available/100, wallet.BalanceCents/100, wallet.HeldCents/100,
 			)
 		}
 	} else {
@@ -163,7 +186,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	_, err = uc.debitWalletUC.Execute(ctx, debitReq)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to debit wallet for withdrawal")
-		return nil, fmt.Errorf("insufficient funds or wallet error: %w", err)
+		return nil, fmt.Errorf("Fonds insuffisants ou erreur portefeuille : %w", err)
 	}
 
 	// 3. Entité Withdrawal
