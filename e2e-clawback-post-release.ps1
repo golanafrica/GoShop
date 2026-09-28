@@ -241,7 +241,7 @@ try {
     Write-Ok "Order $orderId"
 
     # ----- 05 Pay-in (webhook local) -----
-        # ----- 05 Pay-in via /orders/{id}/pay + webhook -----
+            # ----- 05 Pay-in via /orders/{id}/pay + webhook -----
     Write-Step "05/10" "Initiate payment + webhook SUCCESS"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" -Headers $script:State.MerchantHeaders -Body @{
         provider     = "yenga_pay"
@@ -257,9 +257,11 @@ try {
     $script:State.ProviderRef = $providerRef
     Write-Ok "Payment $paymentId ref=$providerRef"
 
-    Invoke-Sql "UPDATE payments SET customer_phone = '+22670000000' WHERE id = '$paymentId'::uuid AND (customer_phone IS NULL OR customer_phone = '');" | Out-Null
+    # MSISDN NON-seed (pas 70000000 / 70123456 / ...) pour que resolveRefundDestination accepte
+    $realMsisdn = "77515151"
 
-    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"70000000`",`"paymentAmount`":1000,`"paymentFees`":25,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    # Webhook avec VRAI customerNumber (pas seed)
+    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"$realMsisdn`",`"paymentAmount`":1000,`"paymentFees`":25,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
     $hash = New-HmacSha256Hex -payload $payloadJson -secret $WebhookSecret
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "Content-Type"     = "application/json; charset=utf-8"
@@ -267,12 +269,33 @@ try {
         "x-yengapay-event" = "payment.success"
     } -Body $payloadJson
     Assert-Ok $res "Webhook payment" @(200)
-    Write-Ok "Webhook payment.success 200"
+    Write-Ok "Webhook payment.success 200 (customerNumber=$realMsisdn)"
+
+    # Force canal pay-in (au cas ou webhook n'a pas ecrase le seed du /pay)
+    Invoke-Sql @"
+UPDATE payments
+SET customer_phone = '+226$realMsisdn',
+    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+        'customer_number', '$realMsisdn',
+        'payment_source', COALESCE(NULLIF(metadata->>'payment_source', ''), 'OrangeMoneyAPI'),
+        'operator', COALESCE(NULLIF(metadata->>'operator', ''), 'ORANGE')
+    ),
+    updated_at = NOW()
+WHERE id = '$paymentId'::uuid;
+"@ | Out-Null
+
+    $canal = Invoke-Sql "SELECT customer_phone || '|' || COALESCE(metadata->>'customer_number','') FROM payments WHERE id = '$paymentId'::uuid;"
+    Write-Host "  Canal pay-in: $canal" -ForegroundColor DarkGray
+    if ($canal -notmatch "77515151") {
+        Write-Fail "Pay-in channel not set (got: $canal)"
+    }
+    Write-Ok "Pay-in channel OK for refund ($canal)"
 
     Start-Sleep -Seconds 2
     $st = Invoke-Sql "SELECT status FROM payments WHERE id = '$paymentId'::uuid;"
     if ($st -match "success") { Write-Ok "Payment status = success" } else { Write-Warn "Payment status = $st" }
 
+    
     # ----- 06 Shipping + delivery -----
         # ----- 06 Shipping + delivery (routes GitHub) -----
     Write-Step "06/10" "Shipping + delivery proofs"

@@ -36,8 +36,10 @@ var (
 //  - Pré-check FindByReferenceIDAdmin(dispute_resolution, disputeID)
 //  - Unique index uq_wallet_txn_ref_completed en filet
 // Clawback post-release (customer_wins + escrow released) :
-//  - ApplyClawback sur le net marchand (pas de freeze)
-//  - Ledger type clawback, ref dispute_clawback + disputeID
+//  - ApplyClawbackToDebt : balance puis debt_cents (pas de freeze)
+//  - Ledger clawback + debt_add si reste
+// merchant_wins :
+//  - CreditWithDebtSweep (intercepte rentrées si dette)
 // ============================================================
 
 type ResolveDisputeUsecase struct {
@@ -102,7 +104,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	}
 
 	// Litige classique : escrow disputed.
-	// Post-release : escrow released → customer_wins + clawback wallet uniquement.
+	// Post-release : escrow released → customer_wins + clawback/debt uniquement.
 	escrowAlreadyReleased := escrow.Status == entity.EscrowAccountFullyReleased
 	if escrow.Status != entity.EscrowAccountDisputed && !escrowAlreadyReleased {
 		return nil, fmt.Errorf("%w: status is %s", ErrEscrowNotDisputed, escrow.Status)
@@ -164,8 +166,9 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 				}
 			}
 
-			if err := wallet.Credit(merchantAmount); err != nil {
-				return nil, fmt.Errorf("failed to credit wallet: %w", err)
+			net, swept, cErr := wallet.CreditWithDebtSweep(merchantAmount)
+			if cErr != nil {
+				return nil, fmt.Errorf("failed to credit wallet with debt sweep: %w", cErr)
 			}
 			if err := walletRepoTx.UpdateAdmin(ctx, wallet); err != nil {
 				return nil, fmt.Errorf("failed to update wallet: %w", err)
@@ -196,6 +199,40 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 				} else {
 					return nil, fmt.Errorf("failed to create wallet transaction: %w", err)
 				}
+			}
+
+			if swept > 0 {
+				sweepRef := "dispute_resolution_debt_sweep"
+				sweepDesc := fmt.Sprintf(
+					"Debt sweep on merchant_wins credit (Order: %s, swept=%d net=%d)",
+					orderIDStr, swept, net,
+				)
+				sweepAmt := -swept
+				sweepTxn := &entity.WalletTransaction{
+					ID:                uuid.New().String(),
+					ShopID:            shopIDStr,
+					TransactionType:   entity.WalletTxDebtSweep,
+					AmountCents:       sweepAmt,
+					BalanceAfterCents: wallet.BalanceCents,
+					ReferenceType:     &sweepRef,
+					ReferenceID:       &disputeIDStr,
+					Description:       &sweepDesc,
+					Status:            entity.WalletTxCompleted,
+					CreatedAt:         time.Now().UTC(),
+				}
+				if err := walletTxnRepoTx.CreateAdmin(ctx, sweepTxn); err != nil {
+					msg := strings.ToLower(err.Error())
+					if !(strings.Contains(msg, "duplicate key") ||
+						strings.Contains(msg, "unique constraint") ||
+						strings.Contains(msg, "23505")) {
+						return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+					}
+				}
+				logger.Info().
+					Int64("swept", swept).
+					Int64("net_to_balance", net).
+					Int64("debt_after", wallet.DebtCents).
+					Msg("✅ merchant_wins credit applied with debt sweep")
 			}
 		}
 
@@ -268,7 +305,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			}
 
 		case entity.EscrowAccountFullyReleased:
-			// Post-release : escrow déjà libéré → marquer refunded + clawback wallet
+			// Post-release : clawback balance + debt_cents si insuffisant
 			now := time.Now().UTC()
 			escrow.Status = entity.EscrowAccountRefunded
 			escrow.ReleasedAmountCents = 0
@@ -279,63 +316,107 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 			}
 
 			clawRefType := "dispute_clawback"
-			existingClaw, findErr := walletTxnRepoTx.FindByReferenceIDAdmin(ctx, clawRefType, disputeIDStr)
-			if findErr == nil && existingClaw != nil && existingClaw.Status == entity.WalletTxCompleted {
+			debtRefType := "dispute_debt_add"
+
+			existingClaw, _ := walletTxnRepoTx.FindByReferenceIDAdmin(ctx, clawRefType, disputeIDStr)
+			existingDebt, _ := walletTxnRepoTx.FindByReferenceIDAdmin(ctx, debtRefType, disputeIDStr)
+			alreadyDone := (existingClaw != nil && existingClaw.Status == entity.WalletTxCompleted) ||
+				(existingDebt != nil && existingDebt.Status == entity.WalletTxCompleted)
+
+			if alreadyDone {
 				logger.Info().
 					Str("dispute_id", disputeIDStr).
-					Msg("⏭️ Clawback already applied for this dispute — skip")
+					Msg("⏭️ Clawback/debt already applied for this dispute — skip")
 			} else if merchantAmount > 0 {
 				wallet, wErr := walletRepoTx.FindByShopIDForUpdateAdmin(ctx, shopIDStr)
 				if wErr != nil {
 					return nil, fmt.Errorf("failed to find merchant wallet for clawback: %w", wErr)
 				}
 
-				if err := wallet.ApplyClawback(merchantAmount); err != nil {
-					return nil, fmt.Errorf("failed to apply clawback: %w", err)
+				fromBalance, toDebt, clawErr := wallet.ApplyClawbackToDebt(merchantAmount)
+				if clawErr != nil {
+					return nil, fmt.Errorf("failed to apply clawback to debt: %w", clawErr)
 				}
 				if err := walletRepoTx.UpdateAdmin(ctx, wallet); err != nil {
 					return nil, fmt.Errorf("failed to update wallet after clawback: %w", err)
 				}
 
-				desc := fmt.Sprintf(
-					"Clawback litige customer_wins post-release (Order: %s, dette: %d cents)",
-					orderIDStr, wallet.GetDebt(),
-				)
-				clawAmount := -merchantAmount
-				txn := &entity.WalletTransaction{
-					ID:                uuid.New().String(),
-					ShopID:            shopIDStr,
-					TransactionType:   entity.WalletTxClawback,
-					AmountCents:       clawAmount,
-					BalanceAfterCents: wallet.BalanceCents,
-					ReferenceType:     &clawRefType,
-					ReferenceID:       &disputeIDStr,
-					Description:       &desc,
-					Status:            entity.WalletTxCompleted,
-					CreatedAt:         time.Now().UTC(),
+				if fromBalance > 0 {
+					desc := fmt.Sprintf(
+						"Clawback litige customer_wins post-release (Order: %s, from_balance=%d)",
+						orderIDStr, fromBalance,
+					)
+					clawAmount := -fromBalance
+					txn := &entity.WalletTransaction{
+						ID:                uuid.New().String(),
+						ShopID:            shopIDStr,
+						TransactionType:   entity.WalletTxClawback,
+						AmountCents:       clawAmount,
+						BalanceAfterCents: wallet.BalanceCents,
+						ReferenceType:     &clawRefType,
+						ReferenceID:       &disputeIDStr,
+						Description:       &desc,
+						Status:            entity.WalletTxCompleted,
+						CreatedAt:         time.Now().UTC(),
+					}
+					if err := walletTxnRepoTx.CreateAdmin(ctx, txn); err != nil {
+						msg := strings.ToLower(err.Error())
+						if strings.Contains(msg, "duplicate key") ||
+							strings.Contains(msg, "unique constraint") ||
+							strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+							strings.Contains(msg, "23505") {
+							logger.Info().
+								Str("dispute_id", disputeIDStr).
+								Msg("⏭️ Clawback concurrent — treat as success")
+						} else {
+							return nil, fmt.Errorf("failed to create clawback wallet transaction: %w", err)
+						}
+					}
+				} else {
+					logger.Info().
+						Str("dispute_id", disputeIDStr).
+						Msg("No balance to claw — residual goes to debt_cents only")
 				}
-				if err := walletTxnRepoTx.CreateAdmin(ctx, txn); err != nil {
-					msg := strings.ToLower(err.Error())
-					if strings.Contains(msg, "duplicate key") ||
-						strings.Contains(msg, "unique constraint") ||
-						strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
-						strings.Contains(msg, "23505") {
-						logger.Info().
-							Str("dispute_id", disputeIDStr).
-							Msg("⏭️ Clawback concurrent — treat as success")
-					} else {
-						return nil, fmt.Errorf("failed to create clawback wallet transaction: %w", err)
+
+				if toDebt > 0 {
+					debtDesc := fmt.Sprintf(
+						"Dette marchand post clawback customer_wins (Order: %s, debt_add=%d)",
+						orderIDStr, toDebt,
+					)
+					debtAmt := -toDebt
+					debtTxn := &entity.WalletTransaction{
+						ID:                uuid.New().String(),
+						ShopID:            shopIDStr,
+						TransactionType:   entity.WalletTxDebtAdd,
+						AmountCents:       debtAmt,
+						BalanceAfterCents: wallet.BalanceCents,
+						ReferenceType:     &debtRefType,
+						ReferenceID:       &disputeIDStr,
+						Description:       &debtDesc,
+						Status:            entity.WalletTxCompleted,
+						CreatedAt:         time.Now().UTC(),
+					}
+					if err := walletTxnRepoTx.CreateAdmin(ctx, debtTxn); err != nil {
+						msg := strings.ToLower(err.Error())
+						if !(strings.Contains(msg, "duplicate key") ||
+							strings.Contains(msg, "unique constraint") ||
+							strings.Contains(msg, "23505")) {
+							return nil, fmt.Errorf("failed to create debt_add transaction: %w", err)
+						}
 					}
 				}
 
 				logger.Info().
 					Str("shop_id", shopIDStr).
-					Int64("clawback_cents", merchantAmount).
+					Int64("clawback_total", merchantAmount).
+					Int64("from_balance", fromBalance).
+					Int64("to_debt", toDebt).
 					Int64("balance_after", wallet.BalanceCents).
-					Int64("debt_cents", wallet.GetDebt()).
-					Msg("✅ Clawback post-release applied (no freeze)")
+					Int64("debt_cents", wallet.DebtCents).
+					Msg("✅ ClawbackToDebt post-release applied (no freeze)")
 			}
 		}
+
 		logger.Info().
 			Str("order_id", orderIDStr).
 			Str("dispute_id", dispute.ID.String()).
@@ -385,13 +466,7 @@ func (uc *ResolveDisputeUsecase) Execute(ctx context.Context, req *ResolveDisput
 	return dispute, nil
 }
 
-// resolveRefundDestination priorise les infos du pay-in Yenga (webhook / CheckStatus)
-// pour réutiliser le même téléphone et le même opérateur au cash-out.
 // resolveRefundDestination priorise le vrai MSISDN Yenga (metadata) sur le seed E2E.
-// Ordre :
-//  1. metadata.customer_number (CheckStatus / webhook)
-//  2. CustomerPhone s'il n'est PAS un seed
-//  3. sinon vide → refund refusé en amont
 func resolveRefundDestination(p *entity.Payment) (phone string, operator string, sourceHint string) {
 	if p.Metadata != nil {
 		phone = firstMetaString(p.Metadata, "customer_number", "customerNumber", "customer_phone", "customerPhone")

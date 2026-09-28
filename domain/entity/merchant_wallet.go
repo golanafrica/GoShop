@@ -10,39 +10,39 @@ import (
 // ENUMS WALLET
 // ============================================================
 
-// WalletTransactionType représente le type de transaction wallet
 type WalletTransactionType string
 
 const (
-	// Crédits (argent qui rentre)
-	WalletTxSaleCredit      WalletTransactionType = "sale_credit"      // Vente Mobile Money
-	WalletTxCOD             WalletTransactionType = "sale_cod"         // Vente COD (après commission)
-	WalletTxSaleTontine     WalletTransactionType = "sale_tontine"     // Vente tontine
-	WalletTxSaleCreditPlan  WalletTransactionType = "sale_credit_plan" // Vente crédit tempérament
-	WalletTxDeposit         WalletTransactionType = "deposit"          // Dépôt manuel
-	WalletTxUnfreezeDeposit WalletTransactionType = "unfreeze_deposit" // Dépôt pour dégeler
+	// Crédits
+	WalletTxSaleCredit      WalletTransactionType = "sale_credit"
+	WalletTxCOD             WalletTransactionType = "sale_cod"
+	WalletTxSaleTontine     WalletTransactionType = "sale_tontine"
+	WalletTxSaleCreditPlan  WalletTransactionType = "sale_credit_plan"
+	WalletTxDeposit         WalletTransactionType = "deposit"
+	WalletTxUnfreezeDeposit WalletTransactionType = "unfreeze_deposit"
 
-	// Débits (argent qui sort)
-	WalletTxCommissionDebit WalletTransactionType = "commission_debit" // Commission GoShop
-	WalletTxPayout          WalletTransactionType = "payout"           // Virement / cash-out
-	WalletTxRefund          WalletTransactionType = "refund"           // Remboursement client (ledger)
-	WalletTxClawback        WalletTransactionType = "clawback"         // Reprise post-release (litige)
-	WalletTxFreezePenalty   WalletTransactionType = "freeze_penalty"   // Pénalité gel
+	// Débits
+	WalletTxCommissionDebit WalletTransactionType = "commission_debit"
+	WalletTxPayout          WalletTransactionType = "payout"
+	WalletTxRefund          WalletTransactionType = "refund"
+	WalletTxClawback        WalletTransactionType = "clawback"
+	WalletTxFreezePenalty   WalletTransactionType = "freeze_penalty"
+	WalletTxDebtAdd         WalletTransactionType = "debt_add"   // hausse dette (audit)
+	WalletTxDebtSweep       WalletTransactionType = "debt_sweep" // prélèvement sur crédit
 )
 
-// IsValid vérifie si le type de transaction est valide
 func (t WalletTransactionType) IsValid() bool {
 	switch t {
 	case WalletTxSaleCredit, WalletTxCOD, WalletTxSaleTontine,
 		WalletTxSaleCreditPlan, WalletTxDeposit, WalletTxUnfreezeDeposit,
 		WalletTxCommissionDebit, WalletTxPayout, WalletTxRefund,
-		WalletTxClawback, WalletTxFreezePenalty:
+		WalletTxClawback, WalletTxFreezePenalty,
+		WalletTxDebtAdd, WalletTxDebtSweep:
 		return true
 	}
 	return false
 }
 
-// IsCredit vérifie si c'est un crédit (argent qui rentre)
 func (t WalletTransactionType) IsCredit() bool {
 	switch t {
 	case WalletTxSaleCredit, WalletTxCOD, WalletTxSaleTontine,
@@ -52,12 +52,10 @@ func (t WalletTransactionType) IsCredit() bool {
 	return false
 }
 
-// IsDebit vérifie si c'est un débit (argent qui sort)
 func (t WalletTransactionType) IsDebit() bool {
 	return !t.IsCredit()
 }
 
-// WalletTransactionStatus représente le statut d'une transaction
 type WalletTransactionStatus string
 
 const (
@@ -67,7 +65,6 @@ const (
 	WalletTxCancelled WalletTransactionStatus = "cancelled"
 )
 
-// IsValid vérifie si le statut est valide
 func (s WalletTransactionStatus) IsValid() bool {
 	switch s {
 	case WalletTxPending, WalletTxCompleted, WalletTxFailed, WalletTxCancelled:
@@ -76,17 +73,15 @@ func (s WalletTransactionStatus) IsValid() bool {
 	return false
 }
 
-// FreezeReason représente la raison d'un gel de compte
 type FreezeReason string
 
 const (
-	FreezeReasonNegativeBalance  FreezeReason = "negative_balance"  // Wallet passé en négatif
-	FreezeReasonUnpaidCommission FreezeReason = "unpaid_commission" // Commission COD impayée
-	FreezeReasonFraudSuspected   FreezeReason = "fraud_suspected"   // Fraude suspectée
-	FreezeReasonAdminDecision    FreezeReason = "admin_decision"    // Décision admin
+	FreezeReasonNegativeBalance  FreezeReason = "negative_balance"
+	FreezeReasonUnpaidCommission FreezeReason = "unpaid_commission"
+	FreezeReasonFraudSuspected   FreezeReason = "fraud_suspected"
+	FreezeReasonAdminDecision    FreezeReason = "admin_decision"
 )
 
-// IsValid vérifie si la raison est valide
 func (r FreezeReason) IsValid() bool {
 	switch r {
 	case FreezeReasonNegativeBalance, FreezeReasonUnpaidCommission,
@@ -96,17 +91,15 @@ func (r FreezeReason) IsValid() bool {
 	return false
 }
 
-// FreezeResolution représente la résolution d'un gel
 type FreezeResolution string
 
 const (
-	FreezeResolutionPaid      FreezeResolution = "paid"      // Marchand a payé
-	FreezeResolutionSuspended FreezeResolution = "suspended" // Suspension définitive
-	FreezeResolutionWaived    FreezeResolution = "waived"    // Dette annulée
-	FreezeResolutionEscalated FreezeResolution = "escalated" // Escaladé
+	FreezeResolutionPaid      FreezeResolution = "paid"
+	FreezeResolutionSuspended FreezeResolution = "suspended"
+	FreezeResolutionWaived    FreezeResolution = "waived"
+	FreezeResolutionEscalated FreezeResolution = "escalated"
 )
 
-// IsValid vérifie si la résolution est valide
 func (r FreezeResolution) IsValid() bool {
 	switch r {
 	case FreezeResolutionPaid, FreezeResolutionSuspended,
@@ -116,35 +109,29 @@ func (r FreezeResolution) IsValid() bool {
 	return false
 }
 
-// ============================================================
-// CONSTANTES WALLET
-// ============================================================
-
 const (
-	// -50 000 XOF max de dette ledger (refund ~975 XOF = 97_500 cents)
 	DefaultMaxNegativeBalanceCents = -5_000_000
-
-	DefaultGracePeriodDays = 7
-
-	Reminder1Days = 1
-	Reminder2Days = 3
-	Reminder3Days = 6
+	DefaultGracePeriodDays         = 7
+	Reminder1Days                  = 1
+	Reminder2Days                  = 3
+	Reminder3Days                  = 6
 )
 
 // ============================================================
-// MERCHANT WALLET (Portefeuille marchand)
+// MERCHANT WALLET
 // ============================================================
-
-// MerchantWallet représente le portefeuille virtuel d'un marchand
 //
-// balance_cents = solde ledger total (peut être négatif = dette)
-// held_cents    = montant gelé (tontine, etc.) — migration 045
-// available     = max(0, balance_cents - held_cents)
+// balance_cents = ledger disponible (peut être 0 après clawback)
+// held_cents    = gelé (tontine, etc.)
+// debt_cents    = dû plateforme (clawback partiel) — toujours >= 0
+// available     = max(0, balance - held - debt)
+
 type MerchantWallet struct {
 	ShopID string `json:"shop_id" db:"shop_id"`
 
 	BalanceCents int64 `json:"balance_cents" db:"balance_cents"`
 	HeldCents    int64 `json:"held_cents" db:"held_cents"`
+	DebtCents    int64 `json:"debt_cents" db:"debt_cents"`
 
 	IsFrozen     bool       `json:"is_frozen" db:"is_frozen"`
 	FrozenAt     *time.Time `json:"frozen_at,omitempty" db:"frozen_at"`
@@ -161,13 +148,13 @@ type MerchantWallet struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// NewMerchantWallet crée un nouveau wallet pour un shop
 func NewMerchantWallet(shopID string) *MerchantWallet {
 	now := time.Now().UTC()
 	return &MerchantWallet{
 		ShopID:                  shopID,
 		BalanceCents:            0,
 		HeldCents:               0,
+		DebtCents:               0,
 		MaxNegativeBalanceCents: DefaultMaxNegativeBalanceCents,
 		CreatedAt:               now,
 		UpdatedAt:               now,
@@ -175,11 +162,14 @@ func NewMerchantWallet(shopID string) *MerchantWallet {
 }
 
 // ============================================================
-// AVAILABLE / HELD
+// AVAILABLE / HELD / DEBT
 // ============================================================
 
 func (w *MerchantWallet) AvailableCents() int64 {
-	avail := w.BalanceCents - w.HeldCents
+	if w == nil {
+		return 0
+	}
+	avail := w.BalanceCents - w.HeldCents - w.DebtCents
 	if avail < 0 {
 		return 0
 	}
@@ -212,7 +202,6 @@ func (w *MerchantWallet) ReleaseHeld(amountCents int64) error {
 	return nil
 }
 
-// CreditAndHold : tontine — crédit + hold. Bloqué si frozen (pas de recovery hold).
 func (w *MerchantWallet) CreditAndHold(amountCents int64) error {
 	if w.IsFrozen {
 		return errors.New("wallet is frozen, cannot credit")
@@ -228,10 +217,10 @@ func (w *MerchantWallet) CreditAndHold(amountCents int64) error {
 }
 
 // ============================================================
-// MÉTHODES DE TRANSACTION
+// TRANSACTIONS
 // ============================================================
 
-// Credit crédite le wallet. Autorisé même si frozen : réduit une dette (recovery).
+// Credit crédite sans sweep (legacy). Préférer CreditWithDebtSweep pour les ventes.
 func (w *MerchantWallet) Credit(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("amount must be positive")
@@ -242,7 +231,44 @@ func (w *MerchantWallet) Credit(amountCents int64) error {
 	return nil
 }
 
-// Debit débite le wallet — bloqué si frozen.
+// CreditWithDebtSweep crédite puis prélève sur debt_cents.
+// Retourne (net ajouté à balance, montant sweepé sur dette).
+func (w *MerchantWallet) CreditWithDebtSweep(creditCents int64) (netToBalance int64, swept int64, err error) {
+	if w == nil {
+		return 0, 0, errors.New("wallet is nil")
+	}
+	if creditCents <= 0 {
+		return 0, 0, errors.New("credit must be positive")
+	}
+	// Autorisé même frozen : on réduit la dette / on récupère
+	swept = creditCents
+	if swept > w.DebtCents {
+		swept = w.DebtCents
+	}
+	netToBalance = creditCents - swept
+	w.BalanceCents += netToBalance
+	w.DebtCents -= swept
+	if w.DebtCents < 0 {
+		w.DebtCents = 0
+	}
+	w.TotalSalesCents += creditCents
+	w.UpdatedAt = time.Now().UTC()
+	return netToBalance, swept, nil
+}
+
+// AddDebt augmente debt_cents (sans toucher balance).
+func (w *MerchantWallet) AddDebt(amountCents int64) error {
+	if w == nil {
+		return errors.New("wallet is nil")
+	}
+	if amountCents <= 0 {
+		return errors.New("debt amount must be positive")
+	}
+	w.DebtCents += amountCents
+	w.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 func (w *MerchantWallet) Debit(amountCents int64) error {
 	if w.IsFrozen {
 		return errors.New("wallet is frozen, cannot debit")
@@ -260,7 +286,8 @@ func (w *MerchantWallet) Debit(amountCents int64) error {
 	return nil
 }
 
-// ApplyClawback reprend un montant post-release (litige). Ne gèle PAS. Peut aller négatif.
+// ApplyClawback : legacy — débite balance uniquement (peut aller négatif via MaxNegative).
+// Préférer ApplyClawbackToDebt pour le modèle dette explicite.
 func (w *MerchantWallet) ApplyClawback(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("clawback amount must be positive")
@@ -277,16 +304,42 @@ func (w *MerchantWallet) ApplyClawback(amountCents int64) error {
 	return nil
 }
 
-// DebtAfterCredit : dette restante après un crédit hypothétique (notifs).
+// ApplyClawbackToDebt : prend sur balance (sans descendre sous 0), reste → debt_cents.
+// Ne gèle pas. Ne rend pas balance négative.
+func (w *MerchantWallet) ApplyClawbackToDebt(amountCents int64) (fromBalance int64, toDebt int64, err error) {
+	if w == nil {
+		return 0, 0, errors.New("wallet is nil")
+	}
+	if amountCents <= 0 {
+		return 0, 0, errors.New("clawback amount must be positive")
+	}
+	available := w.BalanceCents
+	if available < 0 {
+		available = 0
+	}
+	fromBalance = amountCents
+	if fromBalance > available {
+		fromBalance = available
+	}
+	toDebt = amountCents - fromBalance
+	w.BalanceCents -= fromBalance
+	if toDebt > 0 {
+		w.DebtCents += toDebt
+	}
+	w.UpdatedAt = time.Now().UTC()
+	return fromBalance, toDebt, nil
+}
+
 func (w *MerchantWallet) DebtAfterCredit(creditCents int64) int64 {
 	if creditCents < 0 {
 		creditCents = 0
 	}
-	after := w.BalanceCents + creditCents
-	if after >= 0 {
+	// Après un crédit avec sweep : dette restante
+	debt := w.DebtCents - creditCents
+	if debt < 0 {
 		return 0
 	}
-	return -after
+	return debt
 }
 
 func (w *MerchantWallet) DebitCommission(commissionCents int64) (bool, error) {
@@ -310,9 +363,12 @@ func (w *MerchantWallet) RequestPayout(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("amount must be positive")
 	}
+	if w.DebtCents > 0 {
+		return fmt.Errorf("cannot withdraw while debt outstanding: debt_cents=%d", w.DebtCents)
+	}
 	if amountCents > w.AvailableCents() {
-		return fmt.Errorf("insufficient available balance: requested=%d available=%d (held=%d)",
-			amountCents, w.AvailableCents(), w.HeldCents)
+		return fmt.Errorf("insufficient available balance: requested=%d available=%d (held=%d debt=%d)",
+			amountCents, w.AvailableCents(), w.HeldCents, w.DebtCents)
 	}
 	w.BalanceCents -= amountCents
 	w.TotalPayoutsCents += amountCents
@@ -347,12 +403,20 @@ func (w *MerchantWallet) Unfreeze(depositAmountCents int64) error {
 	if !w.IsFrozen {
 		return errors.New("wallet is not frozen")
 	}
-	if w.BalanceCents < 0 && depositAmountCents < -w.BalanceCents {
-		return fmt.Errorf("deposit must cover debt: %d < %d",
-			depositAmountCents, -w.BalanceCents)
+	// Couvrir dette explicite ou balance négative legacy
+	need := w.DebtCents
+	if w.BalanceCents < 0 {
+		need += -w.BalanceCents
+	}
+	if need > 0 && depositAmountCents < need {
+		return fmt.Errorf("deposit must cover debt: %d < %d", depositAmountCents, need)
 	}
 	if depositAmountCents > 0 {
-		w.BalanceCents += depositAmountCents
+		net, _, err := w.CreditWithDebtSweep(depositAmountCents)
+		if err != nil {
+			return err
+		}
+		_ = net
 	}
 	w.IsFrozen = false
 	w.FrozenAt = nil
@@ -382,11 +446,13 @@ func (w *MerchantWallet) IsPositive() bool { return w.BalanceCents > 0 }
 func (w *MerchantWallet) IsZero() bool     { return w.BalanceCents == 0 }
 func (w *MerchantWallet) IsNegative() bool { return w.BalanceCents < 0 }
 
+// GetDebt : dette explicite + éventuel solde négatif legacy.
 func (w *MerchantWallet) GetDebt() int64 {
-	if w.BalanceCents >= 0 {
-		return 0
+	d := w.DebtCents
+	if w.BalanceCents < 0 {
+		d += -w.BalanceCents
 	}
-	return -w.BalanceCents
+	return d
 }
 
 func (w *MerchantWallet) CanCoverCommission(commissionCents int64) bool {
@@ -441,6 +507,9 @@ func (w *MerchantWallet) Validate() error {
 	}
 	if w.HeldCents < 0 {
 		return errors.New("held_cents cannot be negative")
+	}
+	if w.DebtCents < 0 {
+		return errors.New("debt_cents cannot be negative")
 	}
 	if w.MaxNegativeBalanceCents > 0 {
 		return errors.New("max_negative_balance_cents must be negative or zero")

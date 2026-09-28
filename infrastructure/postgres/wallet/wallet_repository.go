@@ -61,9 +61,9 @@ func (r *MerchantWalletRepositoryInfrastructure) getShopID(ctx context.Context) 
 	return shop.ID.String(), nil
 }
 
-// Colonnes wallet (Phase 2 : + held_cents)
+// Colonnes wallet : held_cents + debt_cents (migration 058)
 const merchantWalletSelectCols = `
-	shop_id, balance_cents, held_cents, is_frozen, frozen_at, frozen_reason, frozen_until,
+	shop_id, balance_cents, held_cents, debt_cents, is_frozen, frozen_at, frozen_reason, frozen_until,
 	max_negative_balance_cents,
 	total_sales_cents, total_commissions_cents, total_payouts_cents,
 	created_at, updated_at
@@ -78,6 +78,7 @@ func (r *MerchantWalletRepositoryInfrastructure) scanWallet(row *sql.Row) (*enti
 		&wallet.ShopID,
 		&wallet.BalanceCents,
 		&wallet.HeldCents,
+		&wallet.DebtCents,
 		&wallet.IsFrozen,
 		&frozenAt,
 		&frozenReason,
@@ -125,6 +126,7 @@ func (r *MerchantWalletRepositoryInfrastructure) scanWallets(ctx context.Context
 			&wallet.ShopID,
 			&wallet.BalanceCents,
 			&wallet.HeldCents,
+			&wallet.DebtCents,
 			&wallet.IsFrozen,
 			&frozenAt,
 			&frozenReason,
@@ -174,17 +176,18 @@ func (r *MerchantWalletRepositoryInfrastructure) Create(ctx context.Context, wal
 
 	query := `
 		INSERT INTO merchant_wallets (
-			shop_id, balance_cents, held_cents,
+			shop_id, balance_cents, held_cents, debt_cents,
 			max_negative_balance_cents,
 			total_sales_cents, total_commissions_cents, total_payouts_cents,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
 		RETURNING created_at, updated_at
 	`
 	err = r.queryRowContext(ctx, query,
 		wallet.ShopID,
 		wallet.BalanceCents,
 		wallet.HeldCents,
+		wallet.DebtCents,
 		wallet.MaxNegativeBalanceCents,
 		wallet.TotalSalesCents,
 		wallet.TotalCommissionsCents,
@@ -243,7 +246,11 @@ func (r *MerchantWalletRepositoryInfrastructure) FindFrozenByShopID(ctx context.
 }
 
 func (r *MerchantWalletRepositoryInfrastructure) FindNegativeBalance(ctx context.Context) ([]*entity.MerchantWallet, error) {
-	query := `SELECT ` + merchantWalletSelectCols + ` FROM merchant_wallets WHERE balance_cents < 0 ORDER BY balance_cents ASC`
+	// Legacy balance < 0 OU dette explicite
+	query := `SELECT ` + merchantWalletSelectCols + `
+		FROM merchant_wallets
+		WHERE balance_cents < 0 OR debt_cents > 0
+		ORDER BY debt_cents DESC, balance_cents ASC`
 	return r.scanWallets(ctx, query)
 }
 
@@ -348,14 +355,15 @@ func (r *MerchantWalletRepositoryInfrastructure) Update(ctx context.Context, wal
 		UPDATE merchant_wallets
 		SET balance_cents = $2,
 		    held_cents = $3,
-		    is_frozen = $4,
-		    frozen_at = $5,
-		    frozen_reason = $6,
-		    frozen_until = $7,
-		    max_negative_balance_cents = $8,
-		    total_sales_cents = $9,
-		    total_commissions_cents = $10,
-		    total_payouts_cents = $11,
+		    debt_cents = $4,
+		    is_frozen = $5,
+		    frozen_at = $6,
+		    frozen_reason = $7,
+		    frozen_until = $8,
+		    max_negative_balance_cents = $9,
+		    total_sales_cents = $10,
+		    total_commissions_cents = $11,
+		    total_payouts_cents = $12,
 		    updated_at = NOW()
 		WHERE shop_id = $1
 		RETURNING updated_at
@@ -364,6 +372,7 @@ func (r *MerchantWalletRepositoryInfrastructure) Update(ctx context.Context, wal
 		wallet.ShopID,
 		wallet.BalanceCents,
 		wallet.HeldCents,
+		wallet.DebtCents,
 		wallet.IsFrozen,
 		wallet.FrozenAt,
 		wallet.FrozenReason,
@@ -402,7 +411,6 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateBalance(ctx context.Conte
 	return nil
 }
 
-// UpdateHeld met à jour uniquement held_cents (Phase 2)
 func (r *MerchantWalletRepositoryInfrastructure) UpdateHeld(ctx context.Context, shopID string, heldCents int64) error {
 	currentShopID, err := r.getShopID(ctx)
 	if err != nil {
@@ -502,7 +510,7 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateStats(ctx context.Context
 }
 
 // ============================================================
-// WALLET TRANSACTION REPOSITORY (inchangé structurellement)
+// WALLET TRANSACTION REPOSITORY
 // ============================================================
 
 type WalletTransactionRepositoryInfrastructure struct {
@@ -1007,14 +1015,15 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateAdmin(ctx context.Context
 		UPDATE merchant_wallets
 		SET balance_cents = $2,
 		    held_cents = $3,
-		    is_frozen = $4,
-		    frozen_at = $5,
-		    frozen_reason = $6,
-		    frozen_until = $7,
-		    max_negative_balance_cents = $8,
-		    total_sales_cents = $9,
-		    total_commissions_cents = $10,
-		    total_payouts_cents = $11,
+		    debt_cents = $4,
+		    is_frozen = $5,
+		    frozen_at = $6,
+		    frozen_reason = $7,
+		    frozen_until = $8,
+		    max_negative_balance_cents = $9,
+		    total_sales_cents = $10,
+		    total_commissions_cents = $11,
+		    total_payouts_cents = $12,
 		    updated_at = NOW()
 		WHERE shop_id = $1
 		RETURNING updated_at
@@ -1023,6 +1032,7 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateAdmin(ctx context.Context
 		wallet.ShopID,
 		wallet.BalanceCents,
 		wallet.HeldCents,
+		wallet.DebtCents,
 		wallet.IsFrozen,
 		wallet.FrozenAt,
 		wallet.FrozenReason,
@@ -1044,17 +1054,18 @@ func (r *MerchantWalletRepositoryInfrastructure) CreateAdmin(ctx context.Context
 	}
 	query := `
 		INSERT INTO merchant_wallets (
-			shop_id, balance_cents, held_cents,
+			shop_id, balance_cents, held_cents, debt_cents,
 			max_negative_balance_cents,
 			total_sales_cents, total_commissions_cents, total_payouts_cents,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
 		RETURNING created_at, updated_at
 	`
 	err := r.queryRowContext(ctx, query,
 		wallet.ShopID,
 		wallet.BalanceCents,
 		wallet.HeldCents,
+		wallet.DebtCents,
 		wallet.MaxNegativeBalanceCents,
 		wallet.TotalSalesCents,
 		wallet.TotalCommissionsCents,
