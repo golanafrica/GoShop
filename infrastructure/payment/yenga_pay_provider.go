@@ -985,6 +985,11 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 			"status":          webhookData.Status,
 			"amount":          webhookData.Amount,
 			"fees":            webhookData.Fees,
+			// Requis pour résoudre le payment (provider_ref en base = intent cmu…)
+			"payment_intent_id": webhookData.PaymentIntentID,
+			"paymentIntentId":   webhookData.PaymentIntentID,
+			"transId":           webhookData.TransID,
+			"transaction_id":    webhookData.TransID,
 		},
 	}, nil
 }

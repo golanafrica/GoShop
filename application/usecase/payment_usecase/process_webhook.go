@@ -66,7 +66,6 @@ func NewProcessWebhookUsecase(
 	}
 }
 
-// WithCommissionRateRepo injecte les taux boutique pour online_payment (Phase 1)
 func (uc *ProcessWebhookUsecase) WithCommissionRateRepo(r repository.CommissionRateRepository) *ProcessWebhookUsecase {
 	uc.commissionRateRepo = r
 	return uc
@@ -122,64 +121,20 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	var paymentEntity *entity.Payment
-	var findErr error
-
-	if event.ProviderRef != "" {
-		paymentEntity, findErr = uc.paymentRepo.FindByProviderRef(ctx, providerCode, event.ProviderRef)
-	}
-
+	// YP transId ≠ cmu intent ≠ payment UUID (reference)
+	paymentEntity, matchedBy, findErr := uc.resolvePaymentFromWebhookEvent(ctx, providerCode, event, logger)
 	if findErr != nil || paymentEntity == nil {
 		logger.Warn().
 			Err(findErr).
 			Str("provider_ref", event.ProviderRef).
 			Interface("metadata_debug", event.Metadata).
-			Msg("Payment not found by provider_ref, attempting fallback via metadata")
-
-		var orderIDStr string
-
-		if oid, ok := event.Metadata["order_id"].(string); ok && oid != "" {
-			orderIDStr = oid
-			logger.Info().Str("found_order_id", orderIDStr).Msg("DEBUG: Found order_id directly in metadata")
-		} else if ref, ok := event.Metadata["reference"].(string); ok {
-			logger.Info().Str("found_reference", ref).Msg("DEBUG: Found reference in metadata")
-			if strings.HasPrefix(ref, "ORDER-") {
-				orderIDStr = strings.TrimPrefix(ref, "ORDER-")
-				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Extracted order_id from reference")
-			} else if _, err := uuid.Parse(ref); err == nil {
-				orderIDStr = ref
-				logger.Info().Str("extracted_order_id", orderIDStr).Msg("DEBUG: Reference is a valid UUID, using as order_id")
-			}
-		}
-
-		if orderIDStr != "" {
-			logger.Info().Str("fallback_order_id", orderIDStr).Msg("Tentative de fallback par order_id")
-			if orderUUID, parseErr := uuid.Parse(orderIDStr); parseErr == nil {
-				payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
-				if searchErr != nil {
-					logger.Error().Err(searchErr).Msg("DEBUG: FindByOrderIDUnscoped returned an error")
-				} else if len(payments) > 0 {
-					paymentEntity = payments[0]
-					findErr = nil
-					logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("✅ Payment retrouvé avec succès via fallback order_id (Unscoped)")
-				} else {
-					logger.Warn().Msg("DEBUG: FindByOrderIDUnscoped returned 0 payments (empty slice)")
-				}
-			} else {
-				logger.Error().Err(parseErr).Str("order_id_str", orderIDStr).Msg("DEBUG: Failed to parse orderUUID")
-			}
-		} else {
-			logger.Warn().Msg("DEBUG: orderIDStr is empty, skipping fallback")
-		}
-	}
-
-	if findErr != nil || paymentEntity == nil {
-		logger.Warn().
-			Err(findErr).
-			Str("provider_ref", event.ProviderRef).
 			Msg("Payment definitively not found for webhook")
 		return fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
 	}
+	logger.Info().
+		Str("payment_id", paymentEntity.ID.String()).
+		Str("matched_by", matchedBy).
+		Msg("✅ Payment resolved for webhook")
 
 	shop, err := uc.shopRepo.FindByID(ctx, paymentEntity.ShopID)
 	if err != nil {
@@ -188,6 +143,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	ctx = tenant.WithTenant(ctx, shop)
 
 	logger.Debug().Str("shop_id", shop.ID.String()).Str("shop_slug", shop.Slug).Msg("Tenant context injected for webhook processing")
+
+	persistYengaIDs(paymentEntity, event)
 
 	needsEscrowCreation := false
 
@@ -200,7 +157,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		}
 
 		if escrowAlreadyCreated {
-			// Même si déjà traité : enrichir MSISDN / canal si le webhook les apporte
 			channelChanged := ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
 			if channelChanged {
 				if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
@@ -217,10 +173,10 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	} else {
 		switch event.Status {
 		case entity.PaymentStatusSuccess:
-			if err := paymentEntity.MarkSuccess(event.ProviderRef); err != nil {
+			successRef := markSuccessProviderRef(paymentEntity, event)
+			if err := paymentEntity.MarkSuccess(successRef); err != nil {
 				return fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, err)
 			}
-			// Vrai MSISDN + payment_source / operator depuis le payload Yenga
 			ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as SUCCESS")
 			needsEscrowCreation = true
@@ -256,7 +212,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	}
 
 	if needsEscrowCreation && (event.Status == entity.PaymentStatusSuccess || paymentEntity.Status == entity.PaymentStatusSuccess) {
-		// Enrichir le canal avant settlement (cas déjà terminal sans escrow)
 		ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
 
 		isCredit := paymentEntity.ReferenceType != nil && (*paymentEntity.ReferenceType == "credit_installment" || *paymentEntity.ReferenceType == "credit_down_payment")
@@ -332,7 +287,116 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	return nil
 }
 
-// ensureOrderConfirmed passe l'order de pending → confirmed si nécessaire (idempotent).
+// resolvePaymentFromWebhookEvent : YP (trans) vs cmu (intent) vs UUID (reference GoShop).
+func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
+	ctx context.Context,
+	providerCode entity.PaymentProvider,
+	event *payment.WebhookEvent,
+	logger *zerolog.Logger,
+) (*entity.Payment, string, error) {
+	tryRef := func(ref, label string) (*entity.Payment, string, error) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return nil, "", nil
+		}
+		p, err := uc.paymentRepo.FindByProviderRef(ctx, providerCode, ref)
+		if err == nil && p != nil {
+			return p, label, nil
+		}
+		return nil, "", err
+	}
+
+	if p, label, _ := tryRef(event.ProviderRef, "provider_ref"); p != nil {
+		return p, label, nil
+	}
+
+	intentKeys := []string{
+		"payment_intent_id", "paymentIntentId", "paymentIntentID",
+		"payment_intent", "intent_id", "intentId",
+		"transId", "transaction_id", "transactionId",
+		"id",
+	}
+	seen := map[string]struct{}{}
+	if event.ProviderRef != "" {
+		seen[strings.TrimSpace(event.ProviderRef)] = struct{}{}
+	}
+	for _, k := range intentKeys {
+		v := metaString(event.Metadata, k)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		if p, label, _ := tryRef(v, "metadata."+k); p != nil {
+			return p, label, nil
+		}
+	}
+
+	if ref := metaString(event.Metadata, "reference"); ref != "" {
+		if pid, err := uuid.Parse(ref); err == nil {
+			p, err := uc.paymentRepo.FindByID(ctx, pid)
+			if err == nil && p != nil {
+				return p, "reference_as_payment_id", nil
+			}
+			if logger != nil {
+				logger.Debug().Err(err).Str("reference", ref).Msg("FindByID(payment) via reference failed")
+			}
+		}
+	}
+
+	orderIDStr := metaString(event.Metadata, "order_id")
+	if orderIDStr == "" {
+		if ref := metaString(event.Metadata, "reference"); strings.HasPrefix(ref, "ORDER-") {
+			orderIDStr = strings.TrimPrefix(ref, "ORDER-")
+		}
+	}
+	if orderIDStr != "" {
+		if orderUUID, err := uuid.Parse(orderIDStr); err == nil {
+			payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
+			if searchErr == nil && len(payments) > 0 {
+				return payments[0], "order_id", nil
+			}
+			if logger != nil && searchErr != nil {
+				logger.Debug().Err(searchErr).Msg("FindByOrderIDUnscoped failed")
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
+}
+
+// metaString : définie dans apply_payin_channel.go (variadic keys)
+
+func persistYengaIDs(p *entity.Payment, event *payment.WebhookEvent) {
+	if p.Metadata == nil {
+		p.Metadata = make(map[string]interface{})
+	}
+	if p.ProviderRef != nil && *p.ProviderRef != "" {
+		if _, ok := p.Metadata["payment_intent_id"]; !ok {
+			p.Metadata["payment_intent_id"] = *p.ProviderRef
+		}
+	}
+	ref := strings.TrimSpace(event.ProviderRef)
+	if ref != "" && strings.HasPrefix(strings.ToUpper(ref), "YP") {
+		p.Metadata["yenga_trans_id"] = ref
+	}
+	if intent := metaString(event.Metadata, "payment_intent_id", "paymentIntentId"); intent != "" {
+		p.Metadata["payment_intent_id"] = intent
+	}
+}
+
+func markSuccessProviderRef(p *entity.Payment, event *payment.WebhookEvent) string {
+	if p.ProviderRef != nil && strings.TrimSpace(*p.ProviderRef) != "" {
+		return *p.ProviderRef
+	}
+	if intent := metaString(event.Metadata, "payment_intent_id", "paymentIntentId"); intent != "" {
+		return intent
+	}
+	return event.ProviderRef
+}
+
 func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) {
 	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
 		return
