@@ -1,17 +1,8 @@
 # ============================================================
-# GOSHOP E2E - YengaPay REAL PAY-IN + Escrow Auto-Release + Withdrawal
+# GOSHOP E2E - REAL PAY-IN + Auto-Release + Withdrawal
+# Variant: Standard (BF-OUAGA-URB, 5j delay) | backdate = 6 jours
 # ============================================================
-# Mode REAL_PAYIN:
-#   - Checkout navigateur Yenga (sandbox)
-#   - Poll statut success
-#   - Shipping + delivery (escrow RESTE funds_held)
-#   - Backdate delivery_date (10 jours) pour couvrir delai zone rurale
-#     puis trigger admin auto-release
-#   - PAS de SQL force status=released
-#   - Verifie platform_revenue (proof_id) + wallet marchand
-#   - Withdrawal + payout webhook
-#
-# Env utiles:
+# Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
 #   $env:GOSHOP_BASE_URL
@@ -23,29 +14,71 @@ $ErrorActionPreference = "Stop"
 
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
-$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "CHANGE_ME_YENGA_PAY_WEBHOOK_SECRET" }
+$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "c38ccab5-836d-4453-a6e0-2eb0b9df3097" }
 $AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
-$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "CHANGE_ME_ADMIN_PASSWORD" }
+$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "LassinaYacine19778&" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
-$RealPayIn         = $true
-$PayInTimeoutSec   = 300
-$PayInPollSec      = 5
-$SchedulerWaitSec  = 10
-# Delai backdate: >= delai max zone rurale seedee (10j). International = 14-30j.
-$EligibilityBackdateDays = 10
+$RealPayIn        = $true
+$PayInTimeoutSec  = 300
+$PayInPollSec     = 5
+$SchedulerWaitSec = 10
+
+# >>> PROFIL ZONE (Standard : Urbain Ouaga) <<<
+$ZoneProfile = "BF-OUAGA-URB"
+
+switch ($ZoneProfile) {
+    "BF-OUAGA-URB" {
+        $EligibilityBackdateDays = 6
+        $ZoneSelectSql = @"
+SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
+FROM delivery_zones
+WHERE is_active = true AND zone_code = 'BF-OUAGA-URB'
+LIMIT 1;
+"@
+    }
+    "INTERNATIONAL" {
+        $EligibilityBackdateDays = 16
+        $ZoneSelectSql = @"
+SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
+FROM delivery_zones
+WHERE is_active = true AND zone_code = 'INT-CEDEAO-1'
+LIMIT 1;
+"@
+    }
+    "INT-30" {
+        $EligibilityBackdateDays = 31
+        $ZoneSelectSql = @"
+SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
+FROM delivery_zones
+WHERE is_active = true AND zone_type = 'international' AND installment_release_delay_days = 30
+ORDER BY zone_code LIMIT 1;
+"@
+    }
+    default {
+        $EligibilityBackdateDays = 10
+        $ZoneSelectSql = @"
+SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
+FROM delivery_zones
+WHERE is_active = true AND installment_release_delay_days >= 10 AND zone_type <> 'international'
+ORDER BY installment_release_delay_days ASC, priority DESC LIMIT 1;
+"@
+    }
+}
 
 $Timestamp         = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail     = "merchant.e2e.$Timestamp@goshop.com"
 $MerchantPassword  = "Password123!"
 $ShopName          = "Boutique E2E $Timestamp"
 $ShopSlug          = "e2e-shop-$Timestamp"
-$CustomerPhone     = "+22670000000"
-$ProductPriceCents = 100000   # 1000 XOF
-$WithdrawCents     = 50000    # 500 XOF
-$feesFcfa          = 25       # aligne sandbox Yenga ~2.5%
+
+# 🆕 Numéro réaliste pour garantir que le webhook fallback le capture correctement (évite le filtre 70000000)
+$CustomerPhone     = "+22677515151" 
+$ProductPriceCents = 100000
+$WithdrawCents     = 50000
+$feesFcfa          = 25
 
 $script:Passed = 0
 $script:Failed = 0
@@ -222,10 +255,7 @@ function Get-LongSafe {
 
 function Get-AuthToken {
     param($LoginData)
-    $t = Get-Prop $LoginData @(
-        "access_token", "token", "data.access_token", "data.token",
-        "data.accessToken", "tokens.access_token"
-    )
+    $t = Get-Prop $LoginData @("access_token", "token", "data.access_token", "data.token", "data.accessToken", "tokens.access_token")
     if (-not $t) {
         Write-Fail "Token not found in login response: $($LoginData | ConvertTo-Json -Compress)"
     }
@@ -300,7 +330,10 @@ function Send-SimulatedPaymentWebhook {
     )
     $transId  = if ($ProviderRef) { "$ProviderRef" } else { "YP-E2E-$Timestamp" }
     $intentId = if ($ProviderRef) { "$ProviderRef" } else { "" }
-    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$transId`",`"projectId`":`"00000`",`"paymentIntentId`":`"$intentId`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"70000000`",`"paymentAmount`":$AmountFcfa,`"paymentFees`":$FeesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$PaymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    
+    # 🆕 Utilisation du vrai CustomerPhone dans le payload pour tester le fallback du webhook
+    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$transId`",`"projectId`":`"00000`",`"paymentIntentId`":`"$intentId`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"77515151`",`"paymentAmount`":$AmountFcfa,`"paymentFees`":$FeesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$PaymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    
     $hash = Get-HmacSha256Hex -Payload $payloadJson -Secret $WebhookSecret
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "Content-Type"     = "application/json; charset=utf-8"
@@ -313,7 +346,7 @@ function Send-SimulatedPaymentWebhook {
 # ============================================================
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Magenta
-Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (zone delay) + Withdrawal" -ForegroundColor Magenta
+Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (zone=$ZoneProfile) + Withdrawal" -ForegroundColor Magenta
 Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn | BackdateDays=$EligibilityBackdateDays" -ForegroundColor DarkGray
 Write-Host "================================================================" -ForegroundColor Magenta
 
@@ -410,16 +443,8 @@ try {
     $script:State.OrderId = $orderId
     Write-Ok "Order $orderId"
 
-        # 04b Assign delivery zone (rural 10j) — zones seedées BF
-    # Préférer une zone existante delay=10 (ex. BF-OUAHIGOUYA)
-    $zoneRow = Invoke-SqlQuery @"
-SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
-FROM delivery_zones
-WHERE is_active = true
-  AND installment_release_delay_days >= 10
-ORDER BY installment_release_delay_days ASC, priority DESC
-LIMIT 1;
-"@
+    # 04b Assign zone selon $ZoneProfile
+    $zoneRow = Invoke-SqlQuery $ZoneSelectSql
     if ($zoneRow -and $zoneRow -match '^([^|]+)\|([^|]+)\|(\d+)') {
         $zoneId   = $Matches[1]
         $zoneCode = $Matches[2]
@@ -432,27 +457,31 @@ LIMIT 1;
         }
     }
     else {
-        # Fallback INSERT si seed vide (rare)
-        $zoneId = Invoke-SqlQuery @"
+        if ($ZoneProfile -eq "BF-OUAGA-URB") {
+            $zoneId = Invoke-SqlQuery @"
 INSERT INTO delivery_zones (
   zone_code, zone_name, country, zone_type,
   delivery_delay_days, return_delay_days, warranty_response_days,
   cod_confirmation_delay_days, installment_release_delay_days,
   is_active, priority, created_at, updated_at
 ) VALUES (
-  'E2E-RURAL-10', 'E2E Rural 10j', 'BF', 'rural',
-  10, 14, 7, 7, 10,
-  true, 0, NOW(), NOW()
+  'BF-OUAGA-URB', 'Ouagadougou Urbain', 'BF', 'urban',
+  5, 14, 7, 7, 5,
+  true, 10, NOW(), NOW()
 )
 ON CONFLICT (zone_code) DO UPDATE SET updated_at = NOW()
 RETURNING id::text;
 "@
-        if ($zoneId) {
-            Invoke-Sql "UPDATE orders SET delivery_zone_id = '$zoneId'::uuid WHERE id = '$orderId'::uuid;" | Out-Null
-            Write-Ok "Order zone = E2E-RURAL-10 (delay=10d) id=$zoneId"
+            if ($zoneId) {
+                Invoke-Sql "UPDATE orders SET delivery_zone_id = '$zoneId'::uuid WHERE id = '$orderId'::uuid;" | Out-Null
+                Write-Ok "Order zone = BF-OUAGA-URB (delay=5d) id=$zoneId (upsert)"
+            }
+            else {
+                Write-Warn "No BF-OUAGA-URB zone - order stays NO_ZONE"
+            }
         }
         else {
-            Write-Warn "No delivery zone available - order stays NO_ZONE (fallback 3d)"
+            Write-Warn "No matching delivery zone - order stays NO_ZONE (fallback 3d)"
         }
     }
 
@@ -471,11 +500,7 @@ RETURNING id::text;
     $paymentId   = Get-Prop $res.Data @("payment_id", "id", "data.payment_id", "data.id")
     $providerRef = Get-Prop $res.Data @("provider_ref", "data.provider_ref")
     $payStatus   = Get-Prop $res.Data @("status", "data.status")
-    $redirect    = Get-Prop $res.Data @(
-        "redirect_url", "data.redirect_url",
-        "checkout_url", "data.checkout_url",
-        "metadata.payment_url", "data.metadata.payment_url"
-    )
+    $redirect    = Get-Prop $res.Data @("redirect_url", "data.redirect_url", "checkout_url", "data.checkout_url", "metadata.payment_url", "data.metadata.payment_url")
 
     if (-not $paymentId) {
         Write-Fail "payment_id missing: $($res.Data | ConvertTo-Json -Compress)"
@@ -575,11 +600,9 @@ RETURNING id::text;
     $escBefore = Invoke-SqlQuery "SELECT status || '|' || COALESCE(total_amount_cents::text,'') || '|' || COALESCE(commission_cents::text,'') FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
     Write-Host "  Escrow before release: $escBefore" -ForegroundColor DarkGray
 
-    # 09 Auto-release scheduler (zone-aware)
+    # 09 Auto-release scheduler
     Write-Step "09/13" "Escrow auto-release via scheduler (real path)"
 
-    # Simuler une livraison il y a N jours (10 = couvre delai max zone rurale seedee)
-    # NE PAS forcer status=released : le scheduler ClaimRelease doit le faire
     $sqlElig = @"
 UPDATE delivery_proofs
 SET delivery_date = NOW() - INTERVAL '$EligibilityBackdateDays days',
@@ -602,7 +625,6 @@ WHERE order_id = '$orderId'::uuid
     $proofSnap = Invoke-SqlQuery "SELECT COALESCE(escrow_status,'') || '|' || COALESCE(delivery_date::text,'') FROM delivery_proofs WHERE order_id = '$orderId'::uuid LIMIT 1;"
     Write-Host "  Proof after backdate: $proofSnap" -ForegroundColor DarkGray
 
-    # Zone eventuelle liee a la commande (info diagnostic)
     $zoneInfo = Invoke-SqlQuery @"
 SELECT COALESCE(dz.zone_code, 'NO_ZONE') || '|' || COALESCE(dz.installment_release_delay_days::text, '3')
 FROM orders o
@@ -649,7 +671,7 @@ WHERE dp.order_id = '$orderId'::uuid
         Write-Ok "Escrow status = released (scheduler path)"
     }
     else {
-        Write-Warn "Escrow not released - check logs: ClaimRelease / eligible proofs / zone delay"
+        Write-Warn "Escrow not released - check logs / zone delay vs backdate"
         Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release'" -ForegroundColor DarkGray
     }
 
@@ -657,8 +679,11 @@ WHERE dp.order_id = '$orderId'::uuid
     $platTxnN = Get-LongSafe $platTxn
     $walletN  = Get-LongSafe $walletBal
 
-    if ($platBalN -gt 0 -or $platTxnN -gt 0) {
-        Write-Ok "Platform revenue updated (Split Payment) balance=$platBalN txn=$platTxnN"
+    if ($platTxnN -ge 1) {
+        Write-Ok "Platform revenue txn for THIS order = $platTxnN (balance=$platBalN)"
+    }
+    elseif ($platBalN -gt 0) {
+        Write-Warn "Platform balance=$platBalN but txn for this order=0"
     }
     else {
         Write-Warn "Platform revenue still 0 - CreditRevenue non appele ou echec"
@@ -674,7 +699,7 @@ WHERE dp.order_id = '$orderId'::uuid
     # 10 Withdrawal
     Write-Step "10/13" "Create withdrawal"
     if ($walletN -lt $WithdrawCents) {
-        Write-Warn "Wallet $walletN < $WithdrawCents - skip withdrawal (release/credit incomplete)"
+        Write-Warn "Wallet $walletN < $WithdrawCents - skip withdrawal"
     }
     else {
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" `
@@ -736,12 +761,13 @@ WHERE dp.order_id = '$orderId'::uuid
         Write-Host "  Operator TX     : $(Get-Prop $res.Data @('operator_transaction_id','data.operator_transaction_id'))" -ForegroundColor White
     }
 
-    # 13 Split summary
+    # 13 Summary
     Write-Step "13/13" "Split Payment summary (SQL)"
     Write-Host "  Escrow   : $escAfter" -ForegroundColor White
     Write-Host "  Platform : balance=$platBal cents | txns=$platTxn" -ForegroundColor White
     Write-Host "  Wallet   : $walletBal cents" -ForegroundColor White
     Write-Host "  Zone     : $zoneInfo" -ForegroundColor White
+    Write-Host "  Profile  : $ZoneProfile | Backdate=$EligibilityBackdateDays" -ForegroundColor DarkGray
     Write-Host "  Shop     : $shopId | Order=$orderId | Payment=$paymentId" -ForegroundColor DarkGray
 
     Write-Host ""
@@ -749,10 +775,6 @@ WHERE dp.order_id = '$orderId'::uuid
     $resultColor = if ($script:Failed -eq 0) { "Green" } else { "Yellow" }
     Write-Host " RESULT : $($script:Passed) OK | $($script:Failed) FAIL" -ForegroundColor $resultColor
     Write-Host "================================================================" -ForegroundColor Magenta
-    Write-Host ""
-    Write-Host "  Si platform=0 ou escrow pas released:" -ForegroundColor Yellow
-    Write-Host "  docker compose logs goshop 2>&1 | Select-String -Pattern 'Platform revenue|Escrow auto-released|already claimed|No proofs eligible|claim release|CreditRevenue'" -ForegroundColor DarkGray
-    Write-Host "  Zones internationales (14-30j): augmente `$EligibilityBackdateDays" -ForegroundColor DarkGray
 }
 catch {
     Write-Host ""

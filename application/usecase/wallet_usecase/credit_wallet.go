@@ -227,6 +227,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	previousBalance := wallet.BalanceCents
+	var swept int64 = 0
 
 	if req.HoldAfterCredit {
 		if err := wallet.CreditAndHold(req.AmountCents); err != nil {
@@ -234,10 +235,17 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
 		}
 	} else {
-		if err := wallet.Credit(req.AmountCents); err != nil {
-			logger.Error().Err(err).Msg("Failed to credit wallet")
+		// 🆕 CORRECTION AUDIT : Tout crédit standard doit d'abord éponger la dette
+		var netToBalance int64
+		netToBalance, swept, err = wallet.CreditWithDebtSweep(req.AmountCents)
+		if err != nil {
+			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
 			return nil, fmt.Errorf("failed to credit wallet: %w", err)
 		}
+
+		// On met à jour req.AmountCents pour la transaction principale afin qu'elle reflète le net ajouté au solde
+		// (Le montant "swept" sera enregistré dans une transaction debt_sweep séparée)
+		req.AmountCents = netToBalance
 	}
 
 	if err := uc.walletRepo.WithTX(tx).Update(ctx, wallet); err != nil {
@@ -250,12 +258,16 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	if req.HoldAfterCredit && desc != nil {
 		heldNote := *desc + " (held until proof/redeem)"
 		desc = &heldNote
+	} else if swept > 0 && desc != nil {
+		adjDesc := fmt.Sprintf("%s (Dette réduite: %d XOF)", *desc, swept/100)
+		desc = &adjDesc
 	}
+
 	txn := &entity.WalletTransaction{
 		ID:                txnID,
 		ShopID:            req.ShopID,
 		TransactionType:   req.TransactionType,
-		AmountCents:       req.AmountCents,
+		AmountCents:       req.AmountCents, // Net après sweep si applicable
 		BalanceAfterCents: wallet.BalanceCents,
 		ReferenceType:     req.ReferenceType,
 		ReferenceID:       req.ReferenceID,
@@ -280,6 +292,26 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 		logger.Error().Err(err).Msg("Failed to create transaction")
 		return nil, fmt.Errorf("failed to create transaction: %w", err)
+	}
+
+	// 🆕 Si une dette a été réduite, on enregistre une transaction d'audit "debt_sweep"
+	if swept > 0 {
+		sweepRefType := "debt_sweep"
+		sweepDesc := fmt.Sprintf("Prélèvement auto sur dette pour crédit %s", req.TransactionType)
+		sweepTxn := &entity.WalletTransaction{
+			ID:                uuid.New().String(),
+			ShopID:            req.ShopID,
+			TransactionType:   entity.WalletTxDebtSweep,
+			AmountCents:       -swept,
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     &sweepRefType,
+			ReferenceID:       req.ReferenceID,
+			Description:       &sweepDesc,
+			Status:            entity.WalletTxCompleted,
+		}
+		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
+			logger.Warn().Err(err).Msg("Failed to create debt_sweep audit transaction")
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

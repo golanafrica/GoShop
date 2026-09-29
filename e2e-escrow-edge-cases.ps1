@@ -18,7 +18,7 @@ $MerchantEmail     = "edge.e2e.$Timestamp@goshop.com"
 $MerchantPassword  = "Password123!"
 $ShopName          = "Edge Shop $Timestamp"
 $ShopSlug          = "edge-shop-$Timestamp"
-$CustomerPhone     = "+22670000000"
+$CustomerPhone     = "+22677515151"
 $ProductPriceCents = 100000
 $feesFcfa          = 25
 

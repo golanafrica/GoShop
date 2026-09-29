@@ -19,11 +19,12 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 
-// EscrowAutoReleaseScheduler libère automatiquement les fonds après 3 jours sans litige.
+// EscrowAutoReleaseScheduler libère automatiquement les fonds après le délai de la zone sans litige.
 // Anti race multi-instance :
 //  1. ClaimRelease atomique (funds_held → released) — un seul gagnant
 //  2. FindByReferenceIDAdmin avant crédit — no-op si déjà crédité
 //  3. Unique partial index uq_wallet_txn_ref_completed — filet DB
+//  4. 🆕 Debt Sweep : tout crédit réduit d'abord la dette (debt_cents) avant d'augmenter le solde.
 type EscrowAutoReleaseScheduler struct {
 	deliveryProofRepo   repository.DeliveryProofRepository
 	escrowRepo          repository.EscrowAccountRepository
@@ -201,7 +202,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	itemLogger.Info().Msg("🔒 Escrow claimed successfully")
 
 	// 🆕 5. SPLIT PAYMENT : Créditer le compte de revenus de la plateforme avec la commission
-	// 5. SPLIT PAYMENT — commission plateforme
 	if escrow.CommissionCents > 0 && s.platformRevenueRepo != nil {
 		const refType = "escrow_auto_release"
 		// referenceID = proof.ID (idempotence 1 crédit / preuve)
@@ -277,6 +277,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 }
 
 // creditMerchantWallet crédite le wallet du marchand de façon idempotente.
+// 🆕 CORRECTION AUDIT : Utilise CreditWithDebtSweep pour réduire la dette en priorité avant d'augmenter le solde.
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -319,25 +320,54 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		}
 	}
 
-	if err := wallet.Credit(amountCents); err != nil {
-		return fmt.Errorf("failed to credit wallet: %w", err)
+	// 🆕 CORRECTION AUDIT : Utiliser CreditWithDebtSweep au lieu de Credit simple
+	netToBalance, swept, err := wallet.CreditWithDebtSweep(amountCents)
+	if err != nil {
+		return fmt.Errorf("failed to credit wallet with debt sweep: %w", err)
 	}
 
 	txnID := uuid.New().String()
 	refTypeCopy := refType
-	desc := fmt.Sprintf("Auto-release after 3 days (Proof: %s, Escrow: %s)", proofID, escrowID)
 
+	// Description dynamique selon s'il y a eu un sweep de dette
+	desc := fmt.Sprintf("Auto-release (Proof: %s, Escrow: %s)", proofID, escrowID)
+	if swept > 0 {
+		desc = fmt.Sprintf("%s | DETTE RÉDUITE: %d XOF", desc, swept/100)
+	}
+
+	// La transaction principale reflète le montant NET ajouté au solde disponible
 	txn := &entity.WalletTransaction{
 		ID:                txnID,
 		ShopID:            shopID,
 		TransactionType:   entity.WalletTxSaleCredit,
-		AmountCents:       amountCents,
+		AmountCents:       netToBalance, // <-- Montant net après sweep
 		BalanceAfterCents: wallet.BalanceCents,
 		ReferenceType:     &refTypeCopy,
 		ReferenceID:       &proofID,
 		Description:       &desc,
 		Status:            entity.WalletTxCompleted,
 		CreatedAt:         time.Now().UTC(),
+	}
+
+	// 🆕 Si une dette a été réduite, on enregistre une transaction d'audit "debt_sweep" séparée
+	if swept > 0 {
+		sweepRefType := "debt_sweep"
+		sweepDesc := fmt.Sprintf("Prélèvement auto sur dette (Litige) pour Proof: %s", proofID)
+		sweepTxn := &entity.WalletTransaction{
+			ID:                uuid.New().String(),
+			ShopID:            shopID,
+			TransactionType:   entity.WalletTxDebtSweep,
+			AmountCents:       -swept, // Négatif pour indiquer une réduction de dette
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     &sweepRefType,
+			ReferenceID:       &proofID,
+			Description:       &sweepDesc,
+			Status:            entity.WalletTxCompleted,
+			CreatedAt:         time.Now().UTC(),
+		}
+		if err := s.walletTxnRepo.Create(shopCtx, sweepTxn); err != nil {
+			s.logger.Warn().Err(err).Str("proof_id", proofID).Msg("Failed to create debt_sweep audit transaction")
+		}
 	}
 
 	if err := s.walletTxnRepo.Create(shopCtx, txn); err != nil {

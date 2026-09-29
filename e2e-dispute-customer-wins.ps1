@@ -46,7 +46,7 @@ $MerchantPassword  = "Password123!"
 $ShopName          = "Dispute E2E $Timestamp"
 $ShopSlug          = "dispute-shop-$Timestamp"
 # Fallback seulement si le canal pay-in n'est pas connu
-$CustomerPhone     = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22670112233" }
+$CustomerPhone     = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22677515151" }
 $Operator          = if ($env:E2E_OPERATOR) { $env:E2E_OPERATOR } else { "ORANGE" }
 # Valeurs webhook simule (alignables sur le vrai checkout)
 $SimPaymentSource  = if ($env:E2E_PAYMENT_SOURCE) { $env:E2E_PAYMENT_SOURCE } else { "OrangeMoneyAPI" }
