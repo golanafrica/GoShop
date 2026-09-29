@@ -47,7 +47,8 @@ type CreditWalletResponse struct {
 	TransactionType   entity.WalletTransactionType `json:"transaction_type"`
 	AmountCents       int64                        `json:"amount_cents"`
 	BalanceAfterCents int64                        `json:"balance_after_cents"`
-	Held              bool                         `json:"held"` // true si HoldAfterCredit
+	Held              bool                         `json:"held"`
+	SweptCents        int64                        `json:"swept_cents,omitempty"`
 }
 
 func (r *CreditWalletRequest) Validate() error {
@@ -114,7 +115,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	defer tx.Rollback()
 
 	// ============================================================
-	// 🛡️ SÉCURITÉ : Vérifier l'état de l'escrow (orders / credit only)
+	// SÉCURITÉ : Vérifier l'état de l'escrow (orders / credit only)
 	// tontine_cycle / tontine_group : crédit held en fin de cycle — PAS de gate escrow
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil && uc.escrowRepo != nil {
@@ -140,7 +141,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 						Str("escrow_status", string(escrow.Status)).
 						Str("reference_type", *req.ReferenceType).
 						Str("reference_id", *req.ReferenceID).
-						Msg("🚨 BLOCKED: Attempted to credit wallet while escrow is still locked")
+						Msg("BLOCKED: Attempted to credit wallet while escrow is still locked")
 
 					return nil, fmt.Errorf(
 						"cannot credit wallet: escrow %s is locked (status: %s). Funds must be released first via delivery confirmation or auto-release after 3 days",
@@ -167,7 +168,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 					Str("escrow_status", string(escrow.Status)).
 					Int64("escrow_total", escrow.TotalAmountCents).
 					Int64("escrow_released", escrow.ReleasedAmountCents).
-					Msg("✅ Escrow verified and allows wallet credit")
+					Msg("Escrow verified and allows wallet credit")
 			}
 		}
 	}
@@ -187,11 +188,13 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 	}
 
-	if wallet.IsFrozen {
+	// Frozen : CreditWithDebtSweep est autorisé pour récupérer une dette.
+	// On bloque seulement si frozen ET pas de dette ET pas un crédit "held" tontine déjà géré autrement.
+	if wallet.IsFrozen && wallet.DebtCents == 0 && req.TransactionType != entity.WalletTxUnfreezeDeposit {
 		logger.Warn().
 			Str("shop_id", req.ShopID).
 			Bool("is_frozen", wallet.IsFrozen).
-			Msg("Attempted to credit frozen wallet")
+			Msg("Attempted to credit frozen wallet (no outstanding debt)")
 		return nil, fmt.Errorf("wallet is frozen, cannot credit")
 	}
 
@@ -205,8 +208,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				Str("ref_type", *req.ReferenceType).
 				Str("ref_id", *req.ReferenceID).
 				Str("existing_txn", existing.ID).
-				Msg("⏭️ Idempotent skip — credit already completed")
-			// Commit vide (rien modifié) pour libérer le FOR UPDATE proprement
+				Msg("Idempotent skip — credit already completed")
 			if err := tx.Commit(); err != nil {
 				_ = tx.Rollback()
 			}
@@ -227,25 +229,24 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	previousBalance := wallet.BalanceCents
-	var swept int64 = 0
+	grossCents := req.AmountCents
+	var netToBalance int64
+	var swept int64
 
 	if req.HoldAfterCredit {
-		if err := wallet.CreditAndHold(req.AmountCents); err != nil {
+		// Tontine : crédit + hold (pas de sweep sur held — la dette reste jusqu'au release held)
+		if err := wallet.CreditAndHold(grossCents); err != nil {
 			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
 			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
 		}
+		netToBalance = grossCents
+		swept = 0
 	} else {
-		// 🆕 CORRECTION AUDIT : Tout crédit standard doit d'abord éponger la dette
-		var netToBalance int64
-		netToBalance, swept, err = wallet.CreditWithDebtSweep(req.AmountCents)
+		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
 			return nil, fmt.Errorf("failed to credit wallet: %w", err)
 		}
-
-		// On met à jour req.AmountCents pour la transaction principale afin qu'elle reflète le net ajouté au solde
-		// (Le montant "swept" sera enregistré dans une transaction debt_sweep séparée)
-		req.AmountCents = netToBalance
 	}
 
 	if err := uc.walletRepo.WithTX(tx).Update(ctx, wallet); err != nil {
@@ -258,59 +259,87 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	if req.HoldAfterCredit && desc != nil {
 		heldNote := *desc + " (held until proof/redeem)"
 		desc = &heldNote
-	} else if swept > 0 && desc != nil {
-		adjDesc := fmt.Sprintf("%s (Dette réduite: %d XOF)", *desc, swept/100)
-		desc = &adjDesc
-	}
-
-	txn := &entity.WalletTransaction{
-		ID:                txnID,
-		ShopID:            req.ShopID,
-		TransactionType:   req.TransactionType,
-		AmountCents:       req.AmountCents, // Net après sweep si applicable
-		BalanceAfterCents: wallet.BalanceCents,
-		ReferenceType:     req.ReferenceType,
-		ReferenceID:       req.ReferenceID,
-		Description:       desc,
-		Status:            entity.WalletTxCompleted,
-	}
-
-	if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
-		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "duplicate key") ||
-			strings.Contains(msg, "unique constraint") ||
-			strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
-			strings.Contains(msg, "23505") {
-			logger.Info().Msg("⏭️ Unique constraint — concurrent credit, treat as success")
-			_ = tx.Rollback()
-			return &CreditWalletResponse{
-				ShopID:          req.ShopID,
-				AmountCents:     req.AmountCents,
-				TransactionType: req.TransactionType,
-				Held:            req.HoldAfterCredit,
-			}, nil
+	} else if swept > 0 {
+		base := ""
+		if desc != nil {
+			base = *desc + " | "
 		}
-		logger.Error().Err(err).Msg("Failed to create transaction")
-		return nil, fmt.Errorf("failed to create transaction: %w", err)
+		adj := fmt.Sprintf("%sdebt_sweep %d cents (gross=%d net=%d)", base, swept, grossCents, netToBalance)
+		desc = &adj
 	}
 
-	// 🆕 Si une dette a été réduite, on enregistre une transaction d'audit "debt_sweep"
+	// sale_credit / deposit : uniquement si net > 0 (entity refuse amount == 0)
+	if netToBalance > 0 {
+		txn := &entity.WalletTransaction{
+			ID:                txnID,
+			ShopID:            req.ShopID,
+			TransactionType:   req.TransactionType,
+			AmountCents:       netToBalance,
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     req.ReferenceType,
+			ReferenceID:       req.ReferenceID,
+			Description:       desc,
+			Status:            entity.WalletTxCompleted,
+		}
+
+		if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "duplicate key") ||
+				strings.Contains(msg, "unique constraint") ||
+				strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+				strings.Contains(msg, "23505") {
+				logger.Info().Msg("Unique constraint — concurrent credit, treat as success")
+				_ = tx.Rollback()
+				return &CreditWalletResponse{
+					ShopID:          req.ShopID,
+					AmountCents:     netToBalance,
+					TransactionType: req.TransactionType,
+					Held:            req.HoldAfterCredit,
+					SweptCents:      swept,
+				}, nil
+			}
+			logger.Error().Err(err).Msg("Failed to create transaction")
+			return nil, fmt.Errorf("failed to create transaction: %w", err)
+		}
+	} else {
+		// Full sweep : pas de ligne credit ; l'idempotence repose sur debt_sweep + ref
+		txnID = ""
+	}
+
 	if swept > 0 {
 		sweepRefType := "debt_sweep"
-		sweepDesc := fmt.Sprintf("Prélèvement auto sur dette pour crédit %s", req.TransactionType)
+		// Référence stable pour audit (même proof/order si fourni)
+		var sweepRefID *string
+		if req.ReferenceID != nil {
+			sweepRefID = req.ReferenceID
+		}
+		sweepDesc := fmt.Sprintf(
+			"Auto debt sweep on credit type=%s gross=%d swept=%d",
+			req.TransactionType, grossCents, swept,
+		)
+		sweepAmt := -swept
 		sweepTxn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
 			ShopID:            req.ShopID,
 			TransactionType:   entity.WalletTxDebtSweep,
-			AmountCents:       -swept,
+			AmountCents:       sweepAmt,
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     &sweepRefType,
-			ReferenceID:       req.ReferenceID,
+			ReferenceID:       sweepRefID,
 			Description:       &sweepDesc,
 			Status:            entity.WalletTxCompleted,
 		}
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
-			logger.Warn().Err(err).Msg("Failed to create debt_sweep audit transaction")
+			msg := strings.ToLower(err.Error())
+			if !(strings.Contains(msg, "duplicate key") ||
+				strings.Contains(msg, "unique constraint") ||
+				strings.Contains(msg, "23505")) {
+				logger.Error().Err(err).Msg("Failed to create debt_sweep transaction")
+				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+			}
+		}
+		if txnID == "" {
+			txnID = sweepTxn.ID
 		}
 	}
 
@@ -321,15 +350,18 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 	logger.Info().
 		Str("shop_id", req.ShopID).
-		Int64("amount_cents", req.AmountCents).
+		Int64("gross_cents", grossCents).
+		Int64("net_to_balance", netToBalance).
+		Int64("swept_cents", swept).
 		Int64("previous_balance", previousBalance).
 		Int64("new_balance", wallet.BalanceCents).
+		Int64("debt_cents", wallet.DebtCents).
 		Int64("held_cents", wallet.HeldCents).
 		Int64("available_cents", wallet.AvailableCents()).
 		Bool("held", req.HoldAfterCredit).
 		Str("transaction_type", string(req.TransactionType)).
 		Str("transaction_id", txnID).
-		Msg("Wallet credited successfully")
+		Msg("Wallet credited successfully (with debt sweep if any)")
 
 	return &CreditWalletResponse{
 		ShopID:            wallet.ShopID,
@@ -340,9 +372,10 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		IsFrozen:          wallet.IsFrozen,
 		TransactionID:     txnID,
 		TransactionType:   req.TransactionType,
-		AmountCents:       req.AmountCents,
+		AmountCents:       netToBalance,
 		BalanceAfterCents: wallet.BalanceCents,
 		Held:              req.HoldAfterCredit,
+		SweptCents:        swept,
 	}, nil
 }
 
@@ -389,8 +422,6 @@ func (uc *CreditWalletUsecase) CreditFromCOD(
 }
 
 // CreditFromTontine crédite le NET du cycle et le met en held (non retirable).
-// reference_id = "{groupID}:cycle:{N}" pour uq_wallet_txn_ref_completed
-// (un groupe a plusieurs cycles → un crédit distinct par cycle).
 func (uc *CreditWalletUsecase) CreditFromTontine(
 	ctx context.Context,
 	shopID string,
@@ -411,7 +442,6 @@ func (uc *CreditWalletUsecase) CreditFromTontine(
 		Description:     &description,
 		HoldAfterCredit: true,
 	}
-
 	return uc.Execute(ctx, req)
 }
 
