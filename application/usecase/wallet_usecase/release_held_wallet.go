@@ -3,7 +3,9 @@ package walletusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
 
@@ -36,6 +38,8 @@ type ReleaseHeldWalletResponse struct {
 	HeldCents      int64  `json:"held_cents"`
 	AvailableCents int64  `json:"available_cents"`
 	ReleasedCents  int64  `json:"released_cents"`
+	SweptCents     int64  `json:"swept_cents,omitempty"`
+	DebtCents      int64  `json:"debt_cents,omitempty"`
 }
 
 type ReleaseHeldWalletUsecase struct {
@@ -56,6 +60,9 @@ func NewReleaseHeldWalletUsecase(
 	}
 }
 
+// Execute libère du held (disponible ↑), puis sweepe la dette résiduelle
+// sur le disponible — même sémantique que installment release_escrow_funds :
+// les fonds sont déjà dans balance, on ne crédite pas.
 func (uc *ReleaseHeldWalletUsecase) Execute(ctx context.Context, req *ReleaseHeldWalletRequest) (*ReleaseHeldWalletResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
@@ -75,7 +82,7 @@ func (uc *ReleaseHeldWalletUsecase) Execute(ctx context.Context, req *ReleaseHel
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
@@ -90,22 +97,73 @@ func (uc *ReleaseHeldWalletUsecase) Execute(ctx context.Context, req *ReleaseHel
 		return nil, fmt.Errorf("release held: %w", err)
 	}
 
+	// Debt sweep sur le disponible après libération du held
+	var swept int64
+	if wallet.DebtCents > 0 {
+		available := wallet.AvailableCents()
+		if available < 0 {
+			available = 0
+		}
+		swept = wallet.DebtCents
+		if available < swept {
+			swept = available
+		}
+		if swept > 0 {
+			wallet.DebtCents -= swept
+			wallet.BalanceCents -= swept
+			if wallet.DebtCents < 0 {
+				wallet.DebtCents = 0
+			}
+		}
+	}
+
 	if err := uc.walletRepo.WithTX(tx).Update(ctx, wallet); err != nil {
 		return nil, fmt.Errorf("failed to update wallet: %w", err)
 	}
 
-	// Audit : transaction à montant 0 côté ledger (seul held change) — on log via description
-	// Si ton schéma impose amount != 0, omets Create ; le held est déjà mis à jour.
-	desc := req.Description
-	if desc == nil {
-		d := fmt.Sprintf("Release held %d cents", req.AmountCents)
-		desc = &d
+	// Audit ledger debt_sweep (si montant swept > 0)
+	if swept > 0 && uc.txnRepo != nil {
+		sweepRefType := "debt_sweep"
+		var sweepRefID *string
+		if req.ReferenceID != nil {
+			sweepRefID = req.ReferenceID
+		} else {
+			id := uuid.New().String()
+			sweepRefID = &id
+		}
+		if req.ReferenceType != nil && *req.ReferenceType != "" {
+			// garde la ref métier si fournie, type audit = debt_sweep
+			_ = req.ReferenceType
+		}
+		sweepDesc := fmt.Sprintf(
+			"Debt sweep on release_held shop=%s released=%d swept=%d",
+			req.ShopID, req.AmountCents, swept,
+		)
+		if req.Description != nil && *req.Description != "" {
+			sweepDesc = *req.Description + " | " + sweepDesc
+		}
+		sweepAmt := -swept
+		sweepTxn := &entity.WalletTransaction{
+			ID:                uuid.New().String(),
+			ShopID:            req.ShopID,
+			TransactionType:   entity.WalletTxDebtSweep,
+			AmountCents:       sweepAmt,
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     &sweepRefType,
+			ReferenceID:       sweepRefID,
+			Description:       &sweepDesc,
+			Status:            entity.WalletTxCompleted,
+		}
+		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !(strings.Contains(msg, "duplicate key") ||
+				strings.Contains(msg, "unique constraint") ||
+				strings.Contains(msg, "23505")) {
+				logger.Error().Err(err).Msg("Failed to create debt_sweep on release_held")
+				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+			}
+		}
 	}
-	// Pas de WalletTx dédié "release_held" dans l'enum actuel → on skip Create txn
-	// pour éviter un type invalide. Le solde ledger ne change pas.
-	_ = uuid.New()
-	_ = desc
-	_ = uc.txnRepo
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
@@ -114,9 +172,12 @@ func (uc *ReleaseHeldWalletUsecase) Execute(ctx context.Context, req *ReleaseHel
 	logger.Info().
 		Str("shop_id", req.ShopID).
 		Int64("released", req.AmountCents).
+		Int64("swept_cents", swept).
 		Int64("held_after", wallet.HeldCents).
+		Int64("balance_cents", wallet.BalanceCents).
+		Int64("debt_cents", wallet.DebtCents).
 		Int64("available", wallet.AvailableCents()).
-		Msg("✅ Held funds released")
+		Msg("Held funds released (debt sweep if any)")
 
 	return &ReleaseHeldWalletResponse{
 		ShopID:         wallet.ShopID,
@@ -124,5 +185,7 @@ func (uc *ReleaseHeldWalletUsecase) Execute(ctx context.Context, req *ReleaseHel
 		HeldCents:      wallet.HeldCents,
 		AvailableCents: wallet.AvailableCents(),
 		ReleasedCents:  req.AmountCents,
+		SweptCents:     swept,
+		DebtCents:      wallet.DebtCents,
 	}, nil
 }
