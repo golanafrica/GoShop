@@ -50,18 +50,23 @@ func NewWalletHandler(
 type WalletResponse struct {
 	ShopID             string `json:"shop_id"`
 	BalanceCents       int64  `json:"balance_cents"`
-	BalanceFormatted   string `json:"balance_formatted"`   // "50 000 FCFA"
-	HeldCents          int64  `json:"held_cents"`          // 🆕 Phase 5 : fonds gelés (tontine vouchers non redeemés)
-	HeldFormatted      string `json:"held_formatted"`      // 🆕 Phase 5
-	AvailableCents     int64  `json:"available_cents"`     // 🆕 Phase 5 : balance - held (retirable)
-	AvailableFormatted string `json:"available_formatted"` // 🆕 Phase 5
-	IsFrozen           bool   `json:"is_frozen"`
-	FrozenReason       string `json:"frozen_reason,omitempty"`
-	FrozenUntil        string `json:"frozen_until,omitempty"`
-	MaxNegativeCents   int64  `json:"max_negative_cents"`
-	TotalSalesCents    int64  `json:"total_sales_cents"`
-	TotalCommissions   int64  `json:"total_commissions_cents"`
-	TotalPayouts       int64  `json:"total_payouts_cents"`
+	BalanceFormatted   string `json:"balance_formatted"`
+	HeldCents          int64  `json:"held_cents"`
+	HeldFormatted      string `json:"held_formatted"`
+	AvailableCents     int64  `json:"available_cents"`
+	AvailableFormatted string `json:"available_formatted"`
+	// Dette résiduelle post-clawback (modèle debt_cents, pas solde négatif)
+	DebtCents        int64  `json:"debt_cents"`
+	DebtFormatted    string `json:"debt_formatted"`
+	IsFrozen         bool   `json:"is_frozen"`
+	FrozenReason     string `json:"frozen_reason,omitempty"`
+	FrozenUntil      string `json:"frozen_until,omitempty"`
+	MaxNegativeCents int64  `json:"max_negative_cents"`
+	TotalSalesCents  int64  `json:"total_sales_cents"`
+	TotalCommissions int64  `json:"total_commissions_cents"`
+	TotalPayouts     int64  `json:"total_payouts_cents"`
+	// true si un retrait est bloqué (dette > 0 ou frozen ou available <= 0)
+	WithdrawalBlocked bool `json:"withdrawal_blocked"`
 }
 
 // DepositRequest représente la requête pour un dépôt
@@ -90,6 +95,7 @@ type FreezeStatusResponse struct {
 	FrozenUntil     string `json:"frozen_until,omitempty"`
 	DaysRemaining   int    `json:"days_remaining,omitempty"`
 	AmountDueCents  int64  `json:"amount_due_cents,omitempty"`
+	DebtCents       int64  `json:"debt_cents,omitempty"`
 	GracePeriodDays int    `json:"grace_period_days,omitempty"`
 }
 
@@ -98,7 +104,7 @@ type FreezeStatusResponse struct {
 // ============================================================
 
 // @Summary Obtenir les informations du wallet
-// @Description Retourne le solde, les fonds gelés (held) et le solde disponible du portefeuille de la boutique active.
+// @Description Retourne solde, held, disponible, dette résiduelle (debt_cents).
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
@@ -110,7 +116,6 @@ type FreezeStatusResponse struct {
 func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
-	// 1. Récupérer le shop du contexte multi-tenant
 	shop, err := tenant.FromContext(r.Context())
 	if err != nil {
 		logger.Error().Err(err).Msg("Multi-tenant error")
@@ -119,10 +124,8 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	shopID := shop.ID.String()
 
-	// 2. Récupérer le wallet via le usecase debit (qui a GetWallet)
 	wallet, err := h.debitUC.GetWallet(r.Context(), shopID)
 	if err != nil {
-		// Wallet n'existe pas, retourner un wallet vide
 		logger.Info().
 			Str("shop_id", shopID).
 			Msg("Wallet not found, returning empty wallet")
@@ -135,14 +138,20 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 			HeldFormatted:      "0 FCFA",
 			AvailableCents:     0,
 			AvailableFormatted: "0 FCFA",
+			DebtCents:          0,
+			DebtFormatted:      "0 FCFA",
 			IsFrozen:           false,
 			MaxNegativeCents:   entity.DefaultMaxNegativeBalanceCents,
+			WithdrawalBlocked:  true,
 		})
 		return
 	}
 
-	// 3. Construire la réponse avec held_cents et available_cents (Phase 5)
 	availableCents := wallet.AvailableCents()
+	debtCents := wallet.DebtCents
+	if debtCents < 0 {
+		debtCents = 0
+	}
 
 	response := WalletResponse{
 		ShopID:             wallet.ShopID,
@@ -152,14 +161,16 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		HeldFormatted:      formatMoney(wallet.HeldCents),
 		AvailableCents:     availableCents,
 		AvailableFormatted: formatMoney(availableCents),
+		DebtCents:          debtCents,
+		DebtFormatted:      formatMoney(debtCents),
 		IsFrozen:           wallet.IsFrozen,
 		MaxNegativeCents:   wallet.MaxNegativeBalanceCents,
 		TotalSalesCents:    wallet.TotalSalesCents,
 		TotalCommissions:   wallet.TotalCommissionsCents,
 		TotalPayouts:       wallet.TotalPayoutsCents,
+		WithdrawalBlocked:  wallet.IsFrozen || debtCents > 0 || availableCents <= 0,
 	}
 
-	// Ajouter les infos de gel si gelé
 	if wallet.IsFrozen && wallet.FrozenReason != nil {
 		response.FrozenReason = *wallet.FrozenReason
 	}
@@ -167,20 +178,21 @@ func (h *WalletHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		response.FrozenUntil = wallet.FrozenUntil.Format("2006-01-02T15:04:05Z")
 	}
 
-	// 4. Logger et retourner
 	logger.Debug().
 		Str("shop_id", shopID).
 		Int64("balance_cents", wallet.BalanceCents).
 		Int64("held_cents", wallet.HeldCents).
 		Int64("available_cents", availableCents).
+		Int64("debt_cents", debtCents).
 		Bool("is_frozen", wallet.IsFrozen).
+		Bool("withdrawal_blocked", response.WithdrawalBlocked).
 		Msg("Wallet retrieved")
 
 	utils.WriteJSON(w, http.StatusOK, response)
 }
 
 // @Summary Obtenir le statut de gel du compte
-// @Description Vérifie si le wallet de la boutique est actuellement gelé et retourne les détails (raison, durée, montant dû).
+// @Description Vérifie si le wallet est gelé ; amount_due priorise debt_cents (modèle dette explicite).
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
@@ -201,7 +213,6 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 
 	wallet, err := h.debitUC.GetWallet(r.Context(), shopID)
 	if err != nil {
-		// Pas de wallet = pas de gel
 		utils.WriteJSON(w, http.StatusOK, FreezeStatusResponse{
 			IsFrozen: false,
 		})
@@ -211,6 +222,14 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 	response := FreezeStatusResponse{
 		IsFrozen:        wallet.IsFrozen,
 		GracePeriodDays: entity.DefaultGracePeriodDays,
+		DebtCents:       wallet.DebtCents,
+	}
+
+	// Montant dû : dette explicite d'abord, sinon legacy solde négatif
+	if wallet.DebtCents > 0 {
+		response.AmountDueCents = wallet.DebtCents
+	} else if wallet.BalanceCents < 0 {
+		response.AmountDueCents = -wallet.BalanceCents
 	}
 
 	if wallet.IsFrozen {
@@ -224,14 +243,13 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 			response.FrozenUntil = wallet.FrozenUntil.Format("2006-01-02T15:04:05Z")
 			response.DaysRemaining = wallet.DaysUntilSuspension()
 		}
-		if wallet.BalanceCents < 0 {
-			response.AmountDueCents = -wallet.BalanceCents
-		}
 	}
 
 	logger.Debug().
 		Str("shop_id", shopID).
 		Bool("is_frozen", wallet.IsFrozen).
+		Int64("debt_cents", wallet.DebtCents).
+		Int64("amount_due_cents", response.AmountDueCents).
 		Msg("Freeze status retrieved")
 
 	utils.WriteJSON(w, http.StatusOK, response)
@@ -242,7 +260,7 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 // ============================================================
 
 // @Summary Effectuer un dépôt manuel dans le wallet
-// @Description Crédite manuellement le portefeuille de la boutique d'un montant spécifié.
+// @Description Crédite le portefeuille (CreditWithDebtSweep si dette).
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
@@ -256,7 +274,6 @@ func (h *WalletHandler) GetFreezeStatus(w http.ResponseWriter, r *http.Request) 
 func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
-	// 1. Récupérer le shop
 	shop, err := tenant.FromContext(r.Context())
 	if err != nil {
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
@@ -264,7 +281,6 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 	}
 	shopID := shop.ID.String()
 
-	// 2. Parser la requête
 	var req DepositRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
@@ -272,13 +288,11 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 3. Valider le montant
 	if req.AmountCents <= 0 {
 		utils.WriteError(w, http.StatusBadRequest, "Amount must be positive")
 		return
 	}
 
-	// 4. Appeler le usecase
 	description := req.Description
 	if description == "" {
 		description = "Manual deposit by merchant"
@@ -291,14 +305,14 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Logger et retourner
 	logger.Info().
 		Str("shop_id", shopID).
 		Int64("amount_cents", req.AmountCents).
+		Int64("swept_cents", resp.SweptCents).
 		Str("transaction_id", resp.TransactionID).
 		Msg("Deposit successful")
 
-	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+	out := map[string]interface{}{
 		"success":           true,
 		"message":           "Deposit successful",
 		"transaction_id":    resp.TransactionID,
@@ -306,17 +320,26 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 		"amount_formatted":  formatMoney(resp.AmountCents),
 		"balance_cents":     resp.BalanceAfterCents,
 		"balance_formatted": formatMoney(resp.BalanceAfterCents),
-	})
+		"swept_cents":       resp.SweptCents,
+	}
+	if resp.SweptCents > 0 {
+		out["message"] = fmt.Sprintf(
+			"Deposit successful (%d XOF applied to residual debt)",
+			resp.SweptCents/100,
+		)
+	}
+
+	utils.WriteJSON(w, http.StatusOK, out)
 }
 
 // @Summary Effectuer un retrait depuis le wallet
-// @Description Débite le portefeuille de la boutique pour initier un virement vers un compte bancaire ou Mobile Money.
+// @Description Débite le portefeuille (bloqué si debt_cents > 0 côté usecase withdrawal/debit).
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
 // @Param request body wallet_handler.WithdrawRequest true "Montant du retrait et description optionnelle"
 // @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Montant invalide, solde insuffisant ou payload incorrect"
+// @Failure 400 {object} utils.AppError "Montant invalide, solde insuffisant, dette ou payload incorrect"
 // @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
 // @Failure 500 {object} utils.AppError "Erreur interne du serveur"
 // @Security ApiKeyAuth
@@ -324,7 +347,6 @@ func (h *WalletHandler) Deposit(w http.ResponseWriter, r *http.Request) {
 func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
-	// 1. Récupérer le shop
 	shop, err := tenant.FromContext(r.Context())
 	if err != nil {
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
@@ -332,7 +354,6 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 	}
 	shopID := shop.ID.String()
 
-	// 2. Parser la requête
 	var req WithdrawRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
@@ -340,19 +361,17 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 3. Valider le montant
 	if req.AmountCents <= 0 {
 		utils.WriteError(w, http.StatusBadRequest, "Amount must be positive")
 		return
 	}
 
-	// 4. Appeler le usecase
 	description := req.Description
 	if description == "" {
 		description = "Withdrawal to bank account"
 	}
+	_ = description
 
-	// 🆕 v3.0.1 : Générer un UUID valide pour le payout (reference_id doit être un UUID PostgreSQL)
 	payoutID := uuid.New().String()
 
 	resp, err := h.debitUC.DebitPayout(r.Context(), shopID, req.AmountCents, payoutID)
@@ -362,7 +381,6 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Logger et retourner
 	logger.Info().
 		Str("shop_id", shopID).
 		Int64("amount_cents", req.AmountCents).
@@ -387,11 +405,11 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 // ============================================================
 
 // @Summary Dégeler un compte marchand
-// @Description Lève le gel du portefeuille après régularisation de la situation (paiement, annulation ou escalade).
+// @Description Lève le gel après régularisation (paid, waived, escalated).
 // @Tags Merchant Wallet
 // @Accept json
 // @Produce json
-// @Param request body wallet_handler.UnfreezeRequest true "Montant de régularisation et type de résolution (paid, waived, escalated)"
+// @Param request body wallet_handler.UnfreezeRequest true "Montant de régularisation et résolution"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} utils.AppError "Résolution invalide ou payload incorrect"
 // @Failure 401 {object} utils.AppError "Contexte multi-tenant requis"
@@ -401,7 +419,6 @@ func (h *WalletHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 	logger := zerolog.Ctx(r.Context())
 
-	// 1. Récupérer le shop
 	shop, err := tenant.FromContext(r.Context())
 	if err != nil {
 		utils.WriteError(w, http.StatusUnauthorized, "Multi-tenant context required")
@@ -409,7 +426,6 @@ func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 	}
 	shopID := shop.ID.String()
 
-	// 2. Parser la requête
 	var req UnfreezeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Invalid JSON body")
@@ -417,7 +433,6 @@ func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 3. Valider la résolution
 	var resolution entity.FreezeResolution
 	switch req.Resolution {
 	case "paid":
@@ -435,12 +450,11 @@ func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Appeler le usecase
 	unfreezeReq := &walletusecase.UnfreezeAccountRequest{
 		ShopID:             shopID,
 		DepositAmountCents: req.DepositAmountCents,
 		Resolution:         resolution,
-		ResolvedBy:         shopID, // Le marchand se dégèle lui-même
+		ResolvedBy:         shopID,
 	}
 
 	resp, err := h.unfreezeUC.Execute(r.Context(), unfreezeReq)
@@ -450,7 +464,6 @@ func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Logger et retourner
 	logger.Info().
 		Str("shop_id", shopID).
 		Str("freeze_id", resp.FreezeID).
@@ -473,8 +486,6 @@ func (h *WalletHandler) Unfreeze(w http.ResponseWriter, r *http.Request) {
 // HELPERS
 // ============================================================
 
-// formatMoney formate un montant en centimes pour affichage
-// Exemple: 50000 → "500 FCFA"
 func formatMoney(cents int64) string {
 	if cents < 0 {
 		return "-" + formatMoney(-cents)
@@ -483,19 +494,15 @@ func formatMoney(cents int64) string {
 	return formatNumber(fcfa) + " FCFA"
 }
 
-// formatNumber formate un nombre avec séparateurs de milliers
-// Exemple: 50000 → "50 000"
 func formatNumber(n int64) string {
 	if n < 1000 {
 		return fmt.Sprintf("%d", n)
 	}
 
-	// Conversion en string avec fmt
 	str := fmt.Sprintf("%d", n)
 	result := ""
 	count := 0
 
-	// Parcourir de droite à gauche
 	for i := len(str) - 1; i >= 0; i-- {
 		if count > 0 && count%3 == 0 {
 			result = " " + result
@@ -511,7 +518,6 @@ func formatNumber(n int64) string {
 // ROUTER SETUP
 // ============================================================
 
-// RegisterRoutes enregistre les routes du wallet handler
 func (h *WalletHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/", h.GetWallet)
 	r.Get("/freeze-status", h.GetFreezeStatus)
