@@ -86,22 +86,22 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 			Str("shop_name", shop.Name).
 			Str("kyc_status", string(shop.KYCStatus)).
 			Int64("amount_cents", req.AmountCents).
-			Msg("❌ Retrait bloqué : KYC non vérifié")
+			Msg("Retrait bloque : KYC non verifie")
 
 		var message string
 		switch shop.KYCStatus {
 		case entity.ShopKYCStatusUnverified:
-			message = "Vérification KYC requise pour les retraits. Veuillez soumettre votre pièce d'identité et le registre de commerce."
+			message = "Verification KYC requise pour les retraits. Veuillez soumettre votre piece d'identite et le registre de commerce."
 		case entity.ShopKYCStatusPending:
-			message = "Vos documents KYC sont en cours d'examen. Les retraits seront disponibles une fois la vérification terminée."
+			message = "Vos documents KYC sont en cours d'examen. Les retraits seront disponibles une fois la verification terminee."
 		case entity.ShopKYCStatusRejected:
 			if shop.KYCRejectionReason != nil {
-				message = fmt.Sprintf("Votre KYC a été rejeté : %s. Veuillez renvoyer des documents corrigés.", *shop.KYCRejectionReason)
+				message = fmt.Sprintf("Votre KYC a ete rejete : %s. Veuillez renvoyer des documents corriges.", *shop.KYCRejectionReason)
 			} else {
-				message = "Votre KYC a été rejeté. Veuillez renvoyer des documents corrigés pour débloquer les retraits."
+				message = "Votre KYC a ete rejete. Veuillez renvoyer des documents corriges pour debloquer les retraits."
 			}
 		default:
-			message = "Vérification KYC marchand requise pour les retraits."
+			message = "Verification KYC marchand requise pour les retraits."
 		}
 
 		return nil, fmt.Errorf("%s (statut actuel : %s)", message, shop.KYCStatus)
@@ -110,16 +110,17 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	logger.Debug().
 		Str("shop_id", shop.ID.String()).
 		Str("kyc_status", string(shop.KYCStatus)).
-		Msg("✅ KYC vérifié, retrait autorisé")
+		Msg("KYC verifie, retrait autorise")
 
 	// ============================================================
 	// Phase 2 : retrait UNIQUEMENT sur available = balance - held
+	// + anti-fraude : aucun retrait tant que debt_cents > 0
 	// ============================================================
 	if req.AmountCents <= 0 {
-		return nil, fmt.Errorf("Le montant du retrait doit être positif")
+		return nil, fmt.Errorf("Le montant du retrait doit etre positif")
 	}
 
-	// Fail-fast UX (garde atomique réelle dans DebitWalletUsecase sous FOR UPDATE).
+	// Fail-fast UX (garde atomique reelle dans DebitWalletUsecase sous FOR UPDATE).
 	if uc.walletRepo != nil {
 		wallet, err := uc.walletRepo.FindByShopID(ctx, shop.ID.String())
 		if err != nil {
@@ -130,24 +131,40 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		if wallet.IsFrozen {
 			logger.Warn().
 				Str("shop_id", shop.ID.String()).
-				Msg("❌ Retrait bloqué : portefeuille gelé")
+				Msg("Retrait bloque : portefeuille gele")
 			return nil, fmt.Errorf(
-				"Retrait impossible : votre portefeuille est temporairement gelé. Contactez le support si besoin",
+				"Retrait impossible : votre portefeuille est temporairement gele. Contactez le support si besoin",
+			)
+		}
+
+		// Anti-fraude post-clawback : dette residuelle bloque tout retrait
+		// (meme si balance_cents > amount). Les prochains credits (auto-release)
+		// doivent d'abord rembourser via CreditWithDebtSweep.
+		if wallet.DebtCents > 0 {
+			logger.Warn().
+				Str("shop_id", shop.ID.String()).
+				Int64("debt_cents", wallet.DebtCents).
+				Int64("balance_cents", wallet.BalanceCents).
+				Int64("requested", req.AmountCents).
+				Msg("Retrait bloque : dette residuelle")
+			return nil, fmt.Errorf(
+				"Retrait impossible : une dette residuelle de %d XOF doit etre remboursee avant tout retrait (solde : %d XOF)",
+				wallet.DebtCents/100, wallet.BalanceCents/100,
 			)
 		}
 
 		available := wallet.AvailableCents()
 
-		// Solde ledger ≤ 0 (après clawback / dette) → aucun retrait possible
+		// Solde ledger <= 0 (apres clawback / dette) -> aucun retrait possible
 		if wallet.BalanceCents <= 0 || available <= 0 {
 			logger.Warn().
 				Str("shop_id", shop.ID.String()).
 				Int64("balance_cents", wallet.BalanceCents).
 				Int64("held_cents", wallet.HeldCents).
 				Int64("available_cents", available).
-				Msg("❌ Retrait bloqué : solde disponible nul ou négatif")
+				Msg("Retrait bloque : solde disponible nul ou negatif")
 			return nil, fmt.Errorf(
-				"Solde insuffisant pour un retrait (disponible : %d XOF, solde : %d XOF, gelé : %d XOF)",
+				"Solde insuffisant pour un retrait (disponible : %d XOF, solde : %d XOF, gele : %d XOF)",
 				available/100, wallet.BalanceCents/100, wallet.HeldCents/100,
 			)
 		}
@@ -159,9 +176,9 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 				Int64("balance_cents", wallet.BalanceCents).
 				Int64("held_cents", wallet.HeldCents).
 				Int64("available_cents", available).
-				Msg("❌ Retrait bloqué : fonds insuffisants (held inclus)")
+				Msg("Retrait bloque : fonds insuffisants (held inclus)")
 			return nil, fmt.Errorf(
-				"Solde disponible insuffisant : demandé %d XOF, disponible %d XOF (solde %d XOF, dont %d XOF gelés)",
+				"Solde disponible insuffisant : demande %d XOF, disponible %d XOF (solde %d XOF, dont %d XOF geles)",
 				req.AmountCents/100, available/100, wallet.BalanceCents/100, wallet.HeldCents/100,
 			)
 		}
@@ -170,7 +187,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	}
 
 	// ============================================================
-	// Débit wallet (ledger) — garde atomique held dans DebitWalletUsecase
+	// Debit wallet (ledger) — garde atomique held dans DebitWalletUsecase
 	// ============================================================
 	if uc.debitWalletUC == nil {
 		return nil, fmt.Errorf("debit wallet usecase not configured")
@@ -189,7 +206,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("Fonds insuffisants ou erreur portefeuille : %w", err)
 	}
 
-	// 3. Entité Withdrawal
+	// 3. Entite Withdrawal
 	withdrawal, err := entity.NewWithdrawal(
 		shop.ID,
 		req.AmountCents,
