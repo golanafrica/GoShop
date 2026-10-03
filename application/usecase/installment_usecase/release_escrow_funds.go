@@ -3,10 +3,13 @@ package installmentusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,6 +27,7 @@ type ReleaseEscrowFundsUsecase struct {
 	txManager          repository.TxManager
 	orderRepo          repository.OrderRepository
 	walletRepo         repository.MerchantWalletRepository
+	txnRepo            repository.WalletTransactionRepository // audit debt_sweep
 	commissionRateRepo repository.CommissionRateRepository
 }
 
@@ -41,6 +45,12 @@ func NewReleaseEscrowFundsUsecase(
 	}
 }
 
+// WithTxnRepo injecte le repo ledger (optionnel, pour debt_sweep audit).
+func (uc *ReleaseEscrowFundsUsecase) WithTxnRepo(r repository.WalletTransactionRepository) *ReleaseEscrowFundsUsecase {
+	uc.txnRepo = r
+	return uc
+}
+
 // Execute libère le held installment, prélève la commission plateforme,
 // puis applique un debt sweep sur le disponible (balance - held).
 //
@@ -48,6 +58,7 @@ func NewReleaseEscrowFundsUsecase(
 //  1. ReleaseHeld(total)     → held ↓, disponible ↑ (balance inchangée)
 //  2. Balance -= commission  → part plateforme
 //  3. Sweep dette            → min(debt, available) : DebtCents ↓ et BalanceCents ↓
+//  4. Ledger debt_sweep si swept > 0
 //
 // Pas de CreditWithDebtSweep ici : les fonds sont déjà dans balance (held).
 func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string) (*ReleaseResponse, error) {
@@ -119,8 +130,6 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 	}
 
 	// 7. Debt sweep sur le disponible (après commission)
-	//    Même sémantique que payer une dette avec du cash libéré :
-	//    DebtCents ↓ et BalanceCents ↓ du montant swept.
 	var swept int64
 	if wallet.DebtCents > 0 {
 		available := wallet.AvailableCents()
@@ -144,6 +153,44 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 
 	if err := walletRepoTx.Update(ctx, wallet); err != nil {
 		return nil, fmt.Errorf("échec de la mise à jour du portefeuille après libération: %w", err)
+	}
+
+	// 8. Audit ledger debt_sweep
+	if swept > 0 && uc.txnRepo != nil {
+		sweepRefType := "debt_sweep"
+		sweepRefID := orderID
+		sweepDesc := fmt.Sprintf(
+			"Debt sweep on installment release order=%s total=%d commission=%d swept=%d",
+			orderID, totalCents, commissionCents, swept,
+		)
+		sweepAmt := -swept
+		sweepTxn := &entity.WalletTransaction{
+			ID:                uuid.New().String(),
+			ShopID:            shopID,
+			TransactionType:   entity.WalletTxDebtSweep,
+			AmountCents:       sweepAmt,
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     &sweepRefType,
+			ReferenceID:       &sweepRefID,
+			Description:       &sweepDesc,
+			Status:            entity.WalletTxCompleted,
+		}
+
+		txnRepoTx := uc.txnRepo
+		if withTX, ok := interface{}(uc.txnRepo).(interface {
+			WithTX(tx repository.Tx) repository.WalletTransactionRepository
+		}); ok {
+			txnRepoTx = withTX.WithTX(tx)
+		}
+
+		if err := txnRepoTx.Create(ctx, sweepTxn); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !(strings.Contains(msg, "duplicate key") ||
+				strings.Contains(msg, "unique constraint") ||
+				strings.Contains(msg, "23505")) {
+				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
