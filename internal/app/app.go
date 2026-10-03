@@ -974,7 +974,9 @@ func (a *App) setupRouter() {
 	)
 
 	getInstallmentsUC := installmentusecase.NewGetInstallmentsUsecase(orderInstallmentRepo)
-	releaseEscrowFundsUC := installmentusecase.NewReleaseEscrowFundsUsecase(txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo)
+	releaseEscrowFundsUC := installmentusecase.NewReleaseEscrowFundsUsecase(
+		txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo,
+	).WithTxnRepo(walletTxnRepo)
 
 	// 🆕 v5.3.0 : Dashboard Marchand Usecase
 	getMerchantDashboardUC := installmentusecase.NewGetMerchantDashboardUsecase(
