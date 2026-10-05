@@ -961,7 +961,7 @@ func (a *App) setupRouter() {
 	customerReliabilityHandler := customerreliabilityhandler.NewCustomerReliabilityHandler(calculateReliabilityScoreUC)
 	a.Logger.Info().Msg("✅ v5.2.0 Customer Reliability Score usecase & handler initialized")
 	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
-	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneService)
+	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneRepo)
 
 	// 🆕 v5.2.0 : Create Installment Order Usecase (avec vérification du score de fiabilité)
 	createInstallmentOrderUC := installmentusecase.NewCreateInstallmentOrderUsecase(

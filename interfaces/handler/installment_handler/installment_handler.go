@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	installment_dto "Goshop/application/dto/installment_dto" // 🆕 Import du package DTO
+	installment_dto "Goshop/application/dto/installment_dto"
 	installmentusecase "Goshop/application/usecase/installment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
@@ -33,7 +33,6 @@ type ReleaseEscrowUC interface {
 	Execute(ctx context.Context, orderID string) (*installmentusecase.ReleaseResponse, error)
 }
 
-// 🆕 v5.3.0 : Interface pour le Dashboard Marchand (corrigée avec le bon package DTO)
 type GetMerchantDashboardUC interface {
 	Execute(ctx context.Context, shopID string) (*installment_dto.MerchantInstallmentDashboardResponse, []*installment_dto.InstallmentOrderSummary, error)
 }
@@ -47,28 +46,32 @@ type InstallmentHandler struct {
 	createOrderUC          *installmentusecase.CreateInstallmentOrderUsecase // 🆕 AJOUTÉ
 	getInstallmentsUC      GetInstallmentsUC
 	releaseEscrowUC        ReleaseEscrowUC
-	getMerchantDashboardUC GetMerchantDashboardUC // 🆕 v5.3.0
+	getMerchantDashboardUC GetMerchantDashboardUC
 }
 
 func NewInstallmentHandler(
 	configurePlanUC ConfigurePlanUC,
-	createOrderUC *installmentusecase.CreateInstallmentOrderUsecase, // 🆕 AJOUTÉ
+	createOrderUC *installmentusecase.CreateInstallmentOrderUsecase,
 	getInstallmentsUC GetInstallmentsUC,
 	releaseEscrowUC ReleaseEscrowUC,
-	getMerchantDashboardUC GetMerchantDashboardUC, // 🆕 v5.3.0
+	getMerchantDashboardUC GetMerchantDashboardUC,
 ) *InstallmentHandler {
 	return &InstallmentHandler{
 		configurePlanUC:        configurePlanUC,
 		createOrderUC:          createOrderUC,
 		getInstallmentsUC:      getInstallmentsUC,
 		releaseEscrowUC:        releaseEscrowUC,
-		getMerchantDashboardUC: getMerchantDashboardUC, // 🆕 v5.3.0
+		getMerchantDashboardUC: getMerchantDashboardUC,
 	}
 }
 
 func (h *InstallmentHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/products/{product_id}/installment-plan", middl.ErrorHandler(h.ConfigurePlan))
 	r.Get("/products/{product_id}/installment-plan", middl.ErrorHandler(h.GetPlan))
+
+	// 🆕 AJOUT : Endpoint pour créer une commande en tranches
+	r.Post("/orders/installment", middl.ErrorHandler(h.CreateInstallmentOrder))
+
 	r.Get("/orders/{order_id}/installments", middl.ErrorHandler(h.GetInstallments))
 	r.Post("/orders/{order_id}/release-escrow", middl.ErrorHandler(h.ReleaseEscrow))
 
@@ -92,7 +95,7 @@ func (h *InstallmentHandler) ConfigurePlan(w http.ResponseWriter, r *http.Reques
 	var req struct {
 		NbTranches       int    `json:"nb_tranches"`
 		DelaiJours       int    `json:"delai_jours"`
-		DeliveryZoneCode string `json:"delivery_zone_code"` // 🆕 v5.1.0
+		DeliveryZoneCode string `json:"delivery_zone_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		logger.Error().Err(err).Msg("Invalid JSON payload for installment plan")
@@ -103,7 +106,7 @@ func (h *InstallmentHandler) ConfigurePlan(w http.ResponseWriter, r *http.Reques
 		ProductID:        productID,
 		NbTranches:       req.NbTranches,
 		DelaiJours:       req.DelaiJours,
-		DeliveryZoneCode: req.DeliveryZoneCode, // 🆕 v5.1.0
+		DeliveryZoneCode: req.DeliveryZoneCode,
 	})
 	duration := time.Since(start).Seconds()
 
@@ -145,6 +148,59 @@ func (h *InstallmentHandler) GetPlan(w http.ResponseWriter, r *http.Request) err
 	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{"success": true, "plan": plan})
+	return nil
+}
+
+// ============================================================
+// 🆕 POST /api/orders/installment
+// ============================================================
+func (h *InstallmentHandler) CreateInstallmentOrder(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return utils.NewAppError("UNAUTHORIZED", "Boutique non identifiée", http.StatusUnauthorized)
+	}
+
+	var req struct {
+		CustomerID    string `json:"customer_id"`
+		PaymentMethod string `json:"payment_method"`
+		Items         []struct {
+			ProductID  string `json:"product_id"`
+			Quantity   int    `json:"quantity"`
+			PriceCents int64  `json:"price_cents"`
+		} `json:"items"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error().Err(err).Msg("Invalid JSON payload for installment order")
+		return utils.ErrInvalidPayload
+	}
+
+	if len(req.Items) == 0 {
+		return utils.NewAppError("INVALID_PAYLOAD", "Au moins un article est requis", http.StatusBadRequest)
+	}
+
+	var items []*entity.OrderItem
+	var totalCents int64
+	for _, item := range req.Items {
+		items = append(items, &entity.OrderItem{
+			ProductID:  item.ProductID,
+			Quantity:   item.Quantity,
+			PriceCents: item.PriceCents,
+		})
+		totalCents += item.PriceCents * int64(item.Quantity)
+	}
+
+	order, err := h.createOrderUC.Execute(ctx, shop.ID.String(), req.CustomerID, totalCents, items)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to create installment order")
+		return utils.NewAppError("CREATE_ORDER_FAILED", err.Error(), http.StatusBadRequest)
+	}
+
+	logger.Info().Str("order_id", order.ID).Msg("Installment order created successfully")
+	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{"success": true, "order": order})
 	return nil
 }
 
@@ -209,7 +265,6 @@ func (h *InstallmentHandler) GetMerchantDashboard(w http.ResponseWriter, r *http
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Récupérer la boutique depuis le contexte (injecté par middl.TenantResolver)
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Shop not found in context")

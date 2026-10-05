@@ -6,26 +6,26 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
-	"Goshop/domain/service"
+	"Goshop/domain/tenant"
 
 	"github.com/rs/zerolog/log"
 )
 
 type ConfigureInstallmentPlanUsecase struct {
-	planRepo        repository.InstallmentPlanRepository
-	productRepo     repository.ProductRepository
-	deliveryZoneSvc service.DeliveryZoneService // 🆕 Injecté
+	planRepo         repository.InstallmentPlanRepository
+	productRepo      repository.ProductRepository
+	deliveryZoneRepo repository.DeliveryZoneRepository // 🆕 Injecté pour récupérer l'UUID de la zone
 }
 
 func NewConfigureInstallmentPlanUsecase(
 	planRepo repository.InstallmentPlanRepository,
 	productRepo repository.ProductRepository,
-	deliveryZoneSvc service.DeliveryZoneService, // 🆕 Ajouté
+	deliveryZoneRepo repository.DeliveryZoneRepository, // 🆕 Remplace deliveryZoneSvc
 ) *ConfigureInstallmentPlanUsecase {
 	return &ConfigureInstallmentPlanUsecase{
-		planRepo:        planRepo,
-		productRepo:     productRepo,
-		deliveryZoneSvc: deliveryZoneSvc,
+		planRepo:         planRepo,
+		productRepo:      productRepo,
+		deliveryZoneRepo: deliveryZoneRepo,
 	}
 }
 
@@ -39,29 +39,39 @@ type ConfigurePlanRequest struct {
 func (uc *ConfigureInstallmentPlanUsecase) Execute(ctx context.Context, req ConfigurePlanRequest) (*entity.InstallmentPlan, error) {
 	log.Info().Str("product_id", req.ProductID).Msg("Configuring installment plan")
 
-	_, err := uc.productRepo.FindByID(ctx, req.ProductID)
+	// 1. Récupérer le ShopID du contexte (Multi-tenant)
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("contexte multi-tenant manquant: %w", err)
+	}
+
+	_, err = uc.productRepo.FindByID(ctx, req.ProductID)
 	if err != nil {
 		return nil, fmt.Errorf("produit introuvable ou accès non autorisé: %w", err)
 	}
 
-	// 🆕 Récupérer le délai dynamique depuis le service de zone
+	// 2. Récupérer le délai dynamique et l'ID de la zone depuis le repository
 	releaseDelayDays := 7 // Valeur par défaut de secours
+	var deliveryZoneID *string = nil
+
 	if req.DeliveryZoneCode != "" {
-		delay, err := uc.deliveryZoneSvc.GetInstallmentReleaseDelay(ctx, req.DeliveryZoneCode)
-		if err == nil {
-			releaseDelayDays = delay
+		zone, err := uc.deliveryZoneRepo.FindByCode(ctx, req.DeliveryZoneCode)
+		if err == nil && zone != nil {
+			deliveryZoneID = &zone.ID // 🆕 On stocke l'UUID, pas le code texte
+			releaseDelayDays = zone.InstallmentReleaseDelayDays
 		} else {
 			log.Warn().Err(err).Str("zone_code", req.DeliveryZoneCode).Msg("Fallback to default release delay")
 		}
 	}
 
-	plan, err := entity.NewInstallmentPlan(req.ProductID, "", req.NbTranches, req.DelaiJours)
+	// 🆕 CORRECTION CRITIQUE : Passer le vrai ShopID au lieu de ""
+	plan, err := entity.NewInstallmentPlan(req.ProductID, shop.ID.String(), req.NbTranches, req.DelaiJours)
 	if err != nil {
 		return nil, fmt.Errorf("configuration invalide: %w", err)
 	}
 
-	// 🆕 Assigner les nouveaux champs
-	plan.DeliveryZoneID = &req.DeliveryZoneCode
+	// 🆕 Assigner l'ID de la zone (UUID) et le délai
+	plan.DeliveryZoneID = deliveryZoneID
 	plan.InstallmentReleaseDelayDays = releaseDelayDays
 
 	existingPlan, _ := uc.planRepo.GetByProductID(ctx, req.ProductID)
