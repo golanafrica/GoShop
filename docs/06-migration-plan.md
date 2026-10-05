@@ -1,12 +1,15 @@
 
 
+## Fichier complet prêt à coller
+
 ```markdown
 # 🗄️ Plan de Migration de Base de Données (GoShop)
 
-**Version** : v4.5.0  
-**Dernière mise à jour** : 2026-07-21  
-**Outil** : `golang-migrate/migrate`  
-**SGBD** : PostgreSQL 16
+**Version** : v5.1.0  
+**Dernière mise à jour** : 2026-10-03  
+**Outil** : `golang-migrate/migrate` (ou runner équivalent du projet)  
+**SGBD** : PostgreSQL 16  
+**État schéma finance** : jusqu’à **`058_merchant_wallet_debt_cents.sql`**
 
 ---
 
@@ -15,146 +18,204 @@
 1. [Vue d'ensemble](#1-vue-densemble)
 2. [Convention de nommage](#2-convention-de-nommage)
 3. [Workflow de développement (Local)](#3-workflow-de-développement-local)
-4. [Règles d'Or (Best Practices)](#4-règles-dor-best-practices)
+4. [Règles d'Or (Best Practices)](#4-règles-dor-best-practiques)
 5. [Déploiement en Production](#5-déploiement-en-production)
 6. [Stratégie de Rollback](#6-stratégie-de-rollback)
-7. [Historique des migrations récentes (v4.x)](#7-historique-des-migrations-récentes-v4x)
+7. [Historique des migrations (extrait critique)](#7-historique-des-migrations-extrait-critique)
+8. [Wallet / debt — points d’attention](#8-wallet--debt--points-dattention)
 
 ---
 
 ## 1. Vue d'ensemble
 
-Ce document définit les standards et le processus pour gérer les évolutions du schéma de la base de données PostgreSQL de GoShop. 
+Standards pour faire évoluer le schéma PostgreSQL de GoShop.
 
-L'objectif est de garantir :
-- ✅ **Zéro temps d'arrêt** (Zero-downtime deployments).
-- ✅ **Réversibilité** (Possibilité de rollback en cas d'échec).
-- ✅ **Idempotence** (Exécuter une migration plusieurs fois ne doit pas causer d'erreur).
-- ✅ **Traçabilité** (Chaque changement est versionné dans Git).
+Objectifs :
+- **Zéro / faible downtime** quand c’est possible
+- **Traçabilité** (chaque changement versionné dans Git)
+- **Idempotence** (`IF NOT EXISTS`, `DO $$ … $$` pour contraintes)
+- **Réversibilité** documentée (script correctif **nouveau**, pas rewrite d’une migration déjà appliquée)
+
+Dossier : `migrations/` à la racine du repo.
 
 ---
 
 ## 2. Convention de nommage
 
-Nous utilisons le format standard de `golang-migrate` avec des fichiers séparés pour la montée (`up`) et la descente (`down`) en version.
+### Format réel du dépôt (à respecter)
 
-**Format** : `VERSION_NUMÉRIQUE_nom_descriptif.{up|down}.sql`
+```text
+NNN_description_snake_case.sql
+```
 
-**Exemples** :
-- `033_add_user_id_to_customers.up.sql`
-- `033_add_user_id_to_customers.down.sql`
-- `034_fix_users_role_check.up.sql`
-- `034_fix_users_role_check.down.sql`
+Exemples présents sur `main` :
+- `033_add_user_id_to_customers.sql`
+- `045_add_wallet_held_balance.sql`
+- `048_wallet_credit_idempotency.sql`
+- `058_merchant_wallet_debt_cents.sql`
 
-> ⚠️ **Règle** : La version numérique doit être séquentielle et unique. Ne jamais réutiliser un numéro de version, même si une migration a été annulée.
+Variants acceptés historiquement : `019b_…`, `021b_…`, `025b_…`, `026b_…`, `026c_…`.
+
+> **Règle** : numéro **séquentiel unique**. Ne jamais réutiliser un `NNN` déjà mergé, même après rollback.
+
+### Note sur `.up.sql` / `.down.sql`
+
+La doc historique recommandait des paires `golang-migrate` classiques. **Le dépôt utilise majoritairement un seul fichier `.sql` par version.**  
+Si vous introduisez des paires `.up` / `.down`, alignez le runner CI et documentez-le ; ne mélangez pas les styles sans raison.
 
 ---
 
 ## 3. Workflow de développement (Local)
 
-### Étape 1 : Créer les fichiers de migration
-Utiliser la CLI `migrate` pour générer les fichiers vides :
+### Étape 1 — Créer le fichier
 
 ```bash
-# Installer la CLI (si ce n'est pas déjà fait)
-# go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-
-# Créer une nouvelle migration (ex: ajout d'un index)
-migrate create -ext sql -dir migrations -seq add_index_on_customer_email
+# Prochain numéro = max(NNN) dans migrations/ + 1
+# Ex. après 058 → 059_add_xxx.sql
 ```
 
-### Étape 2 : Rédiger le SQL
-Remplir les fichiers `.up.sql` (application) et `.down.sql` (annulation).
+Ou CLI (si configurée pour ce format) :
 
-**Exemple (`035_add_index.up.sql`)** :
+```bash
+migrate create -ext sql -dir migrations -seq add_xxx
+```
+
+### Étape 2 — SQL idempotent
+
 ```sql
--- Utilisation de CONCURRENTLY pour éviter de verrouiller la table en production
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_customers_email_lower 
-ON customers (LOWER(email));
+ALTER TABLE merchant_wallets
+  ADD COLUMN IF NOT EXISTS debt_cents BIGINT NOT NULL DEFAULT 0;
+
+-- Contraintes nommées
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'merchant_wallets_debt_cents_non_negative'
+  ) THEN
+    ALTER TABLE merchant_wallets
+      ADD CONSTRAINT merchant_wallets_debt_cents_non_negative CHECK (debt_cents >= 0);
+  END IF;
+END $$;
 ```
 
-**Exemple (`035_add_index.down.sql`)** :
-```sql
-DROP INDEX IF EXISTS idx_customers_email_lower;
-```
-
-### Étape 3 : Tester localement
-Appliquer la migration sur ta base de développement (`goshop_db`) :
+### Étape 3 — Appliquer & tester
 
 ```bash
 migrate -path migrations -database "postgres://postgres:password@localhost:5432/goshop_db?sslmode=disable" up
-```
 
-Vérifier que les tests passent toujours :
-```bash
 go test ./... -v
+# + smoke finance si schéma wallet touché
 ```
 
-### Étape 4 : Commit et Push
-Une fois validé, commiter les deux fichiers (`.up` et `.down`) dans Git.
+### Étape 4 — Commit
+
+Commiter **uniquement** le nouveau fichier (jamais modifier une migration déjà sur `main` / prod).
 
 ---
 
 ## 4. Règles d'Or (Best Practices)
 
-Pour garantir la stabilité d'une application Fintech, respectez scrupuleusement ces règles :
-
-1. **Idempotence** : Utilisez toujours `IF NOT EXISTS` pour les `CREATE TABLE`, `CREATE INDEX`, ou `ALTER TABLE ADD COLUMN`.
-2. **Pas de verrouillage de table (Locking)** : Pour les grosses tables, utilisez toujours `CREATE INDEX CONCURRENTLY`.
-3. **Éviter les opérations destructives** : 
-   - Ne jamais faire de `DROP COLUMN` ou `DROP TABLE` dans une première migration. 
-   - Procéder en 2 étapes : 1) L'application ignore la colonne. 2) Une migration ultérieure la supprime après vérification.
-4. **Valeurs par défaut** : Lors de l'ajout d'une colonne `NOT NULL` sur une table existante, fournir toujours une `DEFAULT VALUE` pour éviter les erreurs sur les lignes existantes.
-5. **Pas de logique métier complexe en SQL** : Les migrations de données (Data Migrations) lourdes doivent être faites via des scripts Go externes ou des batchs, pas dans une transaction SQL unique qui pourrait timeout.
-6. **Contraintes de vérification (CHECK)** : Toujours nommer explicitement les contraintes (ex: `CONSTRAINT users_role_check CHECK (...)`) pour faciliter leur modification ou suppression future.
+1. **Idempotence** : `IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, blocs `DO $$` pour CHECK / UNIQUE.
+2. **Index lourds** : préférer `CREATE INDEX CONCURRENTLY` (hors transaction unique si le runner l’exige — adapter).
+3. **Pas de DROP destructif en une seule étape** : d’abord arrêter d’écrire la colonne côté app, puis migration de suppression plus tard.
+4. **NOT NULL sur table peuplée** : toujours `DEFAULT`.
+5. **Pas de data migration massive dans le même fichier** que le DDL critique (scripts Go / batch à part).
+6. **Contraintes nommées** explicitement.
+7. **Finance** : toute colonne wallet (`held_cents`, `debt_cents`) doit rester cohérente avec le ledger `wallet_transactions` et les usecases (voir [12-wallet-debt-sweep.md](12-wallet-debt-sweep.md)).
 
 ---
 
 ## 5. Déploiement en Production
 
-Le déploiement des migrations en production (`goshop_db` de prod) doit suivre ce processus strict :
+1. **Backup** complet avant `up`.
+2. Fenêtre de faible trafic si tables chaudes (`orders`, `payments`, `merchant_wallets`, `wallet_transactions`).
+3. Exécution :
 
-1. **Backup** : Effectuer un snapshot/backup complet de la base de données avant toute opération.
-2. **Fenêtre de maintenance** : Si la migration touche à des tables critiques (ex: `orders`, `payments`), la lancer pendant une période de faible trafic.
-3. **Exécution via CI/CD ou Job Kubernetes** : 
-   ```bash
-   migrate -path migrations -database "postgres://USER:PASS@HOST:5432/goshop_db?sslmode=require" up
-   ```
-4. **Vérification** : Vérifier les logs pour s'assurer que le statut est `SUCCESS` et que la version de la table `schema_migrations` a été incrémentée.
+```bash
+migrate -path migrations -database "postgres://USER:PASS@HOST:5432/goshop_db?sslmode=require" up
+```
+
+4. Vérifier `schema_migrations` (ou équivalent) + logs app (crédits, withdrawals).
 
 ---
 
 ## 6. Stratégie de Rollback
 
-Si une migration `.up.sql` échoue en production :
-
-1. **Ne pas paniquer** : `golang-migrate` annule automatiquement la transaction si une erreur survient *pendant* l'exécution du fichier `.up.sql`.
-2. **Si la migration est marquée comme "applied" mais est corrompue** :
-   - Corriger le fichier `.up.sql` localement.
-   - Créer une **nouvelle** migration corrective (ex: `036_fix_previous_migration.sql`). Ne jamais modifier une migration déjà poussée en production.
-3. **Rollback manuel (Dernier recours)** :
-   ```bash
-   migrate -path migrations -database "postgres://..." down 1
-   ```
-   > ⚠️ **Attention** : La commande `down` n'est fiable que si le fichier `.down.sql` a été rigoureusement testé en local et qu'aucune donnée n'a été corrompue entre-temps.
+1. Échec **pendant** le `.sql` : en général rollback transactionnel si le fichier est une seule transaction.
+2. Migration **déjà applied** mais incorrecte : **nouvelle** migration corrective (`059_fix_…`), **jamais** rewrite de `058_…` en prod.
+3. `migrate down 1` seulement si un script down fiable existe et a été testé en staging — **dernier recours**.
 
 ---
 
-## 7. Historique des migrations récentes (v4.x)
+## 7. Historique des migrations (extrait critique)
 
-| Version | Fichier | Description | Impact |
-|---------|---------|-------------|--------|
-| `032` | `add_product_full_text_search` | Ajout d'index GIN pour la recherche plein texte sur les produits. | Performance |
-| `033` | `add_user_id_to_customers` | Ajout de la colonne `user_id` (VARCHAR) pour lier l'entité Customer à l'entité User authentifiée. | Architecture / Sécurité |
-| `034` | `fix_users_role_check` | Correction de la contrainte `CHECK` sur la table `users` pour autoriser explicitement le rôle `'user'` lors des inscriptions publiques. | Sécurité / Bugfix |
+### v4.5 — fondation doc historique
+
+| Version | Fichier | Description |
+| ------- | ------- | ----------- |
+| `032` | `add_product_full_text_search` | Index GIN recherche produits |
+| `033` | `add_user_id_to_customers` | Lien Customer ↔ User (WS) |
+| `034` | `fix_users_role_check` | Rôle `user` à l’inscription |
+
+### Post v4.5 — performance, webhooks, litiges, wallet
+
+| Version | Fichier | Description |
+| ------- | ------- | ----------- |
+| `035` | `add_missing_performance_indexes` | Indexes perf |
+| `036`–`037` | webhook idempotence | Anti double-traitement webhooks |
+| `038` | `add_provider_fees` | Frais provider |
+| `039`–`040` | disputes | Table litiges + `shop_id` |
+| `041` | customer email unique | Contrainte email |
+| `042`–`044` | tontine | Intent provider, min participants, commissions |
+| `045` | **`add_wallet_held_balance`** | **`held_cents`** sur merchant_wallets |
+| `046` | voucher held amount | Hold tontine voucher |
+| `047` | **`add_released_status_to_escrow`** | Statut escrow `released` |
+| `048` | **`wallet_credit_idempotency`** | Idempotence crédits wallet (anti double-crédit) |
+| `049` | `idempotency_keys` | Clés idempotence HTTP / finance |
+| `050` | `installment_escrow_refactor` | Escrow / installment |
+| `051`–`052` | **delivery_zones** | Zones + `delivery_zone_id` |
+| `053` | customer_reliability_scores | Scores fiabilité |
+| `054` | tontine group name | Nom groupe |
+| `055` | notifications | Table notifications |
+| `056` | platform_finance_tables | Tables finance plateforme |
+| `057` | **`wallet_tx_clawback`** | Types / support ledger **clawback** |
+| `058` | **`merchant_wallet_debt_cents`** | Colonne **`debt_cents`** + contraintes (≥ 0) |
+
+Liste exhaustive : `ls migrations/` sur le clone.
+
+---
+
+## 8. Wallet / debt — points d’attention
+
+Après **058** (et code v5.1) :
+
+| Colonne / objet | Rôle |
+|-----------------|------|
+| `merchant_wallets.held_cents` | Fonds non disponibles |
+| `merchant_wallets.debt_cents` | Dette résiduelle post-clawback (**≥ 0**) |
+| `wallet_transactions` | Audit : vente, clawback, debt_add, debt_sweep, payout… |
+| Index unique crédit (048) | Empêche double crédit même référence |
+
+**Ne pas** :
+- Autoriser `debt_cents < 0` en SQL
+- Supprimer les index d’idempotence crédit sans plan de remplacement
+- Migrer des soldes « négatifs legacy » vers `debt_cents` sans script de data + validation E2E
+
+Doc métier : [12-wallet-debt-sweep.md](12-wallet-debt-sweep.md)
 
 ---
 
 ## 📚 Références
 
-- [Documentation officielle golang-migrate](https://github.com/golang-migrate/migrate)
-- [PostgreSQL: Safe Operations For High Volume PostgreSQL](https://www.braintreepayments.com/blog/safe-operations-for-high-volume-postgresql/)
-- [Zero Downtime Migrations](https://github.com/golang-migrate/migrate/blob/master/FAQ.md#how-do-i-migrate-a-database-with-zero-downtime)
+- [golang-migrate](https://github.com/golang-migrate/migrate)
+- [Wallet debt-sweep](12-wallet-debt-sweep.md)
+- [Modèle de données](02-domain-model.md)
+- [CHANGELOG](../CHANGELOG.md)
+- [Zero Downtime Migrations FAQ](https://github.com/golang-migrate/migrate/blob/master/FAQ.md)
+
+---
+
+**Dernière mise à jour** : 2026-10-03
 ```
 
 ---

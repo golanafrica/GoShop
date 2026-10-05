@@ -1,12 +1,7 @@
+# 📖 Glossaire (GoShop v5.1.0)
 
-
----
-
-```markdown
-# 📖 Glossaire (GoShop v4.5.0)
-
-**Version** : v4.5.0  
-**Dernière mise à jour** : 2026-07-21
+**Version** : v5.1.0  
+**Dernière mise à jour** : 2026-10-03
 
 Ce glossaire définit les termes métier, techniques et architecturaux utilisés dans le projet GoShop. Il est organisé par domaine pour faciliter la consultation.
 
@@ -26,157 +21,170 @@ Ce glossaire définit les termes métier, techniques et architecturaux utilisés
 ## 1. Concepts Métier
 
 | Terme | Définition |
-|-------|------------|
+| ----- | ---------- |
 | **Boutique (Shop)** | Espace en ligne d'un marchand, avec ses produits, commandes, paramètres. Entité racine du multi-tenant. |
 | **Marchand (Merchant)** | Propriétaire d'une boutique, gère produits, commandes, paiements. Rôle `merchant` dans le RBAC. |
 | **Client (Customer)** | Personne qui achète dans une boutique. Peut être connecté (compte `User` lié) ou anonyme. Profil isolé par `shop_id`. |
 | **Utilisateur (User)** | Identité numérique authentifiée dans le système. Peut être marchand, client, admin, etc. |
 | **Collaborateur (Collaborator)** | Utilisateur invité à gérer une boutique (rôle `shop_admin`, `manager`, `support`) ou la plateforme. |
 | **Produit (Product)** | Article vendu dans une boutique. Stocké en centimes FCFA, avec gestion de stock. |
-| **Commande (Order)** | Demande d'achat passée par un client. Possède un cycle de vie : `pending_confirmation` → `confirmed` → `delivered`. |
-| **Cash on Delivery (COD)** | Paiement à la livraison. Workflow complet avec preuve de livraison et collecte de commission automatique. |
-| **Crédit** | Paiement en plusieurs fois : acompte + échéances mensuelles. Conforme BCEAO (max 15% d'intérêt annuel). |
-| **Acompte (Down Payment)** | Premier paiement effectué à la commande (ex: 30% du total). Obligatoire pour activer un crédit. |
-| **Échéance (Installment)** | Date à laquelle une tranche de crédit doit être payée. Génère des pénalités si en retard. |
-| **Score de fiabilité** | Indicateur de la ponctualité des paiements d'un client (Excellent → Mauvaise). Détermine l'éligibilité au crédit. |
-| **Plan de paiement (Credit Plan)** | Template défini par le marchand (ex: "3 fois sans frais"). Paramètres : `down_payment_pct`, `installments_count`, `interest_rate_pct`. |
-| **Tontine** | Système d'épargne collective permettant à un groupe de cotiser pour acquérir un bien physique à tour de rôle. |
-| **Voucher** | Bon de livraison numérique (12 caractères, validité 6 mois) généré à la fin d'un cycle de tontine. Mono-boutique. |
-| **Cycle (Tontine)** | Période pendant laquelle tous les participants d'une tontine paient leur cotisation. Un bénéficiaire est désigné par cycle. |
-| **Code d'invitation** | Code unique de 8 caractères alphanumériques permettant de rejoindre un groupe de tontine. |
-| **KYC (Know Your Customer)** | Processus de vérification d'identité (CNI, passeport) obligatoire pour participer à une tontine ou demander un crédit. |
-| **Commission** | Frais prélevés par GoShop sur chaque transaction (COD : 2.5%, Tontine : configurable 0-15%). |
-| **Batch (Commission)** | Regroupement de commissions collectées traité périodiquement par le scheduler. |
-| **Wallet (Portefeuille)** | Compte virtuel du marchand où sont crédités les paiements reçus. Solde en centimes FCFA. |
-| **Retrait (Withdrawal)** | Demande de transfert de fonds du wallet vers un compte Mobile Money. Nécessite KYC validé. |
+| **Commande (Order)** | Demande d'achat passée par un client. Cycle de vie typique : confirmation → livraison → (éventuel litige). |
+| **Cash on Delivery (COD)** | Paiement à la livraison. Workflow avec preuve de livraison et collecte de commission. |
+| **Crédit** | Paiement en plusieurs fois (acompte + échéances). Conforme BCEAO (max 15% d'intérêt annuel). Distinct du **paiement en tranches** escrow. |
+| **Acompte (Down Payment)** | Premier paiement à la commande (ex. 30% du total). Obligatoire pour activer un crédit. |
+| **Échéance (Installment crédit)** | Date à laquelle une tranche de **crédit BCEAO** doit être payée. Pénalités possibles en retard. |
+| **Paiement en tranches (Installment order)** | Commande payée par tranches avec fonds en **escrow** jusqu'à délai zone + livraison ; release via scheduler ou usecase dédié (v5.x). |
+| **Score de fiabilité** | Indicateur de ponctualité des paiements d'un client. Influence l'éligibilité au crédit / tranches. |
+| **Plan de paiement (Credit Plan)** | Template marchand (ex. « 3 fois sans frais ») : `down_payment_pct`, `installments_count`, `interest_rate_pct`. |
+| **Tontine** | Épargne collective pour un bien physique à tour de rôle. |
+| **Voucher** | Bon de livraison numérique (12 caractères, validité 6 mois) en fin de cycle tontine. Mono-boutique. |
+| **Cycle (Tontine)** | Période où tous les participants paient leur cotisation ; un bénéficiaire par cycle. |
+| **Code d'invitation** | Code unique 8 caractères pour rejoindre un groupe de tontine. |
+| **KYC (Know Your Customer)** | Vérification d'identité (CNI, passeport). Requis pour tontine, crédit, et **retraits** marchand. |
+| **Commission** | Frais plateforme (COD, online, tontine, etc.) — taux selon canal / config. |
+| **Batch (Commission)** | Regroupement de commissions traité par le scheduler. |
+| **Wallet (Portefeuille)** | Compte virtuel marchand (`merchant_wallets`) : `balance_cents`, `held_cents`, `debt_cents`. Montants en centimes FCFA. |
+| **Held (Fonds séquestrés)** | Partie non retirable (`held_cents`) tant que l'escrow ou le hold tontine n'est pas libéré. |
+| **Disponible (Available)** | `max(0, balance_cents − held_cents)`. Montant éligible au retrait **si** `debt_cents = 0`. |
+| **Dette résiduelle (`debt_cents`)** | Montant dû après clawback post-release si le solde ne couvrait pas tout. Toujours ≥ 0. **Bloque les retraits**. |
+| **Clawback** | Récupération des fonds déjà crédités au marchand si le client gagne un litige **après** libération escrow. Priorité : balance puis `debt_cents`. Pas de freeze automatique. |
+| **Debt sweep** | Remboursement auto de `debt_cents` sur le prochain crédit ou release (auto-release, merchant_wins, installment, tontine release_held). Ledger : `debt_sweep`. |
+| **Escrow (Séquestre)** | Fonds bloqués pour une commande jusqu'à délai zone + livraison (ou résolution litige). Statuts : `funds_held`, `disputed`, `released`, `refunded`. |
+| **Litige (Dispute)** | Contestation client. Pré-release : bloque l'auto-release. Post-release `customer_wins` : clawback + éventuelle dette. `merchant_wins` : crédit marchand (+ sweep si dette). |
+| **Auto-release** | Job scheduler qui libère l'escrow éligible (délai écoulé, pas de litige actif) et crédite le wallet avec debt sweep si besoin. |
+| **Retrait (Withdrawal)** | Transfert wallet → Mobile Money. Exige KYC validé, wallet non gelé, **`debt_cents = 0`**, montant ≤ disponible. |
+| **Withdrawal blocked** | Règle / flag API : retrait impossible si dette, gel, ou disponible ≤ 0. |
 
 ---
 
 ## 2. Architecture & Design
 
 | Terme | Définition |
-|-------|------------|
-| **Clean Architecture** | Architecture logicielle avec séparation stricte des couches : Domain → Application → Interfaces → Infrastructure. |
-| **DDD (Domain-Driven Design)** | Paradigme de conception centré sur le domaine métier. Utilise Entités, Value Objects, Agrégats, et Repositories. |
-| **Entité (Entity)** | Objet métier avec une identité unique (UUID) et un cycle de vie. Ex: `Order`, `Customer`, `Shop`. |
-| **Value Object** | Objet sans identité propre, défini uniquement par ses attributs. Ex: `Money`, `Address`. |
-| **Agrégat (Aggregate)** | Groupe d'entités liées traitées comme une unité cohérente. Ex: `Order` + `OrderItems`. |
-| **Repository** | Interface définissant les opérations de persistance pour une entité. Implémentation concrète dans l'infrastructure (PostgreSQL). |
-| **Use Case (Cas d'usage)** | Action métier spécifique orchestrant les repositories. Ex: `CreateCustomerUsecase`, `AcceptOrderUsecase`. |
-| **DTO (Data Transfer Object)** | Objet pour transférer des données entre couches (ex: requête HTTP → Use Case). Évite l'exposition des entités. |
-| **Handler** | Composant HTTP qui reçoit une requête, appelle un use case, et retourne une réponse JSON. |
-| **Middleware** | Fonction interceptant les requêtes HTTP pour ajouter un comportement transversal (auth, logs, multi-tenant). |
-| **Dependency Injection (DI)** | Pattern consistant à fournir les dépendances d'un composant depuis l'extérieur. Centralisé dans `internal/app/app.go`. |
-| **Transaction (DB)** | Opération atomique garantissant l'intégrité des données. Pattern : `BeginTx` → opérations → `Commit` / `Rollback`. |
-| **Soft Delete** | Suppression logique via un champ `deleted_at` au lieu d'une suppression physique. Permet la restauration. |
+| ----- | ---------- |
+| **Clean Architecture** | Séparation des couches : Domain → Application → Interfaces → Infrastructure. |
+| **DDD (Domain-Driven Design)** | Conception centrée domaine : Entités, Value Objects, Agrégats, Repositories. |
+| **Entité (Entity)** | Objet métier avec identité unique (UUID). Ex. : `Order`, `Customer`, `Shop`. |
+| **Value Object** | Objet sans identité propre, défini par ses attributs. Ex. : `Money`. |
+| **Agrégat (Aggregate)** | Groupe d'entités traitées comme une unité. Ex. : `Order` + `OrderItems`. |
+| **Repository** | Interface de persistance ; implémentation dans l'infrastructure (PostgreSQL). |
+| **Use Case (Cas d'usage)** | Action métier orchestrant repositories. Ex. : `CreateCustomerUsecase`. |
+| **DTO (Data Transfer Object)** | Transfert de données entre couches (requête HTTP → use case). |
+| **Handler** | Composant HTTP : requête → use case → JSON. |
+| **Middleware** | Intercepteur HTTP transversal (auth, logs, multi-tenant). |
+| **Dependency Injection (DI)** | Dépendances injectées depuis l'extérieur. Centralisé dans `internal/app/app.go`. |
+| **Transaction (DB)** | Opération atomique : `BeginTx` → ops → `Commit` / `Rollback`. |
+| **Soft Delete** | Suppression logique via `deleted_at`. |
 
 ---
 
 ## 3. Sécurité & Authentification
 
 | Terme | Définition |
-|-------|------------|
-| **JWT (JSON Web Token)** | Token d'authentification signé (HS256). Composé d'un `access_token` (15min) et d'un `refresh_token` (7j). |
-| **JWT_SECRET** | Clé secrète utilisée pour signer les JWT. **Obligatoire** et doit faire **au moins 32 caractères** (v4.5.0). |
-| **RBAC (Role-Based Access Control)** | Contrôle d'accès basé sur les rôles. 6 rôles : `super_admin`, `admin`, `merchant`, `user`, `credit_analyst`, `support_agent`. |
-| **2FA (Two-Factor Authentication)** | Authentification à deux facteurs via TOTP (Google Authenticator). Codes de récupération inclus. |
-| **TOTP (Time-based One-Time Password)** | Algorithme générant des codes à usage unique basés sur le temps. Standard pour la 2FA. |
-| **API Key** | Clé d'authentification pour intégrations tierces. Préfixe `gsk_live_...`, scopes granulaires (`read:products`, `write:orders`). |
-| **Session** | Enregistrement d'une connexion utilisateur active. Peut être révoquée individuellement ou globalement. |
-| **Bcrypt** | Algorithme de hachage de mots de passe. Coût minimum **10** imposé en production (v4.5.0). |
-| **HMAC-SHA256** | Signature cryptographique utilisée pour valider l'authenticité des webhooks de paiement. |
-| **Rate Limiting** | Limitation du nombre de requêtes par client/IP. Implémenté via Redis avec fallback mémoire. |
-| **IDOR (Insecure Direct Object Reference)** | Vulnérabilité permettant d'accéder aux ressources d'un autre utilisateur. **Mitigée en v4.5.0** par `RequireShopAccess`. |
-| **RequireShopAccess** | Middleware v4.5.0 vérifiant que l'utilisateur est propriétaire ou collaborateur de la boutique demandée. |
-| **TenantResolver** | Middleware résolvant la boutique active depuis le header `X-Shop-Slug` ou le `Host` HTTP. |
-| **CORS (Cross-Origin Resource Sharing)** | Mécanisme HTTP permettant à un frontend d'accéder à l'API depuis un domaine différent. |
-| **Recovery Middleware** | Middleware interceptant les panics Go pour éviter le crash du serveur et retourner une erreur 500 propre. |
+| ----- | ---------- |
+| **JWT (JSON Web Token)** | Token signé (HS256) : `access_token` (court) + `refresh_token` (long). |
+| **JWT_SECRET** | Clé de signature JWT. **Obligatoire**, **≥ 32 caractères** (v4.5.0). |
+| **RBAC** | Contrôle d'accès par rôles (`super_admin`, `admin`, `merchant`, `user`, etc.). |
+| **2FA (TOTP)** | Authentification à deux facteurs (Google Authenticator, codes de récupération). |
+| **API Key** | Auth intégrations tierces (`gsk_live_...`), scopes granulaires. Header uniquement (pas query string). |
+| **Session** | Connexion active ; révocable unitairement ou globalement. |
+| **Bcrypt** | Hash mots de passe ; coût minimum **10** en production. |
+| **HMAC-SHA256** | Signature des webhooks de paiement. |
+| **Rate Limiting** | Limitation de débit (Redis, fallback mémoire). |
+| **IDOR** | Accès non autorisé à une ressource par ID. Mitigé par `RequireShopAccess`. |
+| **RequireShopAccess** | Middleware : propriétaire ou collaborateur de la boutique. |
+| **TenantResolver** | Résout la boutique active (`X-Shop-Slug` ou `Host`). |
+| **CORS** | Accès cross-origin navigateur → API. |
+| **Recovery Middleware** | Capture les panics Go → HTTP 500 propre. |
 
 ---
 
 ## 4. Paiements & Finance
 
 | Terme | Définition |
-|-------|------------|
-| **Provider** | Service de paiement externe intégré (Wave, Orange Money, Moov Money, Yenga Pay). |
-| **Webhook** | Appel HTTP POST effectué par le provider pour notifier GoShop d'un changement de statut de paiement. |
-| **USSD** | Code court (ex: `#144*111#`) composé par le client pour initier un paiement Mobile Money. |
-| **Centimes FCFA** | Unité de stockage des montants. **1 FCFA = 100 centimes**. Toujours stocké en `int64` pour éviter les erreurs de virgule flottante. |
-| **Machine à états (Payment)** | Cycle de vie d'un paiement : `pending` → `processing` → `success` / `failed` / `refunded`. |
-| **Preuve de livraison (COD Proof)** | Document (photo + signature) attestant que le client a bien reçu et payé sa commande en cash. |
-| **BCEAO** | Banque Centrale des États de l'Afrique de l'Ouest. Réglemente les taux d'intérêt (max 15% annuel pour le crédit). |
-| **Réconciliation** | Processus de vérification que les transactions enregistrées correspondent aux fonds effectivement reçus. |
+| ----- | ---------- |
+| **Provider** | Service de paiement externe (Wave, Orange Money, Moov Money, Yenga Pay). |
+| **Webhook** | POST provider → GoShop pour notifier un statut de paiement. |
+| **USSD** | Code court Mobile Money (ex. `#144*111#`). |
+| **Centimes FCFA** | Unité de stockage : **1 FCFA = 100 centimes**. Toujours `int64`. |
+| **Machine à états (Payment)** | `pending` → `processing` → `success` / `failed` / `refunded`. |
+| **Preuve de livraison (COD Proof)** | Preuve que le client a reçu / payé en cash. |
+| **BCEAO** | Banque centrale UEMOA ; plafond d'intérêt crédit (ex. 15% annuel). |
+| **Réconciliation** | Alignement écritures internes ↔ fonds réellement reçus. |
+| **CreditWithDebtSweep** | Crédit wallet qui rembourse d'abord `debt_cents` avant d'augmenter le net disponible. |
+| **ApplyClawbackToDebt** | Débite la balance puis affecte le reliquat à `debt_cents` (sans freeze auto). |
+| **Ledger clawback / debt_add / debt_sweep** | Types de `wallet_transactions` pour auditer litige et recovery dette. |
 
 ---
 
 ## 5. Multi-tenant & Infrastructure
 
 | Terme | Définition |
-|-------|------------|
-| **Multi-tenant** | Architecture où plusieurs boutiques (tenants) partagent la même application et base de données. |
-| **Option B (Phase 1)** | Multi-tenant avec une colonne `shop_id` dans chaque table métier. Filtrage applicatif. |
-| **Option A (Phase 2)** | Multi-tenant avec un schéma PostgreSQL distinct par boutique (`tenant_<slug>`). Isolation physique. |
-| **Shop Slug** | Identifiant unique et lisible d'une boutique (ex: `ma-boutique`). Utilisé dans le header `X-Shop-Slug`. |
-| **Custom Domain** | Domaine personnalisé (ex: `shop.maboutique.com`) pointant vers une boutique spécifique. |
-| **Redis Pub/Sub** | Mécanisme de messagerie Redis utilisé pour diffuser les notifications WebSocket entre plusieurs instances du serveur. |
-| **WebSocket Hub** | Composant gérant les connexions WebSocket persistantes avec les clients. Scalable via Redis. |
-| **Notification Dispatcher** | Service orchestrant l'envoi de notifications via WebSocket et/ou Email selon la disponibilité. |
-| **Scheduler (Cron)** | Tâche automatisée exécutée périodiquement (collecte commissions, relances crédit, clôture tontines). |
-| **Migration (DB)** | Script SQL versionné modifiant le schéma de la base de données. Outil : `golang-migrate`. |
-| **Idempotence** | Propriété d'une opération pouvant être exécutée plusieurs fois sans changer le résultat au-delà de la première application. |
-| **Zero-downtime deployment** | Déploiement sans interruption de service. Requis pour les migrations de production. |
-| **Rollback** | Annulation d'une migration ou d'un déploiement en cas d'échec. |
+| ----- | ---------- |
+| **Multi-tenant** | Plusieurs boutiques partagent la même app et la même DB. |
+| **Option B (Phase 1)** | Isolation par colonne `shop_id` + filtrage applicatif. |
+| **Option A (Phase 2)** | Schéma PostgreSQL distinct par boutique (cible future). |
+| **ShopSlug** | Identifiant lisible unique (header `X-Shop-Slug`). |
+| **Custom Domain** | Domaine boutique (ex. `shop.maboutique.com`). |
+| **Redis Pub/Sub** | Diffusion notifications WebSocket multi-instances. |
+| **WebSocket Hub** | Gestion des connexions WS persistantes. |
+| **Notification Dispatcher** | Orchestration WS + email (+ Telegram si configuré). |
+| **Scheduler (Cron)** | Jobs périodiques : commissions, tontine, **escrow auto-release**, **installment auto-release**, relances. |
+| **Migration (DB)** | Script SQL versionné (`golang-migrate`). |
+| **Idempotence** | Réexécution sans effet de bord au-delà de la 1re application. |
+| **Zero-downtime deployment** | Déploiement sans interruption de service. |
+| **Rollback** | Annulation migration ou déploiement. |
 
 ---
 
 ## 6. Tests & Qualité
 
 | Terme | Définition |
-|-------|------------|
-| **Test unitaire** | Test isolé d'une fonction ou méthode utilisant des mocks. Rapide (< 1s). |
-| **Test d'intégration** | Test validant l'interaction entre plusieurs composants avec une vraie base de données. |
-| **Test E2E (End-to-End)** | Test simulant un scénario utilisateur complet à travers toute la stack (API + DB + Redis). |
-| **Test de charge (Load Test)** | Test de performance simulant de nombreux utilisateurs simultanés. Outil : **k6**. |
-| **Mock** | Simulation d'une dépendance (repository, service) pour isoler le code testé. Généré avec `gomock`. |
-| **Fixture** | Données de test pré-définies et réutilisables (ex: `CreateTestShop`, `CreateTestCustomer`). |
-| **Coverage (Couverture)** | Pourcentage du code exécuté par les tests. Objectif : > 80% sur le code critique. |
-| **Race Detector** | Outil Go (`go test -race`) détectant les accès concurrents non synchronisés aux variables. |
-| **Testify** | Librairie Go fournissant des assertions lisibles (`assert.NoError`, `assert.Equal`). |
-| **Conventional Commits** | Convention de nommage des commits : `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:`. |
+| ----- | ---------- |
+| **Test unitaire** | Test isolé avec mocks. Rapide. |
+| **Test d'intégration** | Composants + vraie DB. |
+| **Test E2E** | Scénario complet API + DB + Redis (Go tags ou scripts PowerShell). |
+| **E2E PowerShell (finance)** | Scripts racine : `e2e-dispute-merchant-wins.ps1`, `e2e-debt-sweep-fraud.ps1`, `e2e-clawback-debt-sweep-chain.ps1`, `e2e-clawback-real-payin.ps1`. |
+| **Test de charge** | Charge multi-utilisateurs (**k6**). |
+| **Mock** | Dépendance simulée (`gomock`). |
+| **Fixture** | Données de test réutilisables. |
+| **Coverage** | % de code exécuté par les tests ; objectif élevé sur modules finance. |
+| **Race Detector** | `go test -race`. |
+| **Testify** | Assertions Go (`assert.NoError`, etc.). |
+| **Conventional Commits** | `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:`. |
 
 ---
 
 ## 7. Outils & Technologies
 
 | Terme | Définition |
-|-------|------------|
-| **Go (Golang)** | Langage de programmation compilé, utilisé pour le backend de GoShop. Version 1.23+. |
-| **Chi** | Router HTTP léger et performant pour Go. Utilisé pour définir les routes de l'API. |
-| **PostgreSQL** | Base de données relationnelle avancée. Version 16+. Supporte JSONB, UUID, transactions ACID. |
-| **Redis** | Base de données en mémoire utilisée pour le cache, les sessions, le rate limiting et WebSocket Pub/Sub. |
-| **Zerolog** | Librairie de logging Go produisant des logs JSON structurés. Rapide et sans allocation. |
-| **Prometheus** | Système de monitoring collectant les métriques de l'API via l'endpoint `/metrics`. |
-| **Loki / Promtail** | Stack d'agrégation de logs compatible avec Grafana pour la visualisation centralisée. |
-| **Grafana** | Outil de visualisation des métriques Prometheus et logs Loki via dashboards. |
-| **Docker** | Technologie de conteneurisation pour packager l'application et ses dépendances. |
-| **Kubernetes (K8s)** | Orchestrateur de conteneurs pour le déploiement en production. |
-| **k6** | Outil de test de charge moderne écrit en Go. Scripts en JavaScript. |
-| **golang-migrate** | Outil de gestion des migrations de base de données pour Go. |
-| **gomock** | Framework de mocking pour Go. Génère des mocks à partir d'interfaces. |
-| **Swagger** | Standard de documentation d'API. Interface disponible sur `/swagger/index.html`. |
-| **GitHub Actions** | Service CI/CD de GitHub pour automatiser les tests et déploiements. |
+| ----- | ---------- |
+| **Go (Golang)** | Langage backend GoShop (voir `go.mod` pour la version exacte). |
+| **Chi** | Router HTTP. |
+| **PostgreSQL** | DB relationnelle (16+). |
+| **Redis** | Cache, rate limit, sessions, Pub/Sub WS. |
+| **Zerolog** | Logs JSON structurés. |
+| **Prometheus** | Métriques (`/metrics`). |
+| **Loki / Promtail** | Agrégation de logs. |
+| **Grafana** | Dashboards métriques / logs. |
+| **Docker** | Conteneurisation. |
+| **Kubernetes (K8s)** | Orchestration production. |
+| **k6** | Tests de charge. |
+| **golang-migrate** | Migrations SQL. |
+| **gomock** | Mocks d'interfaces. |
+| **Swagger** | Doc API (`/swagger/index.html`). |
+| **GitHub Actions** | CI/CD. |
 
 ---
 
 ## 📚 Références complémentaires
+
 - [Architecture GoShop](01-architecture.md)
 - [Modèle de données](02-domain-model.md)
+- [Wallet — dette, clawback & sweep](12-wallet-debt-sweep.md)
 - [Stratégie Multi-tenant](04-multi-tenant.md)
 - [Plan de Migration](06-migration-plan.md)
 - [Guide des Tests](08-testing-guide.md)
 
 ---
 
-**Dernière mise à jour** : 2026-07-21
-```
-
+**Dernière mise à jour** : 2026-10-03

@@ -7,6 +7,38 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [v5.1.0-debt-sweep] - 2026-10-03
+
+### 🚀 Nouveautés Majeures
+- **Dette résiduelle post-clawback (`debt_cents`)** : après un litige `customer_wins` sur escrow déjà `released`, le solde est d’abord débité ; le reste est enregistré en dette explicite (≥ 0), sans freeze automatique.
+- **Debt sweep automatique** : les crédits / libérations suivants réduisent la dette avant d’augmenter le disponible — auto-release escrow, `merchant_wins`, release installment, release held tontine, dépôt manuel.
+- **Gate retrait anti-fraude** : `POST /api/withdrawals` refusé tant que `debt_cents > 0` (en plus de KYC, freeze et `available_cents`).
+- **API wallet enrichie** : `GET /api/wallet` expose `debt_cents`, `debt_formatted`, `withdrawal_blocked` ; `freeze-status` priorise `debt_cents` pour `amount_due_cents`.
+
+### 🛠️ Architecture & Domaine
+- **Entity** : `ApplyClawbackToDebt`, `CreditWithDebtSweep`, `ReleaseHeld` + sweep sur disponible (`domain/entity/merchant_wallet.go`).
+- **Dispute** : branche post-release clawback + ledger `clawback` / `debt_add` ; `merchant_wins` crédite avec sweep (`resolve_dispute.go`).
+- **Installment** : release escrow = `ReleaseHeld` → commission → debt sweep + ledger optionnel via `WithTxnRepo` (`release_escrow_funds.go`, wiring `internal/app/app.go`).
+- **Tontine** : `release_held_wallet` applique le même sweep + `WalletTxDebtSweep`.
+- **Withdrawal** : fail-fast `DebtCents > 0` dans `create_withdrawal.go`.
+
+### 🧪 Tests & Qualité
+- **E2E PowerShell** (racine du repo) :
+  - `e2e-dispute-merchant-wins.ps1` — litige pré-release ± inject dette
+  - `e2e-debt-sweep-fraud.ps1` — inject SQL + 2e auto-release + ledger `debt_sweep`
+  - `e2e-clawback-debt-sweep-chain.ps1` — 2 pay-in réels, clawback → debt → sweep
+  - `e2e-clawback-real-payin.ps1` — clawback canal pay-in réel
+- Scénarios validés VERT : sweep partiel/total, retrait bloqué sous dette, crédit net sans dette.
+
+### 📚 Documentation
+- **Nouveau** : [docs/12-wallet-debt-sweep.md](docs/12-wallet-debt-sweep.md) — modèle, flux, API, E2E, fichiers de référence.
+
+### 🔒 Security / Intéité financière
+- Impossible de retirer des fonds tant qu’une dette post-litige n’est pas soldée par les rentrées suivantes.
+- Ledger audit : types `clawback`, `debt_add`, `debt_sweep` (idempotence soft sur contraintes uniques).
+
+---
+
 
 ## [v5.0.0-installment-zones] - 2026-09-12
 

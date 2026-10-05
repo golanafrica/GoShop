@@ -5,9 +5,11 @@
 ```markdown
 # 🏛️ Modèle de Données (Domain Model)
 
-**Version** : v4.5.0  
-**Dernière mise à jour** : 2026-07-21  
+**Version** : v5.1.0  
+**Dernière mise à jour** : 2026-10-03  
 **Paradigme** : Domain-Driven Design (DDD) avec séparation stricte entre Entités, Value Objects et Agrégats.
+
+---
 
 ---
 
@@ -81,32 +83,65 @@ Représente le profil d'achat au sein d'une boutique spécifique.
 ## 3. Finance & Portefeuille
 
 ### 💳 MerchantWallet (Portefeuille Marchand)
-- `id` (UUID), `shop_id` (UUID).
-- `balance_cents` (int64), `frozen_balance_cents` (int64).
-- `currency` (string, default 'XOF').
+Agrégat financier par boutique (`shop_id` = clé métier / PK en base).
+
+| Champ | Type | Notes |
+|-------|------|--------|
+| `shop_id` | UUID | PK / FK → `shops.id` |
+| `balance_cents` | int64 | Solde ledger |
+| `held_cents` | int64 | Fonds non disponibles (escrow, hold tontine) — **≥ 0** |
+| `debt_cents` | int64 | Dette résiduelle post-clawback — **≥ 0** (v5.1) |
+| `is_frozen` | bool | Gel compte (admin / legacy négatif / fraude) |
+| `frozen_at`, `frozen_reason`, `frozen_until` | … | Métadonnées de gel |
+| `max_negative_balance_cents` | int64 | Plafond legacy solde négatif (défaut env. −100000) |
+| `total_sales_cents` | int64 | Cumul ventes |
+| `total_commissions_cents` | int64 | Cumul commissions plateforme |
+| `total_payouts_cents` | int64 | Cumul retraits |
+| `created_at`, `updated_at` | timestamptz | |
+
+**Dérivés métier :**
+- `AvailableCents() = max(0, balance_cents − held_cents)`
+- Retrait autorisé seulement si `!is_frozen` **et** `debt_cents == 0` **et** `available > 0`
+
+**Opérations domaine (v5.1) :**
+- `ApplyClawbackToDebt(amount)` — débit balance puis reste → `debt_cents` (pas de freeze)
+- `CreditWithDebtSweep(amount)` — crédit net après remboursement dette
+- `ReleaseHeld(amount)` — held ↓ ; le disponible augmente ; un sweep dette peut suivre côté usecase
+
+> Détail flux : [12-wallet-debt-sweep.md](12-wallet-debt-sweep.md)
 
 ### 📜 WalletTransaction (Historique Mouvements)
-- `id` (UUID), `wallet_id` (UUID).
-- `type` (credit, debit, freeze, unfreeze, commission_deduction).
-- `amount_cents` (int64), `balance_after_cents` (int64).
-- `reference_id` (UUID, nullable, ex: order_id ou withdrawal_id).
+- `id` (UUID), `shop_id` (UUID).
+- `transaction_type` — notamment : crédit vente, refund, payout, **clawback**, **debt_add**, **debt_sweep**, commission, etc.
+- `amount_cents` (int64 ; négatif pour débits / sweep).
+- `balance_after_cents` (int64).
+- `reference_type`, `reference_id` (nullable — order, dispute, debt_sweep…).
+- `description` (nullable), `status` (ex. completed).
 - `created_at`.
+
+### 🏦 EscrowAccount (Séquestre commande)
+- `order_id`, `shop_id`, montants séquestrés.
+- Statuts typiques : `funds_held` → `disputed` → `released` | `refunded`.
+- Un litige ouvert bloque l’auto-release ; `customer_wins` post-release déclenche clawback wallet.
+
+### ⚖️ Dispute (Litige)
+- Lié à `order_id` / escrow.
+- Résolutions : `resolved_customer` (clawback + éventuelle dette), `resolved_merchant` (crédit / claim release + sweep si dette).
 
 ### 💸 Payment (Transaction de Paiement Externe)
 - `id` (UUID), `shop_id` (UUID), `order_id` (UUID, nullable pour tontine/crédit).
 - `provider` (wave, orange_money, moov_money, yenga_pay).
 - `amount_cents` (int64), `provider_fee_cents` (int64), `net_amount_cents` (int64).
-- `provider_ref` (string), `phone_number` (string).
+- `provider_ref` (string), `customer_phone` / metadata (canal pay-in pour refund).
 - `status` (pending, processing, success, failed, refunded).
-- `metadata` (JSONB, pour audit webhook).
+- `metadata` (JSONB, audit webhook — ex. `payment_source`, MSISDN).
 
 ### 🏧 Withdrawal (Demande de Retrait)
-- `id` (UUID), `shop_id` (UUID), `wallet_id` (UUID).
-- `amount_cents` (int64), `provider` (wave, orange_money, etc.).
-- `phone_number` (string), `status` (pending, processing, success, failed, rejected).
-- `kyc_verified` (bool, blocage automatique si faux).
+- `id` (UUID), `shop_id` (UUID).
+- `amount_cents` (int64), `provider` / `payment_method`, `destination_number`.
+- `status` (pending, processing, success, failed, rejected).
+- **Gates** : KYC marchand vérifié, wallet non gelé, **`debt_cents == 0`**, `amount ≤ available_cents`.
 
----
 
 ## 4. Fonctionnalités Avancées
 
@@ -186,6 +221,10 @@ erDiagram
     TONTINE_GROUP ||--|{ TONTINE_PARTICIPANT : "includes"
     TONTINE_GROUP ||--|{ TONTINE_PAYMENT : "collects"
     TONTINE_GROUP ||--o{ TONTINE_VOUCHER : "generates"
+        
+    ORDER ||--o| ESCROW_ACCOUNT : "holds funds"
+    ORDER ||--o| DISPUTE : "may open"
+    ESCROW_ACCOUNT ||--o| DISPUTE : "blocks release"
 ```
 
 > **🛡️ Règle d'Or Multi-tenant** :  
