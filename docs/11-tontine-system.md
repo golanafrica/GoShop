@@ -1,10 +1,13 @@
+Les deux E2E tontine sont **VERT** → le palier tontine du chronogramme est **fermé**.
+
+Voici `docs/11-tontine-system.md` **mis à jour** (E2E net+held / redeem+sweep, migration `054` `name`, runner migrations, date 2026-10-06) — prêt à coller :
 
 ```markdown
 # 🏦 Système de Tontine GoShop
 
-**Version** : v5.1.0  
-**Date** : 2026-10-05  
-**Statut** : ✅ Implémenté (groupes, pay-in Yenga, webhook, voucher, redeem + release held / debt sweep)
+**Version** : v5.2.0  
+**Date** : 2026-10-06  
+**Statut** : ✅ Implémenté et validé E2E (groupes, pay-in Yenga, webhook, crédit **net + held**, voucher, redeem + **debt_sweep**)
 
 ---
 
@@ -31,78 +34,76 @@
 
 ### Qu'est-ce que la Tontine GoShop ?
 
-Système de **tontine de biens physiques** : un groupe cotise régulièrement pour qu’un participant reçoive à tour de rôle un **produit** de la boutique (moto, électroménager, etc.), matérialisé par un **voucher** mono-boutique.
+Système de **tontine de biens physiques** : un groupe cotise régulièrement pour qu’un participant reçoive à tour de rôle un **produit** de la boutique, matérialisé par un **voucher** mono-boutique.
 
 ### Différence avec une tontine financière
 
-| Projet | Nature | Objet |
-|--------|--------|--------|
+| Projet     | Nature          | Objet                           |
+| ---------- | --------------- | ------------------------------- |
 | **GoShop** | E-commerce SaaS | Bien physique (voucher produit) |
-| Autres fintechs | Super-app cash | Redistribution d’argent |
+| Fintechs   | Super-app cash  | Redistribution d’argent         |
 
 ### Cas d’usage typique
 
-8 collègues, moto 500 000 FCFA → 8 cycles × 62 500 F → 8 vouchers / 8 livraisons.  
-Commission plateforme (ex. 2,50 %) prélevée sur les cotisations (taux boutique configurable 0–15 %).
+N participants, produit à prix P → N cycles de cotisation → vouchers / livraisons.  
+Commission plateforme en **basis points** (configurable boutique, typiquement 0–15 %).
 
 ---
 
 ## 2. Modèle économique
 
-### Flux (simplifié)
+### Flux
 
 ```text
-Participants ──YengaPay──► webhook GoShop
-                              │
-                              ├─ enregistre tontine_payment
-                              ├─ commission plateforme (net)
-                              └─ crédit / hold wallet marchand selon cycle
+Participants ──YengaPay──► webhook GoShop (process_tontine_webhook)
+        │
+        ├─ tontine_payment
+        ├─ commission (une fois / cycle net)
+        └─ crédit wallet marchand : balance += net ET held += net
 Cycle complet ──► voucher bénéficiaire
-Redeem en boutique ──► release held (+ debt_sweep si dette)
+Redeem en boutique ──► ReleaseHeld(net) + debt_sweep si debt_cents > 0
 ```
 
 ### Commission
 
-```go
-goshop_part := amount_cents * tontine_commission_rate / 10000
-// rate en basis points (250 = 2,50 %)
+```text
+commission = gross * tontine_commission_rate_bps / 10000
+net        = gross - commission
 ```
 
-**Phase actuelle (scheduler)** : la collecte « par cotisation » en batch est **désactivée** (`collectPerCotisation = false`).  
-La commission est déjà prise en compte dans le **crédit net cycle** via `process_tontine_webhook` (évite double débit).
+Exemple E2E (N=3, prix produit 3 000 000 centimes, **150 bps**) :
 
-### Risque
+| Grandeur | Valeur (centimes) |
+| -------- | ----------------- |
+| Gross    | 3 000 000         |
+| Comm     | 45 000            |
+| Net      | 2 955 000         |
 
-| Acteur | Risque |
-|--------|--------|
-| GoShop | Principalement opérationnel / conformité |
-| Marchand | Stock, litiges livraison ; wallet peut avoir **dette** post-clawback autre canal |
-| Participants | Confiance sociale (défauts non assurés au MVP) |
+**Phase actuelle** : collecte scheduler « par cotisation » **désactivée** (`collect_per_cotisation` / Phase 1.2 OFF).  
+La commission est prise **une seule fois** dans le crédit net cycle (pas de `commission_debit` par cotisation).
 
 ---
 
 ## 3. Acteurs et rôles
 
-| Acteur | Rôle | KYC |
-|--------|------|-----|
-| Marchand | Active tontine produit, livre, **redeem voucher** | KYC marchand boutique |
-| Client créateur | Crée le groupe, invite | `kyc_level = verified` |
-| Client participant | Cotise, reçoit voucher à son tour | `kyc_level = verified` |
+| Acteur             | Rôle                                              | Prérequis              |
+| ------------------ | ------------------------------------------------- | ---------------------- |
+| Marchand           | Settings produit, livre, **redeem voucher**       | KYC boutique           |
+| Client créateur    | Crée le groupe, invite                            | KYC client `verified`  |
+| Client participant | Cotise, reçoit voucher                            | KYC client `verified`  |
 
-Niveaux KYC client : `none` → `pending` → `verified` / `rejected`.
-
-Lien **Customer ↔ User** (`user_id`) pour notifications WebSocket.
+Lien **Customer ↔ User** (`user_id`) pour collab / WS selon routes.
 
 ---
 
 ## 4. Workflow KYC
 
-1. Client tente create/join → bloqué si non `verified`
-2. Upload CNI / passeport → `pending`
-3. Marchand review → `verified` ou `rejected`
-4. Client peut créer / rejoindre
+1. Create/join bloqué si client non `verified`
+2. Upload document → `pending`
+3. Review marchand → `verified` / `rejected`
+4. Accès create / join / pay
 
-Contraintes fichiers : taille / MIME limités (voir handler KYC).
+*(Les documents KYC sont dans `customer_kyc_documents` — pas une colonne `kyc_status` sur `customers`.)*
 
 ---
 
@@ -116,77 +117,73 @@ PENDING_MEMBERS → ACTIVE → COMPLETED
 
 ### Cycle
 
-1. Notifications participants  
-2. Paiements Yenga par participant (`pay_cycle`)  
-3. Webhook → `process_tontine_webhook`  
-4. Cycle complet → voucher bénéficiaire (+ hold éventuel)  
-5. Marchand **redeem** voucher à la remise du bien  
-6. Dernier cycle → `COMPLETED`
+1. Groupe créé (`circle_type` FAMILY / etc., `total_cycles`, produit tontine-enabled)
+2. Joins jusqu’à N participants
+3. `POST …/pay` + webhooks SUCCESS pour le cycle
+4. Crédit **net + held** sur le wallet marchand (une ligne ledger cycle)
+5. Voucher créé (souvent à la clôture cycle / webhook)
+6. Marchand **redeem** → held libéré + éventuel debt sweep
+7. Dernier cycle → `COMPLETED`
 
 ### Voucher
 
-- Code unique, validité typique **6 mois**  
-- **Mono-boutique** (`IsRedeemableInShop`)  
-- Redeem : `RedeemTontineVoucherUsecase`
+- Code unique, mono-boutique
+- Redeem : `RedeemTontineVoucherUsecase` → `ReleaseHeldWalletUsecase`
 
 ---
 
 ## 6. Wallet, held & debt sweep
 
-Aligné modèle v5.1 ([12-wallet-debt-sweep.md](12-wallet-debt-sweep.md)) :
+Aligné v5.1+ ([12-wallet-debt-sweep.md](12-wallet-debt-sweep.md)) :
 
-| Étape | Effet wallet |
-|-------|----------------|
-| Cotisations / fin de cycle | Crédit marchand (souvent **held** tant que bien non remis) |
-| **Redeem voucher** | `ReleaseHeld(amount)` puis **debt_sweep** si `debt_cents > 0` |
-| Ledger | Types `debt_sweep` possibles sur release held |
+| Étape                         | Effet wallet                                      | Assert E2E                          |
+| ----------------------------- | ------------------------------------------------- | ----------------------------------- |
+| Fin de cycle (3× pay SUCCESS) | `balance += net`, `held += net`, `debt` inchangé  | `e2e-tontine-net-held.ps1`          |
+| Inject dette + **redeem**     | `held → 0`, `debt` balayée, `balance` = net − debt | `e2e-tontine-redeem-debt-sweep.ps1` |
+| Ledger                        | 1× crédit cycle ; `debt_sweep` au redeem si dette | count cycle = 1 ; type debt_sweep   |
 
-Fichiers clés :
+Fichiers :
 
+- `application/usecase/payment_usecase/process_tontine_webhook.go` (crédit net)
 - `application/usecase/tontine_usecase/redeem_tontine_voucher.go`
 - `application/usecase/wallet_usecase/release_held_wallet.go`
 
-Si redeem DB OK mais release held échoue → log critique (réconciliation manuelle possible).
+Si redeem DB OK mais release held échoue → log critique (réconciliation manuelle).
 
 ---
 
 ## 7. Architecture technique
 
 ```text
-interfaces/handler/tontine_handler + shop tontine_settings + kyc
-        ↓
+interfaces/handler (tontine, settings, kyc)
+    ↓
 application/usecase/tontine_usecase
-  create_group, join_group, pay_cycle,
-  redeem_tontine_voucher, sync_tontine_payment
+    create_group, join_group, pay_cycle, redeem_tontine_voucher
 application/usecase/payment_usecase/process_tontine_webhook
 application/scheduler/tontine_scheduler  (commission legacy OFF)
-        ↓
-domain/entity/tontine.go + repositories
-        ↓
+    ↓
+domain/entity + repositories
+    ↓
 infrastructure/postgres/tontine/*
 infrastructure/payment (Yenga)
 ```
-
-Autres : preuves livraison tontine (`delivery_proof_usecase/*tontine*`).
 
 ---
 
 ## 8. Modèle de données
 
-Tables (migration de base **`010_add_tontine.sql`** + évolutions) :
+| Table                      | Rôle                                        |
+| -------------------------- | ------------------------------------------- |
+| `product_tontine_settings` | Activation, min/max, `allow_family_circle`  |
+| `tontine_groups`           | Groupe, **name** (mig. 054), invite, cycles |
+| `tontine_participants`     | Membres + position                          |
+| `tontine_payments`         | Cotisations, refs provider                  |
+| `tontine_vouchers`         | Code, shop, held, redeem                    |
+| `customer_kyc_documents`   | Pièces KYC                                  |
 
-| Table | Rôle |
-|-------|------|
-| `product_tontine_settings` | Activation / cercles / min-max participants |
-| `tontine_groups` | Groupe, invite_code, cycles, status |
-| `tontine_participants` | Membres + `payout_position` |
-| `tontine_payments` | Cotisations, commission, refs provider |
-| `tontine_vouchers` | Code, shop_id, held, statut redeem |
-| `customer_kyc_documents` | Pièces KYC |
+Migrations notables : **010** (base), **016** (commissions), **042–044**, **046** (held voucher), **054** (`name` sur `tontine_groups`).
 
-Évolutions notables : commissions (**016**), intent provider / min participants / rates (**042–044**), **held voucher (046)**.
-
-Colonnes boutique : `shop_payment_settings.tontine_enabled`, `tontine_commission_rate` (bps).
+Schéma appliqué via runner Compose : `tests/loadtest/scripts/migrate.sh` + `schema_migrations` ([06-migration-plan.md](06-migration-plan.md)).
 
 ---
 
@@ -194,47 +191,45 @@ Colonnes boutique : `shop_payment_settings.tontine_enabled`, `tontine_commission
 
 ### KYC
 
-| Méthode | Endpoint | Acteur |
-|---------|----------|--------|
-| `POST` | `/api/customers/kyc/upload` | Client |
-| `GET` | `/api/customers/{id}/kyc/status` | Client |
-| `GET` | `/api/merchant/kyc/pending` | Marchand |
-| `POST` | `/api/merchant/kyc/{customer_id}/review` | Marchand |
+| Méthode | Endpoint                                 |
+| ------- | ---------------------------------------- |
+| `POST`  | `/api/customers/kyc/upload`              |
+| `GET`   | `/api/customers/{id}/kyc/status`         |
+| `GET`   | `/api/merchant/kyc/pending`              |
+| `POST`  | `/api/merchant/kyc/{customer_id}/review` |
 
-### Settings produit / boutique
+### Settings
 
-| Méthode | Endpoint |
-|---------|----------|
-| `GET` | `/api/shops/{id}/tontine-settings?product_id=…` |
-| `PUT` | `/api/shops/{id}/tontine-settings` |
+| Méthode | Endpoint                                        |
+| ------- | ----------------------------------------------- |
+| `GET`   | `/api/shops/{id}/tontine-settings?product_id=…` |
+| `PUT`   | `/api/shops/{id}/tontine-settings`              |
 
 ### Groupes
 
-| Méthode | Endpoint |
-|---------|----------|
-| `POST` | `/api/tontine/groups` |
-| `POST` | `/api/tontine/groups/join` |
-| `POST` | `/api/tontine/groups/{id}/pay` |
-| `GET` | `/api/tontine/groups/{id}/payments` |
+| Méthode | Endpoint                            |
+| ------- | ----------------------------------- |
+| `POST`  | `/api/tontine/groups`               |
+| `POST`  | `/api/tontine/groups/join`          |
+| `POST`  | `/api/tontine/groups/{id}/pay`      |
+| `GET`   | `/api/tontine/groups/{id}/payments` |
 
-### Redeem (marchand, X-Shop-Slug)
+### Redeem (marchand, JWT + `X-Shop-Slug`)
 
-| Méthode | Endpoint | Description |
-|---------|----------|-------------|
-| `POST` | `/api/tontine/vouchers/redeem` (ou route handler équivalente) | Body : `voucher_code`, `redeemed_by` → release held |
+| Méthode | Endpoint                         |
+| ------- | -------------------------------- |
+| `POST`  | `/api/tontine/vouchers/redeem`   |
 
-Vérifier le path exact dans Swagger / `tontine_handler.go`.
-
-Toutes les routes métier : **JWT + `X-Shop-Slug`**.
+Path exact : Swagger / `tontine_handler.go`.
 
 ---
 
 ## 10. Intégration YengaPay
 
-Référence métier (pas de metadata riche) :
+Référence métier typique :
 
 ```text
-TONTINE:{groupID[:8]}:{cycleNumber}:{participantID[:8]}
+TONTINE:{groupID}:{cycleNumber}:{participantRef}
 ```
 
 Webhook générique → détection référence tontine → `ProcessTontineWebhookUsecase`.
@@ -243,54 +238,49 @@ Webhook générique → détection référence tontine → `ProcessTontineWebhoo
 
 ## 11. Sécurité et conformité
 
-| Règle | Implémentation |
-|-------|----------------|
-| Multi-tenant | `shop_id` + `TenantResolver` (owner/collab) |
-| Voucher | Check shop au redeem |
-| KYC | Gate create/join/pay |
-| Montants | `int64` centimes |
-| Audit | zerolog |
-| BCEAO | Cadre juridique à valider avant scale public |
+| Règle        | Implémentation                              |
+| ------------ | ------------------------------------------- |
+| Multi-tenant | `shop_id` + accès owner/collab              |
+| Voucher      | Check shop au redeem                        |
+| KYC          | Gate create/join/pay                        |
+| Montants     | `int64` centimes                            |
+| Audit        | zerolog + ledger wallet                     |
 
 ---
 
 ## 12. Tests
+
+### Unit / Go E2E
 
 ```bash
 go test ./tests/e2e/ -run TestTontine -v
 go test ./application/usecase/tontine_usecase/... -v
 ```
 
-Couverture typique E2E : shop, produit, settings, 4 clients KYC, create/join, pay cycle, isolation tenant, rejet non vérifié.
+### PowerShell E2E (validés 2026-10-06)
 
-Tests unitaires : create/join/pay, redeem, process_tontine_webhook.
+| Script                              | Scénario                                      | Résultat |
+| ----------------------------------- | --------------------------------------------- | -------- |
+| `e2e-tontine-net-held.ps1`          | 3 pay-in cycle → bal=held=net, 1 ledger cycle | ✅ VERT  |
+| `e2e-tontine-redeem-debt-sweep.ps1` | Inject debt → redeem → held=0, debt=0, sweep  | ✅ VERT  |
+
+Prérequis env : `YENGA_PAY_WEBHOOK_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` ; stack `docker compose up -d` (service `db`, pas `postgres`).
 
 ---
 
 ## 13. Limites et décisions
 
-| Sujet | Décision |
-|-------|----------|
-| Distribution | ROTATING (LOCKED_SAVINGS reporté) |
-| Position | Ordre d’arrivée |
-| Commission | Net à la cotisation / cycle (scheduler legacy OFF) |
-| Défauts | Confiance sociale, pas d’assurance |
-| Relances auto cotisation | Limitées / à renforcer |
-| Redeem + held | **Implémenté** + debt sweep |
+| Sujet                    | Décision                                           |
+| ------------------------ | -------------------------------------------------- |
+| Distribution             | ROTATING (LOCKED_SAVINGS reporté)                  |
+| Commission               | Net au cycle ; scheduler per-cotisation **OFF**    |
+| Crédit cycle             | **balance += net** et **held += net**              |
+| Redeem                   | Release held + **debt_sweep** si dette             |
+| Défauts participants     | Confiance sociale (pas d’assurance MVP)            |
 
 ---
 
-## 14. Roadmap
 
-| Phase | Contenu | Statut |
-|-------|---------|--------|
-| MVP groupes / pay / webhook / E2E | v2.9 | ✅ |
-| WS notifications | v4.5 | ✅ |
-| Redeem + held + debt sweep | v5.1 | ✅ |
-| Relances défaut, SMS, dashboard stats | — | 📋 |
-| LOCKED_SAVINGS, marketplace tontines | — | 📋 |
-
----
 
 ## 📚 Références
 
@@ -298,11 +288,10 @@ Tests unitaires : create/join/pay, redeem, process_tontine_webhook.
 - [Multi-tenant](04-multi-tenant.md)
 - [API](03-api-reference.md)
 - [Wallet debt-sweep](12-wallet-debt-sweep.md)
+- [Plan migrations](06-migration-plan.md)
 - [KYC](KYC.md)
-- Migrations : `010`, `016`, `042`–`046`
+- Migrations : `010`, `016`, `042`–`046`, `054`
 
 ---
 
-**Dernière mise à jour** : 2026-10-05
-```
-
+**Dernière mise à jour** : 2026-10-06  
