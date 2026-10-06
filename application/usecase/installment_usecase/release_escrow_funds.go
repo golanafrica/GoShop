@@ -27,7 +27,7 @@ type ReleaseEscrowFundsUsecase struct {
 	txManager          repository.TxManager
 	orderRepo          repository.OrderRepository
 	walletRepo         repository.MerchantWalletRepository
-	txnRepo            repository.WalletTransactionRepository // audit debt_sweep
+	txnRepo            repository.WalletTransactionRepository // commission_debit + debt_sweep
 	commissionRateRepo repository.CommissionRateRepository
 }
 
@@ -45,7 +45,7 @@ func NewReleaseEscrowFundsUsecase(
 	}
 }
 
-// WithTxnRepo injecte le repo ledger (optionnel, pour debt_sweep audit).
+// WithTxnRepo injecte le repo ledger (optionnel).
 func (uc *ReleaseEscrowFundsUsecase) WithTxnRepo(r repository.WalletTransactionRepository) *ReleaseEscrowFundsUsecase {
 	uc.txnRepo = r
 	return uc
@@ -56,9 +56,8 @@ func (uc *ReleaseEscrowFundsUsecase) WithTxnRepo(r repository.WalletTransactionR
 //
 // Modèle :
 //  1. ReleaseHeld(total)     → held ↓, disponible ↑ (balance inchangée)
-//  2. Balance -= commission  → part plateforme
-//  3. Sweep dette            → min(debt, available) : DebtCents ↓ et BalanceCents ↓
-//  4. Ledger debt_sweep si swept > 0
+//  2. Balance -= commission  → part plateforme + ledger commission_debit
+//  3. Sweep dette            → min(debt, available) + ledger debt_sweep si swept > 0
 //
 // Pas de CreditWithDebtSweep ici : les fonds sont déjà dans balance (held).
 func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string) (*ReleaseResponse, error) {
@@ -155,27 +154,8 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 		return nil, fmt.Errorf("échec de la mise à jour du portefeuille après libération: %w", err)
 	}
 
-	// 8. Audit ledger debt_sweep
-	if swept > 0 && uc.txnRepo != nil {
-		sweepRefType := "debt_sweep"
-		sweepRefID := orderID
-		sweepDesc := fmt.Sprintf(
-			"Debt sweep on installment release order=%s total=%d commission=%d swept=%d",
-			orderID, totalCents, commissionCents, swept,
-		)
-		sweepAmt := -swept
-		sweepTxn := &entity.WalletTransaction{
-			ID:                uuid.New().String(),
-			ShopID:            shopID,
-			TransactionType:   entity.WalletTxDebtSweep,
-			AmountCents:       sweepAmt,
-			BalanceAfterCents: wallet.BalanceCents,
-			ReferenceType:     &sweepRefType,
-			ReferenceID:       &sweepRefID,
-			Description:       &sweepDesc,
-			Status:            entity.WalletTxCompleted,
-		}
-
+	// 8. Audit ledger : commission_debit puis debt_sweep
+	if uc.txnRepo != nil {
 		txnRepoTx := uc.txnRepo
 		if withTX, ok := interface{}(uc.txnRepo).(interface {
 			WithTX(tx repository.Tx) repository.WalletTransactionRepository
@@ -183,12 +163,61 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 			txnRepoTx = withTX.WithTX(tx)
 		}
 
-		if err := txnRepoTx.Create(ctx, sweepTxn); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !(strings.Contains(msg, "duplicate key") ||
-				strings.Contains(msg, "unique constraint") ||
-				strings.Contains(msg, "23505")) {
-				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+		if commissionCents > 0 {
+			refType := "installment_release"
+			refID := orderID
+			desc := fmt.Sprintf(
+				"Platform commission on installment release order=%s total=%d rate_bps=%d",
+				orderID, totalCents, commissionRateBps,
+			)
+			// Solde juste après commission (avant sweep)
+			balanceAfterCommission := wallet.BalanceCents + swept
+			commTxn := &entity.WalletTransaction{
+				ID:                uuid.New().String(),
+				ShopID:            shopID,
+				TransactionType:   entity.WalletTxCommissionDebit,
+				AmountCents:       -commissionCents,
+				BalanceAfterCents: balanceAfterCommission,
+				ReferenceType:     &refType,
+				ReferenceID:       &refID,
+				Description:       &desc,
+				Status:            entity.WalletTxCompleted,
+			}
+			if err := txnRepoTx.Create(ctx, commTxn); err != nil {
+				msg := strings.ToLower(err.Error())
+				if !(strings.Contains(msg, "duplicate key") ||
+					strings.Contains(msg, "unique constraint") ||
+					strings.Contains(msg, "23505")) {
+					return nil, fmt.Errorf("failed to create commission_debit transaction: %w", err)
+				}
+			}
+		}
+
+		if swept > 0 {
+			sweepRefType := "debt_sweep"
+			sweepRefID := orderID
+			sweepDesc := fmt.Sprintf(
+				"Debt sweep on installment release order=%s total=%d commission=%d swept=%d",
+				orderID, totalCents, commissionCents, swept,
+			)
+			sweepTxn := &entity.WalletTransaction{
+				ID:                uuid.New().String(),
+				ShopID:            shopID,
+				TransactionType:   entity.WalletTxDebtSweep,
+				AmountCents:       -swept,
+				BalanceAfterCents: wallet.BalanceCents,
+				ReferenceType:     &sweepRefType,
+				ReferenceID:       &sweepRefID,
+				Description:       &sweepDesc,
+				Status:            entity.WalletTxCompleted,
+			}
+			if err := txnRepoTx.Create(ctx, sweepTxn); err != nil {
+				msg := strings.ToLower(err.Error())
+				if !(strings.Contains(msg, "duplicate key") ||
+					strings.Contains(msg, "unique constraint") ||
+					strings.Contains(msg, "23505")) {
+					return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
+				}
 			}
 		}
 	}
@@ -208,7 +237,7 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 		Int64("held_cents", wallet.HeldCents).
 		Int64("debt_cents", wallet.DebtCents).
 		Int64("available_cents", wallet.AvailableCents()).
-		Msg("Installment escrow released (commission + debt sweep if any)")
+		Msg("Installment escrow released (commission_debit + debt sweep if any)")
 
 	return &ReleaseResponse{
 		NetMerchantCents: netMerchantCents,
