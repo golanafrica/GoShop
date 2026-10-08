@@ -557,6 +557,7 @@ func (a *App) setupRouter() {
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
+		txmanagerRepo,
 		a.DB,
 		shopRepo,
 		shopRepo,
@@ -573,12 +574,14 @@ func (a *App) setupRouter() {
 		walletRepo,
 		paymentRegistry,
 		debitWalletUC,
+		creditWalletUC,
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 
 	processPayoutWebhookUC := withdrawalusecase.NewProcessPayoutWebhookUsecase(
 		withdrawalRepo,
 		walletRepo,
+		walletTxnRepo,
 		txmanagerRepo,
 	)
 

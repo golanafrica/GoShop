@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	withdrawaldto "Goshop/application/dto/withdrawal_dto"
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -18,10 +19,11 @@ import (
 type CreateWithdrawalUsecase struct {
 	withdrawalRepo  repository.WithdrawalRepository
 	shopPaymentRepo ShopPaymentSettingsRepository
-	walletRepo      repository.MerchantWalletRepository // Phase 2 : available = balance - held
+	walletRepo      repository.MerchantWalletRepository
 	registry        PaymentRegistry
 	yengaPayFactory YengaPayProviderFactory
 	debitWalletUC   *walletusecase.DebitWalletUsecase
+	creditWalletUC  *walletusecase.CreditWalletUsecase // P0-A : reverse si cash-out fail définitivement
 }
 
 func NewCreateWithdrawalUsecase(
@@ -30,6 +32,7 @@ func NewCreateWithdrawalUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	registry PaymentRegistry,
 	debitWalletUC *walletusecase.DebitWalletUsecase,
+	creditWalletUC *walletusecase.CreditWalletUsecase,
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
@@ -38,6 +41,7 @@ func NewCreateWithdrawalUsecase(
 		registry:        registry,
 		yengaPayFactory: defaultYengaPayFactory,
 		debitWalletUC:   debitWalletUC,
+		creditWalletUC:  creditWalletUC,
 	}
 }
 
@@ -52,6 +56,7 @@ func NewCreateWithdrawalUsecaseWithFactory(
 	registry PaymentRegistry,
 	yengaPayFactory YengaPayProviderFactory,
 	debitWalletUC *walletusecase.DebitWalletUsecase,
+	creditWalletUC *walletusecase.CreditWalletUsecase,
 ) *CreateWithdrawalUsecase {
 	return &CreateWithdrawalUsecase{
 		withdrawalRepo:  withdrawalRepo,
@@ -60,6 +65,7 @@ func NewCreateWithdrawalUsecaseWithFactory(
 		registry:        registry,
 		yengaPayFactory: yengaPayFactory,
 		debitWalletUC:   debitWalletUC,
+		creditWalletUC:  creditWalletUC,
 	}
 }
 
@@ -78,7 +84,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("Creating withdrawal")
 
 	// ============================================================
-	// KYC (messages FR pour le frontend)
+	// KYC
 	// ============================================================
 	if !shop.CanWithdraw() {
 		logger.Warn().
@@ -113,14 +119,12 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("KYC verifie, retrait autorise")
 
 	// ============================================================
-	// Phase 2 : retrait UNIQUEMENT sur available = balance - held
-	// + anti-fraude : aucun retrait tant que debt_cents > 0
+	// Fail-fast : available + debt + freeze
 	// ============================================================
 	if req.AmountCents <= 0 {
 		return nil, fmt.Errorf("Le montant du retrait doit etre positif")
 	}
 
-	// Fail-fast UX (garde atomique reelle dans DebitWalletUsecase sous FOR UPDATE).
 	if uc.walletRepo != nil {
 		wallet, err := uc.walletRepo.FindByShopID(ctx, shop.ID.String())
 		if err != nil {
@@ -137,9 +141,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 			)
 		}
 
-		// Anti-fraude post-clawback : dette residuelle bloque tout retrait
-		// (meme si balance_cents > amount). Les prochains credits (auto-release)
-		// doivent d'abord rembourser via CreditWithDebtSweep.
 		if wallet.DebtCents > 0 {
 			logger.Warn().
 				Str("shop_id", shop.ID.String()).
@@ -155,7 +156,6 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 
 		available := wallet.AvailableCents()
 
-		// Solde ledger <= 0 (apres clawback / dette) -> aucun retrait possible
 		if wallet.BalanceCents <= 0 || available <= 0 {
 			logger.Warn().
 				Str("shop_id", shop.ID.String()).
@@ -183,30 +183,12 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 			)
 		}
 	} else {
-		logger.Warn().Msg("walletRepo not configured on CreateWithdrawalUsecase — skipping fail-fast available check (real guard still enforced in DebitWalletUsecase)")
+		logger.Warn().Msg("walletRepo not configured on CreateWithdrawalUsecase — skipping fail-fast available check")
 	}
 
 	// ============================================================
-	// Debit wallet (ledger) — garde atomique held dans DebitWalletUsecase
+	// 1) Entite + persist AVANT debit (pour reference_id ledger)
 	// ============================================================
-	if uc.debitWalletUC == nil {
-		return nil, fmt.Errorf("debit wallet usecase not configured")
-	}
-
-	debitReq := &walletusecase.DebitWalletRequest{
-		ShopID:          shop.ID.String(),
-		AmountCents:     req.AmountCents,
-		TransactionType: entity.WalletTxPayout,
-		AllowNegative:   false,
-	}
-
-	_, err = uc.debitWalletUC.Execute(ctx, debitReq)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to debit wallet for withdrawal")
-		return nil, fmt.Errorf("Fonds insuffisants ou erreur portefeuille : %w", err)
-	}
-
-	// 3. Entite Withdrawal
 	withdrawal, err := entity.NewWithdrawal(
 		shop.ID,
 		req.AmountCents,
@@ -231,7 +213,55 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		return nil, fmt.Errorf("save withdrawal: %w", err)
 	}
 
-	// Config Yenga Pay
+	withdrawalID := withdrawal.ID.String()
+	refTypePayout := "payout"
+	refID := withdrawalID
+	debitDesc := fmt.Sprintf("Withdrawal payout %s", withdrawalID)
+
+	// ============================================================
+	// 2) Debit wallet (garde atomique held dans DebitWalletUsecase)
+	// ============================================================
+	if uc.debitWalletUC == nil {
+		_ = markWithdrawalFailed(uc, ctx, withdrawal, "debit wallet usecase not configured")
+		return nil, fmt.Errorf("debit wallet usecase not configured")
+	}
+
+	debitReq := &walletusecase.DebitWalletRequest{
+		ShopID:          shop.ID.String(),
+		AmountCents:     req.AmountCents,
+		TransactionType: entity.WalletTxPayout,
+		ReferenceType:   &refTypePayout,
+		ReferenceID:     &refID,
+		Description:     &debitDesc,
+		AllowNegative:   false,
+	}
+
+	_, err = uc.debitWalletUC.Execute(ctx, debitReq)
+	if err != nil {
+		_ = markWithdrawalFailed(uc, ctx, withdrawal, err.Error())
+		logger.Error().Err(err).Msg("Failed to debit wallet for withdrawal")
+		return nil, fmt.Errorf("Fonds insuffisants ou erreur portefeuille : %w", err)
+	}
+
+	debited := true
+
+	// Helper local : reverse + mark failed
+	failAfterDebit := func(cause error, reason string) (*withdrawaldto.WithdrawalResponse, error) {
+		revErr := uc.reversePayoutDebit(ctx, shop.ID.String(), req.AmountCents, withdrawalID, reason)
+		if revErr != nil {
+			logger.Error().
+				Err(revErr).
+				Str("withdrawal_id", withdrawalID).
+				Str("original_error", cause.Error()).
+				Msg("CRITICAL: payout debit reverse failed — manual reconciliation required")
+		}
+		_ = markWithdrawalFailed(uc, ctx, withdrawal, cause.Error())
+		return nil, fmt.Errorf("%s: %w", reason, cause)
+	}
+
+	// ============================================================
+	// 3) Config Yenga + CashOut
+	// ============================================================
 	var providerConfig payment.YengaPayConfig
 
 	settings, err := uc.shopPaymentRepo.GetPaymentSettings(ctx, shop.ID)
@@ -259,8 +289,8 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 
 	yengaProvider, err := uc.yengaPayFactory(providerConfig)
 	if err != nil {
-		if markErr := withdrawal.MarkFailed(err.Error()); markErr == nil {
-			_ = uc.withdrawalRepo.Update(ctx, withdrawal)
+		if debited {
+			return failAfterDebit(err, "create yenga provider")
 		}
 		return nil, fmt.Errorf("create yenga provider: %w", err)
 	}
@@ -274,15 +304,40 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Description:       req.Description,
 	}
 
+	// ============================================================
+	// 4) Appel Provider + Gestion P0 des erreurs (Timeout Trap)
+	// ============================================================
 	cashOutResp, err := yengaProvider.CashOut(ctx, cashOutReq)
 	if err != nil {
-		if markErr := withdrawal.MarkFailed(err.Error()); markErr == nil {
-			_ = uc.withdrawalRepo.Update(ctx, withdrawal)
+		// 🛡️ P0 CRITIQUE : Distinguer les erreurs réseau/timeout des erreurs métier définitives
+		if isNetworkOrTimeoutError(err) {
+			// Erreur ambiguë (timeout, 502, etc.) : NE PAS ANNULER LE DÉBIT.
+			// On laisse le retrait en statut "processing" et on attend le webhook de résolution.
+			logger.Warn().
+				Err(err).
+				Str("withdrawal_id", withdrawalID).
+				Msg("CashOut network error/timeout. Leaving as PROCESSING for webhook reconciliation. DO NOT REVERSE DEBIT.")
+
+			if markErr := withdrawal.MarkProcessing(""); markErr != nil {
+				return nil, fmt.Errorf("mark processing after network error: %w", markErr)
+			}
+			if updateErr := uc.withdrawalRepo.Update(ctx, withdrawal); updateErr != nil {
+				return nil, fmt.Errorf("update withdrawal after network error: %w", updateErr)
+			}
+
+			return nil, fmt.Errorf("le retrait est en cours de traitement et sera confirmé par le fournisseur sous peu (référence: %s)", withdrawalID)
 		}
-		return nil, fmt.Errorf("cash-out with Yenga Pay: %w", err)
+
+		// Erreur métier définitive (ex: numéro invalide, compte inexistant) → Annulation sûre
+		return failAfterDebit(err, "cash-out definitively rejected by provider")
 	}
 
+	// CashOut accepte : NE PAS reverse (fonds engagés côté provider)
 	if err := withdrawal.MarkProcessing(cashOutResp.ProviderRef); err != nil {
+		logger.Error().Err(err).
+			Str("withdrawal_id", withdrawalID).
+			Str("provider_ref", cashOutResp.ProviderRef).
+			Msg("MarkProcessing failed after successful CashOut — do NOT reverse wallet")
 		return nil, fmt.Errorf("mark processing: %w", err)
 	}
 
@@ -307,6 +362,87 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 		Msg("Withdrawal created and processed successfully")
 
 	return toResponse(withdrawal), nil
+}
+
+// reversePayoutDebit restaure le solde apres un debit payout si le cash-out a échoué définitivement.
+// Idempotent via reference_type=withdrawal_reversal + reference_id=withdrawal_id.
+func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
+	ctx context.Context,
+	shopID string,
+	amountCents int64,
+	withdrawalID string,
+	reason string,
+) error {
+	logger := zerolog.Ctx(ctx)
+
+	if uc.creditWalletUC == nil {
+		return fmt.Errorf("credit wallet usecase not configured — cannot reverse payout debit")
+	}
+	if amountCents <= 0 {
+		return nil
+	}
+
+	refType := "withdrawal_reversal"
+	refID := withdrawalID
+	desc := fmt.Sprintf("Payout reverse for withdrawal %s (%s)", withdrawalID, reason)
+
+	req := &walletusecase.CreditWalletRequest{
+		ShopID:      shopID,
+		AmountCents: amountCents,
+		// 🛡️ P0 : Utiliser un type dédié à l'annulation pour la traçabilité du ledger (au lieu de Deposit)
+		// Assurez-vous que entity.WalletTxRefund existe dans votre package entity. Sinon, utilisez entity.WalletTxDeposit.
+		TransactionType: entity.WalletTxRefund,
+		ReferenceType:   &refType,
+		ReferenceID:     &refID,
+		Description:     &desc,
+		HoldAfterCredit: false,
+	}
+
+	_, err := uc.creditWalletUC.Execute(ctx, req)
+	if err != nil {
+		return fmt.Errorf("credit reverse failed: %w", err)
+	}
+
+	logger.Info().
+		Str("shop_id", shopID).
+		Str("withdrawal_id", withdrawalID).
+		Int64("amount_cents", amountCents).
+		Str("reason", reason).
+		Msg("Payout debit reversed after definitive provider failure")
+
+	return nil
+}
+
+// isNetworkOrTimeoutError vérifie si l'erreur est une erreur réseau/timeout ambiguë
+// où le provider a pu traiter la demande malgré tout (risque de double paiement si on annule).
+func isNetworkOrTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Ajoutez ici les mots-clés spécifiques à votre provider YengaPay si nécessaire
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "context deadline exceeded") ||
+		strings.Contains(errStr, "no route to host") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "502 bad gateway") ||
+		strings.Contains(errStr, "504 gateway timeout") ||
+		strings.Contains(errStr, "i/o timeout")
+}
+
+func markWithdrawalFailed(
+	uc *CreateWithdrawalUsecase,
+	ctx context.Context,
+	w *entity.Withdrawal,
+	msg string,
+) error {
+	if w == nil {
+		return nil
+	}
+	if markErr := w.MarkFailed(msg); markErr != nil {
+		return markErr
+	}
+	return uc.withdrawalRepo.Update(ctx, w)
 }
 
 func toResponse(w *entity.Withdrawal) *withdrawaldto.WithdrawalResponse {

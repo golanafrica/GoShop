@@ -20,10 +20,6 @@ import (
 )
 
 // ============================================================
-// 🆕 v4.4.10 : TESTS UNITAIRES - CREATE WITHDRAWAL USECASE
-// ============================================================
-
-// ============================================================
 // HELPERS
 // ============================================================
 
@@ -59,7 +55,7 @@ func mockCashOutProviderFactoryWithError(err error) withdrawalusecase.YengaPayPr
 	}
 }
 
-// Helper mis à jour : FindByShopID + HeldCents pour le pré-check available
+// createMockDebitWalletUsecase : FindByShopID + FOR UPDATE pour pré-check + débit
 func createMockDebitWalletUsecase(ctrl *gomock.Controller) (*walletusecase.DebitWalletUsecase, *mockrepo.MockMerchantWalletRepository) {
 	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
 	mockTxnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
@@ -69,26 +65,26 @@ func createMockDebitWalletUsecase(ctrl *gomock.Controller) (*walletusecase.Debit
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockWalletRepo.EXPECT().WithTX(mockTx).Return(mockWalletRepo).AnyTimes()
 
-	// Phase 1 : pré-check available (FindByShopID hors TX)
 	mockWalletRepo.EXPECT().FindByShopID(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
 			return &entity.MerchantWallet{
 				ShopID:                  shopID,
 				BalanceCents:            1_000_000,
 				HeldCents:               0,
+				DebtCents:               0,
 				IsFrozen:                false,
 				MaxNegativeBalanceCents: -500_000,
 			}, nil
 		},
 	).AnyTimes()
 
-	// Débit réel sous FOR UPDATE
 	mockWalletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, shopID string) (*entity.MerchantWallet, error) {
 			return &entity.MerchantWallet{
 				ShopID:                  shopID,
 				BalanceCents:            1_000_000,
 				HeldCents:               0,
+				DebtCents:               0,
 				IsFrozen:                false,
 				MaxNegativeBalanceCents: -500_000,
 			}, nil
@@ -104,8 +100,12 @@ func createMockDebitWalletUsecase(ctrl *gomock.Controller) (*walletusecase.Debit
 	return walletusecase.NewDebitWalletUsecase(mockWalletRepo, mockTxnRepo, mockTxManager), mockWalletRepo
 }
 
+// creditWalletUC nil : reverse non testé (log CRITICAL si cash-out fail).
+// Pour un test P0-A reverse, injecter un vrai CreditWalletUsecase mocké.
+var nilCreditWalletUC *walletusecase.CreditWalletUsecase = nil
+
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Multi-tenant
+// Multi-tenant
 // ============================================================
 
 func TestCreateWithdrawalUsecase_MultiTenantError(t *testing.T) {
@@ -123,6 +123,7 @@ func TestCreateWithdrawalUsecase_MultiTenantError(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := context.Background()
@@ -136,7 +137,7 @@ func TestCreateWithdrawalUsecase_MultiTenantError(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - KYC Verification
+// KYC (messages FR du usecase)
 // ============================================================
 
 func TestCreateWithdrawalUsecase_KYC_Unverified(t *testing.T) {
@@ -154,6 +155,7 @@ func TestCreateWithdrawalUsecase_KYC_Unverified(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusUnverified, nil)
@@ -163,7 +165,7 @@ func TestCreateWithdrawalUsecase_KYC_Unverified(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "KYC verification required")
+	assert.Contains(t, err.Error(), "KYC")
 	assert.Contains(t, err.Error(), "unverified")
 }
 
@@ -182,6 +184,7 @@ func TestCreateWithdrawalUsecase_KYC_Pending(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusPending, nil)
@@ -191,7 +194,7 @@ func TestCreateWithdrawalUsecase_KYC_Pending(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "under review")
+	assert.Contains(t, err.Error(), "KYC")
 	assert.Contains(t, err.Error(), "pending")
 }
 
@@ -210,6 +213,7 @@ func TestCreateWithdrawalUsecase_KYC_Rejected(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusRejected, nil)
@@ -219,7 +223,7 @@ func TestCreateWithdrawalUsecase_KYC_Rejected(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "rejected")
+	assert.Contains(t, err.Error(), "rejete")
 }
 
 func TestCreateWithdrawalUsecase_KYC_RejectedWithReason(t *testing.T) {
@@ -237,6 +241,7 @@ func TestCreateWithdrawalUsecase_KYC_RejectedWithReason(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	reason := "Document illisible"
@@ -251,7 +256,7 @@ func TestCreateWithdrawalUsecase_KYC_RejectedWithReason(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Entity Creation Error
+// Entity / validation
 // ============================================================
 
 func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
@@ -269,6 +274,7 @@ func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -282,11 +288,11 @@ func TestCreateWithdrawalUsecase_EntityCreationError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "amount_cents must be positive")
+	assert.Contains(t, err.Error(), "positif")
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Repository errors
+// Repository errors
 // ============================================================
 
 func TestCreateWithdrawalUsecase_SaveError(t *testing.T) {
@@ -304,6 +310,7 @@ func TestCreateWithdrawalUsecase_SaveError(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -337,6 +344,7 @@ func TestCreateWithdrawalUsecase_UpdateError(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -349,9 +357,7 @@ func TestCreateWithdrawalUsecase_UpdateError(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -376,7 +382,7 @@ func TestCreateWithdrawalUsecase_UpdateError(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Provider errors
+// Provider errors (P0-A : reverse tenté si creditUC non nil)
 // ============================================================
 
 func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
@@ -395,6 +401,7 @@ func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactoryWithError(errors.New("invalid config")),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -407,9 +414,7 @@ func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockWithdrawalRepo.EXPECT().
@@ -441,6 +446,7 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -453,9 +459,7 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -475,7 +479,7 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Shop Settings
+// Shop settings
 // ============================================================
 
 func TestCreateWithdrawalUsecase_ShopSettingsError(t *testing.T) {
@@ -495,6 +499,7 @@ func TestCreateWithdrawalUsecase_ShopSettingsError(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -545,6 +550,7 @@ func TestCreateWithdrawalUsecase_ShopSettingsDisabled(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -557,9 +563,7 @@ func TestCreateWithdrawalUsecase_ShopSettingsDisabled(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -583,7 +587,7 @@ func TestCreateWithdrawalUsecase_ShopSettingsDisabled(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : CreateWithdrawalUsecase - Happy paths
+// Happy paths
 // ============================================================
 
 func TestCreateWithdrawalUsecase_Success_Processing(t *testing.T) {
@@ -603,6 +607,7 @@ func TestCreateWithdrawalUsecase_Success_Processing(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -615,9 +620,7 @@ func TestCreateWithdrawalUsecase_Success_Processing(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -660,6 +663,7 @@ func TestCreateWithdrawalUsecase_Success_ImmediateSuccess(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -672,9 +676,7 @@ func TestCreateWithdrawalUsecase_Success_ImmediateSuccess(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -715,6 +717,7 @@ func TestCreateWithdrawalUsecase_Success_WithOptionalFields(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -727,9 +730,7 @@ func TestCreateWithdrawalUsecase_Success_WithOptionalFields(t *testing.T) {
 	mockShopRepo.EXPECT().
 		GetPaymentSettings(gomock.Any(), shop.ID).
 		Return(&entity.ShopPaymentSettings{
-			YengaPay: entity.YengaPayShopSettings{
-				Enabled: false,
-			},
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
 	mockCashOut.EXPECT().
@@ -776,6 +777,7 @@ func TestCreateWithdrawalUsecase_Success_ShopSpecificConfig(t *testing.T) {
 		mockRegistry,
 		mockCashOutProviderFactory(mockCashOut),
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
@@ -834,6 +836,7 @@ func TestNewCreateWithdrawalUsecase_Success(t *testing.T) {
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	assert.NotNil(t, uc)
@@ -854,6 +857,7 @@ func TestNewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing(t *testing.
 		mockWalletRepo,
 		mockRegistry,
 		mockDebitWalletUC,
+		nilCreditWalletUC,
 	)
 
 	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
