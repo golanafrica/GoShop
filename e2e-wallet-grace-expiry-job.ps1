@@ -23,7 +23,7 @@ $ErrorActionPreference = "Stop"
 
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
-$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
+$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "" }
 $AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "CHANGE_ME_ADMIN_PASSWORD" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
