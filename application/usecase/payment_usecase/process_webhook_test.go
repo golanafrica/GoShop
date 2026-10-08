@@ -17,23 +17,9 @@ import (
 )
 
 // ============================================================
-// 🆕 v4.4.9 : TESTS UNITAIRES - PROCESS WEBHOOK USECASE
+// TESTS UNITAIRES - PROCESS WEBHOOK USECASE (P1-C + txManager)
 // ============================================================
 
-// ============================================================
-// HELPERS
-// ============================================================
-
-// mockResult est un mock simple pour sql.Result afin de tester RowsAffected
-type mockResult struct {
-	lastInsertId int64
-	rowsAffected int64
-}
-
-func (m *mockResult) LastInsertId() (int64, error) { return m.lastInsertId, nil }
-func (m *mockResult) RowsAffected() (int64, error) { return m.rowsAffected, nil }
-
-// createTestWebhookEvent crée un événement webhook de test
 func createTestWebhookEvent(providerRef string, status entity.PaymentStatus) *payment.WebhookEvent {
 	return &payment.WebhookEvent{
 		Provider:    entity.ProviderYengaPay,
@@ -45,13 +31,42 @@ func createTestWebhookEvent(providerRef string, status entity.PaymentStatus) *pa
 	}
 }
 
-// createMockDBExecutor crée un mock DBExecutor
 func createMockDBExecutor(ctrl *gomock.Controller) *mockrepo.MockDBExecutor {
 	return mockrepo.NewMockDBExecutor(ctrl)
 }
 
+// INSERT processed=false + mark processed/failed (plusieurs ExecContext)
+func expectWebhookAudit(mockDB *mockrepo.MockDBExecutor) {
+	mockDB.EXPECT().
+		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&mockResult{rowsAffected: 1}, nil).
+		AnyTimes()
+}
+
+func newProcessWebhookUC(
+	ctrl *gomock.Controller,
+	paymentRepo *mockrepo.MockPaymentRepository,
+	registry *mockusecase.MockPaymentRegistry,
+	db *mockrepo.MockDBExecutor,
+	shopRepo *mockrepo.MockShopRepository,
+) *paymentusecase.ProcessWebhookUsecase {
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+	return paymentusecase.NewProcessWebhookUsecase(
+		paymentRepo,
+		registry,
+		mockTxManager,
+		db,
+		shopRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+}
+
 // ============================================================
-// TESTS : ProcessWebhookUsecase - Provider errors
+// Provider / validation
 // ============================================================
 
 func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
@@ -62,30 +77,15 @@ func TestProcessWebhookUsecase_ProviderNotFound(t *testing.T) {
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
 		Get(entity.ProviderYengaPay).
 		Return(nil, errors.New("provider not found"))
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 
@@ -102,20 +102,8 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -126,10 +114,7 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, errors.New("invalid signature"))
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "bad-signature")
 
@@ -138,7 +123,7 @@ func TestProcessWebhookUsecase_WebhookValidationFailed(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : ProcessWebhookUsecase - Payment/Shop not found
+// Payment / shop not found
 // ============================================================
 
 func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
@@ -150,20 +135,8 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -183,16 +156,12 @@ func TestProcessWebhookUsecase_MissingProviderRef(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 
 	assert.Error(t, err)
-	// 🆕 CORRECTION : Le message d'erreur réel contient "payment not found for provider_ref "
-	assert.Contains(t, err.Error(), "payment not found for provider_ref ")
+	assert.Contains(t, err.Error(), "payment not found for provider_ref")
 }
 
 func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
@@ -204,20 +173,8 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -230,10 +187,7 @@ func TestProcessWebhookUsecase_PaymentNotFound(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	mockPaymentRepo.EXPECT().
 		FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").
@@ -254,20 +208,8 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -280,10 +222,7 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
@@ -304,7 +243,7 @@ func TestProcessWebhookUsecase_ShopNotFound(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : ProcessWebhookUsecase - Terminal state ignored
+// Terminal + transitions
 // ============================================================
 
 func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
@@ -316,20 +255,8 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -342,16 +269,12 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
 	paymentEntity.MarkProcessing()
 	paymentEntity.MarkSuccess("TXN-123")
-	// Simuler que l'escrow a déjà été créé pour que le webhook soit ignoré
 	paymentEntity.Metadata = map[string]interface{}{"escrow_created": true}
 
 	testShop := &entity.Shop{
@@ -373,10 +296,6 @@ func TestProcessWebhookUsecase_TerminalState_Ignored(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// ============================================================
-// TESTS : ProcessWebhookUsecase - Status transitions
-// ============================================================
-
 func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -386,20 +305,8 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -412,10 +319,7 @@ func TestProcessWebhookUsecase_StatusSuccess_MarkSuccess(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
@@ -454,20 +358,8 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -481,10 +373,7 @@ func TestProcessWebhookUsecase_StatusFailed_MarkFailed(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
@@ -524,20 +413,8 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -550,10 +427,7 @@ func TestProcessWebhookUsecase_StatusCancelled_MarkCancelled(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
@@ -592,20 +466,8 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -618,10 +480,7 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
@@ -648,7 +507,7 @@ func TestProcessWebhookUsecase_StatusUnknown_Ignored(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : ProcessWebhookUsecase - Tontine delegation
+// Tontine
 // ============================================================
 
 func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
@@ -660,20 +519,8 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
-	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
-	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo,
-		mockRegistry,
-		mockDB,
-		mockShopRepo,
-		nil,
-		mockTontineUC,
-		nil,
-		nil,
-		nil,
-	)
-
+	uc := newProcessWebhookUC(ctrl, mockPaymentRepo, mockRegistry, mockDB, mockShopRepo)
 	ctx := context.Background()
 
 	mockRegistry.EXPECT().
@@ -695,10 +542,7 @@ func TestProcessWebhookUsecase_TontineReference_NoHandler(t *testing.T) {
 		ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(event, nil)
 
-	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(&mockResult{rowsAffected: 1}, nil).
-		AnyTimes()
+	expectWebhookAudit(mockDB)
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
 

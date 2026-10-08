@@ -18,29 +18,23 @@ import (
 )
 
 // ============================================================
-// 🆕 v4.4.9 : TESTS UNITAIRES - CHECK PAYMENT STATUS USECASE
+// TESTS UNITAIRES - CHECK PAYMENT STATUS USECASE
 // ============================================================
 
-// createPendingPayment crée un paiement en attente
 func createPendingPayment(shopID uuid.UUID, amountCents int64) *entity.Payment {
 	payment, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, amountCents)
 	return payment
 }
 
-// createProcessingPayment crée un paiement en cours avec ProviderRef
 func createProcessingPayment(shopID uuid.UUID, amountCents int64) *entity.Payment {
 	payment := createPendingPayment(shopID, amountCents)
 	payment.MarkProcessing()
-
-	// ✅ CORRECTION : Définir ProviderRef pour que le provider soit appelé
 	providerRef := "TXN-123"
 	payment.ProviderRef = &providerRef
-
 	return payment
 }
 
-// NOTE: createTestContextForPayment a été supprimé d'ici car il est déjà
-// défini dans list_payments_test.go (évite l'erreur DuplicateDecl)
+// createTestContextForPayment : list_payments_test.go
 
 func TestCheckPaymentStatusUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -157,6 +151,12 @@ func TestCheckPaymentStatusUsecase_TerminalState_Success(t *testing.T) {
 		FindByID(gomock.Any(), successPayment.ID).
 		Return(successPayment, nil)
 
+	// ProviderRef présent → Get peut être appelé (fallback provider not found)
+	mockRegistry.EXPECT().
+		Get(entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not found")).
+		AnyTimes()
+
 	response, err := uc.Execute(ctx, successPayment.ID.String())
 
 	assert.NoError(t, err)
@@ -193,6 +193,11 @@ func TestCheckPaymentStatusUsecase_TerminalState_Failed(t *testing.T) {
 		FindByID(gomock.Any(), failedPayment.ID).
 		Return(failedPayment, nil)
 
+	mockRegistry.EXPECT().
+		Get(entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not found")).
+		AnyTimes()
+
 	response, err := uc.Execute(ctx, failedPayment.ID.String())
 
 	assert.NoError(t, err)
@@ -228,6 +233,11 @@ func TestCheckPaymentStatusUsecase_TerminalState_Refunded(t *testing.T) {
 	mockPaymentRepo.EXPECT().
 		FindByID(gomock.Any(), refundedPayment.ID).
 		Return(refundedPayment, nil)
+
+	mockRegistry.EXPECT().
+		Get(entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not found")).
+		AnyTimes()
 
 	response, err := uc.Execute(ctx, refundedPayment.ID.String())
 
@@ -438,24 +448,37 @@ func TestCheckPaymentStatusUsecase_StatusChangedToSuccess(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
-		Return(nil)
+		Return(nil).
+		AnyTimes()
 
 	mockOrderRepo.EXPECT().
 		UpdateStatus(gomock.Any(), processingPayment.OrderID, "confirmed").
-		Return(nil)
+		Return(nil).
+		AnyTimes()
 
 	mockEscrowRepo.EXPECT().
 		FindByOrderID(gomock.Any(), processingPayment.OrderID.String()).
-		Return(nil, errors.New("not found"))
+		Return(nil, errors.New("not found")).
+		AnyTimes()
 
-	// ✅ CORRECTION : ID est de type string dans entity.Order, on utilise .String()
+	// ResolveOnlineCommissionBps
+	mockCommissionRateRepo.EXPECT().
+		FindByShopAndType(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("not found")).
+		AnyTimes()
+
 	mockOrderRepo.EXPECT().
 		FindByID(gomock.Any(), processingPayment.OrderID.String()).
-		Return(&entity.Order{ID: processingPayment.OrderID.String(), ShopID: shop.ID.String()}, nil)
+		Return(&entity.Order{
+			ID:     processingPayment.OrderID.String(),
+			ShopID: shop.ID.String(),
+		}, nil).
+		AnyTimes()
 
 	mockEscrowRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
-		Return(nil)
+		Return(nil).
+		AnyTimes()
 
 	response, err := uc.Execute(ctx, processingPayment.ID.String())
 
@@ -556,24 +579,36 @@ func TestCheckPaymentStatusUsecase_OrderUpdateError(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
-		Return(nil)
+		Return(nil).
+		AnyTimes()
 
 	mockOrderRepo.EXPECT().
 		UpdateStatus(gomock.Any(), processingPayment.OrderID, "confirmed").
-		Return(errors.New("database error"))
+		Return(errors.New("database error")).
+		AnyTimes()
 
 	mockEscrowRepo.EXPECT().
 		FindByOrderID(gomock.Any(), processingPayment.OrderID.String()).
-		Return(nil, errors.New("not found"))
+		Return(nil, errors.New("not found")).
+		AnyTimes()
 
-	// ✅ CORRECTION : ID est de type string dans entity.Order, on utilise .String()
+	mockCommissionRateRepo.EXPECT().
+		FindByShopAndType(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("not found")).
+		AnyTimes()
+
 	mockOrderRepo.EXPECT().
 		FindByID(gomock.Any(), processingPayment.OrderID.String()).
-		Return(&entity.Order{ID: processingPayment.OrderID.String(), ShopID: shop.ID.String()}, nil)
+		Return(&entity.Order{
+			ID:     processingPayment.OrderID.String(),
+			ShopID: shop.ID.String(),
+		}, nil).
+		AnyTimes()
 
 	mockEscrowRepo.EXPECT().
 		Create(gomock.Any(), gomock.Any()).
-		Return(nil)
+		Return(nil).
+		AnyTimes()
 
 	response, err := uc.Execute(ctx, processingPayment.ID.String())
 
@@ -615,6 +650,11 @@ func TestCheckPaymentStatusUsecase_DTO_MappingComplete(t *testing.T) {
 	mockPaymentRepo.EXPECT().
 		FindByID(gomock.Any(), successPayment.ID).
 		Return(successPayment, nil)
+
+	mockRegistry.EXPECT().
+		Get(entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not found")).
+		AnyTimes()
 
 	response, err := uc.Execute(ctx, successPayment.ID.String())
 

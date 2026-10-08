@@ -497,13 +497,14 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl) // 🆕 AJOUTÉ
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
 	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo, mockRegistry, mockDB, mockShopRepo,
+		mockPaymentRepo, mockRegistry, mockTxManager, mockDB, mockShopRepo, // 🆕 mockTxManager ajouté
 		nil, mockTontineUC, nil, nil, nil,
 	)
 
@@ -511,7 +512,7 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
 	event := createTestWebhookEvent("TXN-123", entity.PaymentStatusSuccess)
 	mockProvider.EXPECT().ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).Return(event, nil)
-	mockDB.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("database error"))
+	mockDB.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("database error")).AnyTimes()
 
 	shopID := uuid.New()
 	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
