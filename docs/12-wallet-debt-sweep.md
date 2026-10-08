@@ -1,11 +1,15 @@
-Voici **`docs/12-wallet-debt-sweep.md`**, prêt à coller.
+
+
+---
+
+### `docs/12-wallet-debt-sweep.md`
 
 ```markdown
 # Wallet — Dette résiduelle, clawback & debt sweep
 
-**Version :** v5.1.x (debt-sweep milestone)  
+**Version :** v5.2.x (debt-sweep + financial integrity)  
 **Statut :** Livré et validé E2E (webhook + pay-in réel)  
-**Dernière MAJ :** 2026-10-03
+**Dernière MAJ :** 2026-10-08
 
 ---
 
@@ -24,12 +28,12 @@ Pas de gel automatique au moment du clawback : la dette est silencieuse jusqu’
 
 ## 2. Modèle de données (`merchant_wallets`)
 
-| Colonne | Rôle |
-|---------|------|
-| `balance_cents` | Solde ledger (peut baisser via clawback / commission / sweep) |
-| `held_cents` | Fonds non disponibles (escrow / tontine hold) — **≥ 0** |
-| `debt_cents` | Dette résiduelle post-clawback — **≥ 0** (contrainte SQL) |
-| `is_frozen` | Gel admin / legacy (négatif / fraude) — orthogonal à `debt_cents` |
+| Colonne         | Rôle                                                              |
+| --------------- | ----------------------------------------------------------------- |
+| `balance_cents` | Solde ledger (peut baisser via clawback / commission / sweep)     |
+| `held_cents`    | Fonds non disponibles (escrow / tontine hold) — **≥ 0**           |
+| `debt_cents`    | Dette résiduelle post-clawback — **≥ 0** (contrainte SQL)         |
+| `is_frozen`     | Gel admin / legacy (négatif / fraude) — orthogonal à `debt_cents` |
 
 **Disponible pour retrait :**
 
@@ -89,17 +93,17 @@ Dès qu’un flux **rend des fonds disponibles** (ou crédite le wallet), on app
 
 ```text
 swept = min(debt_cents, available_after_operation)
-debt_cents    -= swept
+debt_cents -= swept
 balance_cents -= swept   // paie la dette avec le cash libéré / crédité
 ```
 
-| Chemin | Mécanisme | Fichier principal |
-|--------|-----------|-------------------|
-| Auto-release escrow (sale) | `CreditWithDebtSweep` | scheduler escrow + `wallet_usecase` crédit |
-| Dispute `merchant_wins` | crédit + sweep | `resolve_dispute.go` |
-| Installment release | `ReleaseHeld` → commission → sweep | `installment_usecase/release_escrow_funds.go` |
-| Tontine redeem / release held | `ReleaseHeld` → sweep | `wallet_usecase/release_held_wallet.go` |
-| Dépôt manuel | crédit + sweep | `wallet_handler` / credit deposit |
+| Chemin                        | Mécanisme                          | Fichier principal                             |
+| ----------------------------- | ---------------------------------- | --------------------------------------------- |
+| Auto-release escrow (sale)    | `CreditWithDebtSweep`              | scheduler escrow + `wallet_usecase` crédit    |
+| Dispute `merchant_wins`       | crédit + sweep                     | `resolve_dispute.go`                          |
+| Installment release           | `ReleaseHeld` → commission → sweep | `installment_usecase/release_escrow_funds.go` |
+| Tontine redeem / release held | `ReleaseHeld` → sweep              | `wallet_usecase/release_held_wallet.go`       |
+| Dépôt manuel                  | crédit + sweep                     | `wallet_handler` / credit deposit             |
 
 **Ledger :** type `debt_sweep` (`WalletTxDebtSweep`), `amount_cents` négatif (ex. `-50000`), `reference_type` souvent `debt_sweep`.
 
@@ -107,36 +111,55 @@ Wiring installment : `NewReleaseEscrowFundsUsecase(...).WithTxnRepo(walletTxnRep
 
 ---
 
-## 5. Flux résumé
+## 5. Retrait (cash-out) et compensation (v5.2)
+
+Le retrait **n’annule pas** `debt_cents` : il est **interdit** tant que dette > 0.
+
+Si le débit wallet a déjà eu lieu et que Yenga CashOut échoue :
+
+| Chemin | Comportement |
+| ------ | ------------ |
+| **Synchrone (P0-A)** | `create_withdrawal` → `reversePayoutDebit` via `CreditWalletUsecase` + statut withdrawal `failed` |
+| **Async (P0-B)** | webhook `payout.failed` → reverse **idempotent** (ledger + transaction) |
+
+Objectif : **pas de perte silencieusement** du solde marchand si l’opérateur refuse le cash-out.
+
+Voir aussi [payment-system.md](payment-system.md) § Cash-out.
+
+---
+
+## 6. Flux résumé
 
 ```text
 [Pay-in success] → escrow funds_held
-       ↓
+        ↓
 [Shipping + delivery + délai zone]
-       ↓
+        ↓
 [Scheduler auto-release] → CreditWithDebtSweep → balance↑ (net de dette)
-       ↓
+        ↓
 [Option] Withdrawal si debt=0
-       ↓
+   ├─ CashOut OK
+   └─ CashOut fail → reverse débit (P0-A / P0-B)
+        ↓
 [Dispute customer_wins POST-release]
-       → ApplyClawbackToDebt → balance↓ puis debt↑
-       → withdrawal BLOQUÉ
-       ↓
+   → ApplyClawbackToDebt → balance↓ puis debt↑
+   → withdrawal BLOQUÉ
+        ↓
 [Prochain crédit / release]
-       → debt_sweep → debt↓ , balance net = crédit − swept
+   → debt_sweep → debt↓ , balance net = crédit − swept
 ```
 
 Dispute **PRE-release** (`merchant_wins`) : escrow `disputed` → claim release + crédit marchand (avec sweep si dette déjà présente) — **pas** de clawback client.
 
 ---
 
-## 6. API & messages UX
+## 7. API & messages UX
 
-| Situation | Comportement API |
-|-----------|------------------|
-| `POST /api/withdrawals` avec `debt_cents > 0` | HTTP 400, message dette résiduelle à régulariser |
-| `GET /api/wallet` | `withdrawal_blocked: true` si dette / gel / disponible ≤ 0 |
-| `GET /api/wallet/freeze-status` | `amount_due_cents` priorise `debt_cents` |
+| Situation                                     | Comportement API                                           |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `POST /api/withdrawals` avec `debt_cents > 0` | HTTP 400, message dette résiduelle à régulariser           |
+| `GET /api/wallet`                             | `withdrawal_blocked: true` si dette / gel / disponible ≤ 0 |
+| `GET /api/wallet/freeze-status`               | `amount_due_cents` priorise `debt_cents`                   |
 
 Frontend recommandé :
 
@@ -146,16 +169,16 @@ Frontend recommandé :
 
 ---
 
-## 7. Tests E2E (smoke)
+## 8. Tests E2E (smoke)
 
 Prérequis : API up, env `YENGA_PAY_WEBHOOK_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`.
 
-| Script | Scénario | Attendu |
-|--------|----------|---------|
-| `e2e-dispute-merchant-wins.ps1` | Litige pré-release, `merchant_wins` (± `INJECT_DEBT_CENTS`) | Escrow `released`, crédit net, sweep si dette |
-| `e2e-debt-sweep-fraud.ps1` | Inject SQL `debt_cents` puis 2e auto-release | Debt ↓, ledger `debt_sweep`, retrait bloqué si debt > 0 |
-| `e2e-clawback-debt-sweep-chain.ps1` | 2 pay-in **réels**, clawback puis sweep | debt créée par métier, puis swept |
-| `e2e-clawback-real-payin.ps1` | Clawback seul (canal pay-in réel) | Wallet ↓, escrow refunded |
+| Script                              | Scénario                                                    | Attendu                                                 |
+| ----------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| `e2e-dispute-merchant-wins.ps1`     | Litige pré-release, `merchant_wins` (± `INJECT_DEBT_CENTS`) | Escrow `released`, crédit net, sweep si dette           |
+| `e2e-debt-sweep-fraud.ps1`          | Inject SQL `debt_cents` puis 2e auto-release                | Debt ↓, ledger `debt_sweep`, retrait bloqué si debt > 0 |
+| `e2e-clawback-debt-sweep-chain.ps1` | 2 pay-in **réels**, clawback puis sweep                     | debt créée par métier, puis swept                       |
+| `e2e-clawback-real-payin.ps1`       | Clawback seul (canal pay-in réel)                           | Wallet ↓, escrow refunded                               |
 
 Exemple :
 
@@ -173,36 +196,45 @@ $env:INJECT_DEBT_CENTS="50000"
 .\e2e-debt-sweep-fraud.ps1
 ```
 
----
-
-## 8. Fichiers code de référence
-
-| Zone | Chemin |
-|------|--------|
-| Entity | `domain/entity/merchant_wallet.go` (`ApplyClawbackToDebt`, `CreditWithDebtSweep`, `ReleaseHeld`) |
-| Dispute | `application/usecase/dispute_usecase/resolve_dispute.go` |
-| Crédit wallet | `application/usecase/wallet_usecase/` (credit + release_held) |
-| Installment | `application/usecase/installment_usecase/release_escrow_funds.go` |
-| Retrait | `application/usecase/withdrawal_usecase/create_withdrawal.go` |
-| API | `interfaces/handler/wallet_handler/wallet_handler.go` |
-| DI | `internal/app/app.go` (`.WithTxnRepo(walletTxnRepo)`) |
+Tests unitaires complémentaires : `go test ./application/usecase/withdrawal_usecase/`, `./application/usecase/payment_usecase/` (reverse + P1-C).
 
 ---
 
-## 9. Non-objectifs (v1)
+## 9. Fichiers code de référence
+
+| Zone             | Chemin                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| Entity           | `domain/entity/merchant_wallet.go` (`ApplyClawbackToDebt`, `CreditWithDebtSweep`, `ReleaseHeld`) |
+| Dispute          | `application/usecase/dispute_usecase/resolve_dispute.go`                                         |
+| Crédit wallet    | `application/usecase/wallet_usecase/` (credit + release_held)                                    |
+| Installment      | `application/usecase/installment_usecase/release_escrow_funds.go`                                |
+| Retrait          | `application/usecase/withdrawal_usecase/create_withdrawal.go`                                    |
+| Payout webhook   | `application/usecase/withdrawal_usecase/process_payout_webhook.go`                               |
+| Pay-in webhook   | `application/usecase/payment_usecase/process_webhook.go`                                         |
+| API              | `interfaces/handler/wallet_handler/wallet_handler.go`                                            |
+| DI               | `internal/app/app.go` (`.WithTxnRepo(walletTxnRepo)`, credit UC sur withdrawal)                  |
+
+---
+
+## 10. Non-objectifs (v1)
 
 - Table séparée `merchant_debt_transactions` (redondant avec `debt_cents` + ledger).
-- Freeze automatique au clawback (entity freeze existe pour autres raisons).
+- Freeze automatique au clawback (entity freeze existe pour autres raisons ; job P2 = **alerte / audit** seulement).
 - Autoriser un retrait « net de dette » tant que `debt_cents > 0`.
 
 ---
 
-## 10. Liens doc associés
+## 11. Liens doc associés
 
+- Paiements : [payment-system.md](payment-system.md) (ou chemin équivalent dans `docs/`)
 - Domaine : [02-domain-model.md](02-domain-model.md)
 - API : [03-api-reference.md](03-api-reference.md)
 - Tests : [08-testing-guide.md](08-testing-guide.md)
 - Glossaire : [09-glossary.md](09-glossary.md)
-- Frontend : [10-frontend-guidelines.md](10-frontend-guidelines.md)
+- Freeze job : [13-wallet-grace-expiry-job.md](13-wallet-grace-expiry-job.md)
 - Changelog : [../CHANGELOG.md](../CHANGELOG.md)
+
+---
+
+**Dernière mise à jour** : 2026-10-08
 ```
