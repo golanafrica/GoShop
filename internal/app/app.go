@@ -15,6 +15,10 @@ import (
 
 	redis "Goshop/infrastructure/redis"
 
+	freezejobusecase "Goshop/application/usecase/freeze_job_usecase"
+	platformsettings "Goshop/infrastructure/postgres/platform_settings"
+	freezejobhandler "Goshop/interfaces/handler/freeze_job_handler"
+
 	"Goshop/application/metrics"
 	authusecase "Goshop/application/usecase/auth_usecase"
 	collaboratorusecase "Goshop/application/usecase/collaborator_usecase"
@@ -192,7 +196,7 @@ import (
 	// 🆕 v5.1.0 : Delivery Zone Handler & Usecase
 	deliveryzoneusecase "Goshop/application/usecase/delivery_zone_usecase"
 	deliveryzoneservice "Goshop/domain/service"
-	platformrevenuerepository "Goshop/infrastructure/postgres/platform_revenue_repository" // 🆕 AJOUTE CETTE LIGNE
+	platformrevenuerepository "Goshop/infrastructure/postgres/platform_revenue_repository"
 	deliveryzonehandler "Goshop/interfaces/handler/delivery_zone_handler"
 
 	// 🆕 v5.2.0 : Customer Reliability Score Usecase & Handler
@@ -296,6 +300,9 @@ func (a *App) setupRouter() {
 	// 🆕 v3.0.0 : Repositories Wallet
 	walletRepo := walletinfra.NewMerchantWalletRepositoryInfrastructure(a.DB)
 	walletTxnRepo := walletinfra.NewWalletTransactionRepositoryInfrastructure(a.DB)
+
+	// 🆕 P2.3 : Platform Settings Repository
+	platformSettingsRepo := platformsettings.NewPlatformSettingsRepository(a.DB)
 
 	// 🆕 v3.0.0 : Repository COD
 	codProofRepo := codinfra.NewCODProofRepositoryInfrastructure(a.DB)
@@ -441,7 +448,6 @@ func (a *App) setupRouter() {
 	var telegramService *notification.TelegramService
 
 	if telegramToken != "" && adminChatID != "" {
-		// ✅ CORRECTION : Ajout de '&' pour passer un pointeur (*zerolog.Logger)
 		telegramService = notification.NewTelegramService(telegramToken, adminChatID, &a.Logger.Logger)
 		a.Logger.Info().Msg("✅ v5.4.0 Telegram notification service initialized")
 	} else {
@@ -459,7 +465,7 @@ func (a *App) setupRouter() {
 			wsHub,
 			emailNotifProvider,
 			telegramService,
-			notifRepo, // 🆕 Injection du repository
+			notifRepo,
 			postgresCustomerRepo,
 			shopRepo,
 			postgresUserRepo,
@@ -504,7 +510,6 @@ func (a *App) setupRouter() {
 		escrowRepo,
 	)
 
-	// 🛠️ CORRECTION : Ajout de escrowRepo et rateRepo pour correspondre à la nouvelle signature
 	checkPaymentStatusUC := paymentusecase.NewCheckPaymentStatusUsecase(
 		paymentRepo,
 		postgresOrderRepo,
@@ -549,7 +554,6 @@ func (a *App) setupRouter() {
 	).WithWalletCreditor(creditWalletUC).
 		WithCommissionRateRepo(rateRepo)
 
-	// 🆕 v5.0.0 : Credit updater removed, passing nil
 	processWebhookUC := paymentusecase.NewProcessWebhookUsecase(
 		paymentRepo,
 		paymentRegistry,
@@ -572,7 +576,6 @@ func (a *App) setupRouter() {
 	)
 	listWithdrawalsUC := withdrawalusecase.NewListWithdrawalsUsecase(withdrawalRepo)
 
-	// 🆕 v5.4.0 : Payout Webhook Usecase (pour traiter payout.success / payout.failed)
 	processPayoutWebhookUC := withdrawalusecase.NewProcessPayoutWebhookUsecase(
 		withdrawalRepo,
 		walletRepo,
@@ -619,7 +622,6 @@ func (a *App) setupRouter() {
 		txmanagerRepo,
 	)
 
-	// ============ 🆕 v4.8.0 : SYNC ORDER PAYMENT USECASE ============
 	syncOrderPaymentUC := orderusecase.NewSyncOrderPaymentUsecase(
 		postgresOrderRepo,
 		paymentRepo,
@@ -960,16 +962,16 @@ func (a *App) setupRouter() {
 	)
 	customerReliabilityHandler := customerreliabilityhandler.NewCustomerReliabilityHandler(calculateReliabilityScoreUC)
 	a.Logger.Info().Msg("✅ v5.2.0 Customer Reliability Score usecase & handler initialized")
+
 	// ============ 🆕 v5.0.0 : INSTALLMENT USECASES ============
 	configureInstallmentPlanUC := installmentusecase.NewConfigureInstallmentPlanUsecase(installmentPlanRepo, postgreProductRepo, deliveryZoneRepo)
 
-	// 🆕 v5.2.0 : Create Installment Order Usecase (avec vérification du score de fiabilité)
 	createInstallmentOrderUC := installmentusecase.NewCreateInstallmentOrderUsecase(
 		txmanagerRepo,
 		postgresOrderRepo,
 		installmentPlanRepo,
 		postgresCustomerRepo,
-		customerReliabilityScoreRepo, // 🆕 AJOUTÉ : Repository du score de fiabilité
+		customerReliabilityScoreRepo,
 		orderInstallmentRepo,
 	)
 
@@ -978,17 +980,15 @@ func (a *App) setupRouter() {
 		txmanagerRepo, postgresOrderRepo, walletRepo, rateRepo,
 	).WithTxnRepo(walletTxnRepo)
 
-	// 🆕 v5.3.0 : Dashboard Marchand Usecase
 	getMerchantDashboardUC := installmentusecase.NewGetMerchantDashboardUsecase(
 		postgresOrderRepo,
 		orderInstallmentRepo,
 		deliveryZoneRepo,
 	)
 
-	// 🆕 v5.3.0 : Installment Handler mis à jour avec le Dashboard et la création de commande
 	installmentHandler := installmenthandler.NewInstallmentHandler(
 		configureInstallmentPlanUC,
-		createInstallmentOrderUC, // 🆕 AJOUTÉ ICI : pour créer les commandes en tranches avec vérification du score
+		createInstallmentOrderUC,
 		getInstallmentsUC,
 		releaseEscrowFundsUC,
 		getMerchantDashboardUC,
@@ -1061,6 +1061,23 @@ func (a *App) setupRouter() {
 	)
 	a.Logger.Info().Msg("✅ v5.2.0 Installment auto-release scheduler initialized (with notifications)")
 
+	// ============ 🆕 P2.2 & P2.3 : WALLET GRACE EXPIRY SCHEDULER & USECASE ============
+	walletGraceExpirySched := appscheduler.NewWalletGraceExpiryScheduler(
+		a.DB,
+		walletRepo,
+		notifService,
+		a.Logger.Logger,
+	)
+	a.Logger.Info().Msg("✅ P2.2 Wallet grace expiry scheduler initialized")
+
+	freezeJobUC := freezejobusecase.NewFreezeJobUsecase(
+		platformSettingsRepo,
+		walletRepo,
+		walletGraceExpirySched,
+	)
+	freezeJobHandler := freezejobhandler.NewFreezeJobHandler(freezeJobUC)
+	a.Logger.Info().Msg("✅ P2.3 Freeze job usecase & handler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -1095,7 +1112,6 @@ func (a *App) setupRouter() {
 		cancelOrderUC,
 	)
 
-	// ============ 🆕 v4.8.0 : SYNC ORDER HANDLER ============
 	syncOrderHandler := ordershandler.NewSyncOrderHandler(syncOrderPaymentUC)
 
 	var loginRateLimiter service.LoginRateLimiter
@@ -1134,14 +1150,12 @@ func (a *App) setupRouter() {
 		completePaymentUC,
 	)
 
-	// 🆕 v5.4.0 : Injection du processPayoutWebhookUC et du paymentRegistry concret
 	webhookHandler := paymenthandler.NewWebhookHandler(
 		processWebhookUC,
 		processPayoutWebhookUC,
-		paymentRegistry, // ✅ Ceci est bien de type *paymentinfra.Registry
+		paymentRegistry,
 	)
 
-	// 🆕 AJOUTÉ : Initialisation du WithdrawalHandler (qui était manquante)
 	withdrawalHandler := withdrawalhandler.NewWithdrawalHandler(
 		createWithdrawalUC,
 		listWithdrawalsUC,
@@ -1169,11 +1183,9 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ Tontine and KYC handlers initialized")
 
-	// ============ 🆕 v5.4.0 : NOTIFICATION HANDLER ============
 	notificationHandler := notificationhandler.NewNotificationHandler(notifRepo)
 	a.Logger.Info().Msg("✅ v5.4.0 Notification handler initialized")
 
-	// ============ 🆕 v3.0.0 : HANDLERS ============
 	walletHandler := wallethandler.NewWalletHandler(
 		creditWalletUC,
 		debitWalletUC,
@@ -1181,7 +1193,6 @@ func (a *App) setupRouter() {
 		unfreezeAccountUC,
 	)
 
-	// 🆕 v5.1.0 : Admin COD Dashboard Usecase
 	adminCODDashboardUC := codusecase.NewGetAdminCODDashboardUsecase(codProofRepo)
 
 	codHandler := codhandler.NewCODHandler(
@@ -1201,7 +1212,6 @@ func (a *App) setupRouter() {
 		deliveryProofRepo,
 	)
 
-	// 🆕 v5.0.0 : creditSched removed, passing only 3 arguments
 	commissionRateHandler := commissionratehandler.NewCommissionRateHandler(
 		rateRepo,
 		onlinePaymentSched,
@@ -1263,7 +1273,6 @@ func (a *App) setupRouter() {
 		disputeRepo,
 	)
 
-	// ============ 🆕 v4.7.0 : DELIVERY PROOF HANDLER ============
 	deliveryProofHandler := deliveryproofhandler.NewDeliveryProofHandler(
 		submitShippingUC,
 		submitTontineShippingUC,
@@ -1271,16 +1280,13 @@ func (a *App) setupRouter() {
 		submitTontineDeliveryUC,
 	)
 
-	// ============ 🆕 v5.1.0 : ADMIN DELIVERY ZONE HANDLER ============
 	adminDeliveryZoneHandler := deliveryzonehandler.NewAdminDeliveryZoneHandler(adminDeliveryZoneUC)
 
-	// ============ 🆕 v4.5.0 : WEBSOCKET HANDLER ============
 	var wsHandler *handlers.WSHandler
 	if wsHub != nil {
 		wsHandler = handlers.NewWSHandler(wsHub)
 	}
 
-	// ============ 🆕 v4.9.0 : FILE STORAGE + UPLOAD USECASE + HANDLER ============
 	uploadStorage, err := storageinfra.NewFileStorage("./uploads")
 	if err != nil {
 		a.Logger.Error().Err(err).Msg("❌ Failed to initialize file storage")
@@ -1291,7 +1297,6 @@ func (a *App) setupRouter() {
 	uploadFileUC := uploadusecase.NewUploadFileUsecase(uploadStorage, uploadTokenRepo)
 	uploadHandler := uploadhandler.NewUploadHandler(uploadFileUC)
 
-	// ============ 🆕 v4.10.0 : FILE DOWNLOAD USECASE + HANDLER (Pré-signées) ============
 	fileSecretKey := os.Getenv("FILE_SIGNING_SECRET")
 	if fileSecretKey == "" {
 		fileSecretKey = "dev-secret-key-change-in-production-32chars"
@@ -1304,7 +1309,7 @@ func (a *App) setupRouter() {
 	fileHandler := filehandler.NewFileHandler(downloadFileUC, uploadStorage, fileSecretKey)
 	a.Logger.Info().Msg("✅ v4.10.0 File download handler initialized")
 
-	a.Logger.Info().Msg("✅ v5.2.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments, delivery_zones, reliability_score)")
+	a.Logger.Info().Msg("✅ v5.2.0 handlers initialized (websocket, wallet, cod, scheduler, commission_rate, merchant_kyc, admin_shop, collaborator, 2fa, sessions, api_keys, merchant_overview, public_products, dispute, delivery_proof, sync_order, file_download, installments, delivery_zones, reliability_score, freeze_job)")
 
 	// ============================================================
 	// 🆕 v4.4.2 : Middleware Auth avec vérification de session
@@ -1391,7 +1396,6 @@ func (a *App) setupRouter() {
 
 		// ============ 🆕 v6.0.0 : REPORTING ROUTES ============
 		r.Route("/reports", func(r chi.Router) {
-			// 1. Routes Admin (nécessite rôle super_admin ou admin)
 			r.Group(func(r chi.Router) {
 				r.Use(middl.RequireRoles("super_admin", "admin"))
 				r.Get("/platform/balance", adminFinanceHandler.GetBalance)
@@ -1399,7 +1403,6 @@ func (a *App) setupRouter() {
 				r.Get("/platform/commissions/export", adminFinanceHandler.ExportCommissionsCSV)
 			})
 
-			// 2. Routes Marchand (nécessite contexte tenant et accès boutique)
 			r.Group(func(r chi.Router) {
 				r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
 				r.Use(middl.RequireShopAccess(shopCollabRepo))
@@ -1441,7 +1444,6 @@ func (a *App) setupRouter() {
 
 				r.Get("/{customer_id}/kyc/status", middl.ErrorHandler(kycHandler.GetKYCStatus))
 
-				// 🆕 v5.2.0 : Customer Reliability Score Route
 				r.Get("/{customer_id}/reliability-score", middl.ErrorHandler(customerReliabilityHandler.GetCustomerScore))
 			})
 
@@ -1485,7 +1487,6 @@ func (a *App) setupRouter() {
 				walletHandler.RegisterRoutes(r)
 			})
 
-			// 🆕 v5.4.0 : NOTIFICATION ROUTES (Centre de notifications In-App)
 			r.Route("/notifications", func(r chi.Router) {
 				notificationHandler.RegisterRoutes(r)
 			})
@@ -1497,7 +1498,6 @@ func (a *App) setupRouter() {
 				codHandler.RegisterRoutes(r)
 			})
 
-			// 🆕 v5.0.0 : INSTALLMENT ROUTES
 			installmentHandler.RegisterRoutes(r)
 
 			r.Route("/merchant", func(r chi.Router) {
@@ -1555,7 +1555,6 @@ func (a *App) setupRouter() {
 			r.Get("/", middl.ErrorHandler(commissionRateHandler.GetRates))
 			r.Post("/trigger-online", middl.ErrorHandler(commissionRateHandler.TriggerOnlineCollection))
 			r.Post("/trigger-tontine", middl.ErrorHandler(commissionRateHandler.TriggerTontineCollection))
-			// 🆕 v5.0.0 : trigger-credit removed
 		})
 
 		r.Route("/admin/merchant-kyc", func(r chi.Router) {
@@ -1607,9 +1606,27 @@ func (a *App) setupRouter() {
 				r.Get("/", middl.ErrorHandler(adminDeliveryZoneHandler.ListZones))
 				r.Put("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.UpdateZone))
 				r.Delete("/{id}", middl.ErrorHandler(adminDeliveryZoneHandler.DeleteZone))
-				// 🆕 v5.1.0 : Admin COD Dashboard Route
 				r.Get("/cod/commissions/dashboard", middl.ErrorHandler(codHandler.GetAdminCODDashboard))
 			})
+
+			// ============ 🆕 P2.3 : ADMIN FREEZE JOB ROUTES ============
+			r.Route("/freeze-job", func(r chi.Router) {
+				// Super Admin uniquement pour la config
+				r.Group(func(r chi.Router) {
+					r.Use(middl.RequireRoles("super_admin"))
+					r.Get("/", middl.ErrorHandler(freezeJobHandler.GetConfig))
+					r.Put("/", middl.ErrorHandler(freezeJobHandler.UpdateConfig))
+				})
+
+				// Super Admin + Admin délégué pour le run et la preview
+				r.Group(func(r chi.Router) {
+					r.Use(middl.RequireRoles("super_admin", "admin"))
+					r.Post("/run", middl.ErrorHandler(freezeJobHandler.RunJob))
+				})
+			})
+
+			// Preview des wallets expirés (hérite du RequireRoles("super_admin", "admin") du parent)
+			r.Get("/wallets/grace-expired", middl.ErrorHandler(freezeJobHandler.ListGraceExpired))
 		})
 	})
 
@@ -1634,25 +1651,31 @@ func (a *App) setupRouter() {
 		escrowAutoReleaseSchedule = "0 */6 * * *"
 	}
 
-	// 🆕 v5.1.0 : Installment Auto-Release Schedule
 	installmentSchedule := os.Getenv("INSTALLMENT_RELEASE_SCHEDULE")
 	if installmentSchedule == "" {
-		installmentSchedule = "0 */6 * * *" // Toutes les 6 heures
+		installmentSchedule = "0 */6 * * *"
 	}
 
-	// 🆕 v5.1.0 : Passing 11 arguments (added installmentAutoReleaseSched and installmentSchedule)
+	walletGraceExpirySchedule := os.Getenv("WALLET_GRACE_EXPIRY_SCHEDULE")
+	if walletGraceExpirySchedule == "" {
+		walletGraceExpirySchedule = "0 */6 * * *"
+	}
+
+	// 🆕 P2.2 : Passing 12 arguments (added walletGraceExpirySched and walletGraceExpirySchedule)
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
 		onlinePaymentSched,
 		tontineSched,
 		escrowAutoReleaseSched,
-		installmentAutoReleaseSched, // 🆕 Ajouté
+		installmentAutoReleaseSched,
+		walletGraceExpirySched,
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
 		tontineSchedule,
 		escrowAutoReleaseSchedule,
-		installmentSchedule, // 🆕 Ajouté
+		installmentSchedule,
+		walletGraceExpirySchedule,
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1663,7 +1686,8 @@ func (a *App) setupRouter() {
 			Str("online_payment_schedule", onlinePaymentSchedule).
 			Str("tontine_schedule", tontineSchedule).
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
-			Str("installment_schedule", installmentSchedule). // 🆕 Ajouté
+			Str("installment_schedule", installmentSchedule).
+			Str("wallet_grace_expiry_schedule", walletGraceExpirySchedule).
 			Msg("✅ v5.2.0 All schedulers started successfully")
 	}
 
@@ -1672,7 +1696,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated)")
+		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============

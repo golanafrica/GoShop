@@ -16,13 +16,15 @@ type CronScheduler struct {
 	onlinePaymentSched          *appscheduler.OnlinePaymentScheduler
 	tontineSched                *appscheduler.TontineScheduler
 	escrowAutoReleaseSched      *appscheduler.EscrowAutoReleaseScheduler
-	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler // 🆕 Ajouté
+	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler
+	walletGraceExpirySched      *appscheduler.WalletGraceExpiryScheduler // 🆕 Ajouté
 	logger                      zerolog.Logger
 	scheduleCron                string
 	onlinePaymentSchedule       string
 	tontineSchedule             string
 	escrowAutoReleaseSchedule   string
-	installmentSchedule         string // 🆕 Ajouté
+	installmentSchedule         string
+	walletGraceExpirySchedule   string // 🆕 Ajouté
 }
 
 // NewCronScheduler crée une nouvelle instance
@@ -31,13 +33,15 @@ func NewCronScheduler(
 	onlinePaymentSched *appscheduler.OnlinePaymentScheduler,
 	tontineSched *appscheduler.TontineScheduler,
 	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler,
-	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler, // 🆕 Ajouté
+	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler,
+	walletGraceExpirySched *appscheduler.WalletGraceExpiryScheduler, // 🆕 Ajouté
 	logger zerolog.Logger,
 	scheduleCron string,
 	onlinePaymentSchedule string,
 	tontineSchedule string,
 	escrowAutoReleaseSchedule string,
-	installmentSchedule string, // 🆕 Ajouté
+	installmentSchedule string,
+	walletGraceExpirySchedule string, // 🆕 Ajouté
 ) *CronScheduler {
 
 	if scheduleCron == "" {
@@ -53,7 +57,10 @@ func NewCronScheduler(
 		escrowAutoReleaseSchedule = "0 */6 * * *"
 	}
 	if installmentSchedule == "" {
-		installmentSchedule = "0 */6 * * *" // 🆕 Par défaut toutes les 6 heures
+		installmentSchedule = "0 */6 * * *"
+	}
+	if walletGraceExpirySchedule == "" {
+		walletGraceExpirySchedule = "0 */6 * * *" // 🆕 Par défaut toutes les 6 heures
 	}
 
 	return &CronScheduler{
@@ -62,13 +69,15 @@ func NewCronScheduler(
 		onlinePaymentSched:          onlinePaymentSched,
 		tontineSched:                tontineSched,
 		escrowAutoReleaseSched:      escrowAutoReleaseSched,
-		installmentAutoReleaseSched: installmentAutoReleaseSched, // 🆕 Ajouté
+		installmentAutoReleaseSched: installmentAutoReleaseSched,
+		walletGraceExpirySched:      walletGraceExpirySched, // 🆕 Ajouté
 		logger:                      logger.With().Str("component", "cron_scheduler").Logger(),
 		scheduleCron:                scheduleCron,
 		onlinePaymentSchedule:       onlinePaymentSchedule,
 		tontineSchedule:             tontineSchedule,
 		escrowAutoReleaseSchedule:   escrowAutoReleaseSchedule,
-		installmentSchedule:         installmentSchedule, // 🆕 Ajouté
+		installmentSchedule:         installmentSchedule,
+		walletGraceExpirySchedule:   walletGraceExpirySchedule, // 🆕 Ajouté
 	}
 }
 
@@ -79,7 +88,8 @@ func (s *CronScheduler) Start() error {
 		Str("online_payment_schedule", s.onlinePaymentSchedule).
 		Str("tontine_schedule", s.tontineSchedule).
 		Str("escrow_auto_release_schedule", s.escrowAutoReleaseSchedule).
-		Str("installment_schedule", s.installmentSchedule). // 🆕 Ajouté
+		Str("installment_schedule", s.installmentSchedule).
+		Str("wallet_grace_expiry_schedule", s.walletGraceExpirySchedule). // 🆕 Ajouté
 		Msg("🕐 Starting cron scheduler")
 
 	// 1. COD (tous les jours à 2h)
@@ -136,7 +146,7 @@ func (s *CronScheduler) Start() error {
 		}
 	}
 
-	// 5. 🆕 Installment Auto-Release (toutes les 6 heures)
+	// 5. Installment Auto-Release (toutes les 6 heures)
 	if s.installmentAutoReleaseSched != nil {
 		_, err = s.cron.AddFunc(s.installmentSchedule, func() {
 			s.logger.Info().Msg("⏰ Cron trigger: Installment auto-release")
@@ -144,6 +154,17 @@ func (s *CronScheduler) Start() error {
 			if err := s.installmentAutoReleaseSched.RunAutoRelease(ctx); err != nil {
 				s.logger.Error().Err(err).Msg("❌ Installment auto-release failed")
 			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// 6. 🆕 Wallet Grace Expiry (toutes les 6 heures)
+	if s.walletGraceExpirySched != nil {
+		_, err = s.cron.AddFunc(s.walletGraceExpirySchedule, func() {
+			s.logger.Info().Msg("⏰ Cron trigger: Wallet grace expiry check")
+			s.walletGraceExpirySched.Run()
 		})
 		if err != nil {
 			return err
