@@ -16,6 +16,21 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// ErrWithdrawalOutcome : échec métier avec ID + statut (handler / E2E peuvent lire withdrawal_id).
+// Utilisé après reverse cash-out fail, ou quand le retrait reste en processing (timeout réseau).
+type ErrWithdrawalOutcome struct {
+	WithdrawalID string
+	Status       string // "failed" | "processing"
+	Message      string
+}
+
+func (e *ErrWithdrawalOutcome) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
 type CreateWithdrawalUsecase struct {
 	withdrawalRepo  repository.WithdrawalRepository
 	shopPaymentRepo ShopPaymentSettingsRepository
@@ -245,7 +260,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 
 	debited := true
 
-	// Helper local : reverse + mark failed
+	// Helper local : reverse + mark failed + erreur typée (withdrawal_id exposé)
 	failAfterDebit := func(cause error, reason string) (*withdrawaldto.WithdrawalResponse, error) {
 		revErr := uc.reversePayoutDebit(ctx, shop.ID.String(), req.AmountCents, withdrawalID, reason)
 		if revErr != nil {
@@ -256,7 +271,12 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 				Msg("CRITICAL: payout debit reverse failed — manual reconciliation required")
 		}
 		_ = markWithdrawalFailed(uc, ctx, withdrawal, cause.Error())
-		return nil, fmt.Errorf("%s: %w", reason, cause)
+		msg := fmt.Sprintf("%s: %v", reason, cause)
+		return nil, &ErrWithdrawalOutcome{
+			WithdrawalID: withdrawalID,
+			Status:       "failed",
+			Message:      msg,
+		}
 	}
 
 	// ============================================================
@@ -309,10 +329,8 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	// ============================================================
 	cashOutResp, err := yengaProvider.CashOut(ctx, cashOutReq)
 	if err != nil {
-		// 🛡️ P0 CRITIQUE : Distinguer les erreurs réseau/timeout des erreurs métier définitives
+		// P0 : timeout / réseau → NE PAS reverse (attendre webhook)
 		if isNetworkOrTimeoutError(err) {
-			// Erreur ambiguë (timeout, 502, etc.) : NE PAS ANNULER LE DÉBIT.
-			// On laisse le retrait en statut "processing" et on attend le webhook de résolution.
 			logger.Warn().
 				Err(err).
 				Str("withdrawal_id", withdrawalID).
@@ -325,14 +343,21 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 				return nil, fmt.Errorf("update withdrawal after network error: %w", updateErr)
 			}
 
-			return nil, fmt.Errorf("le retrait est en cours de traitement et sera confirmé par le fournisseur sous peu (référence: %s)", withdrawalID)
+			return nil, &ErrWithdrawalOutcome{
+				WithdrawalID: withdrawalID,
+				Status:       "processing",
+				Message: fmt.Sprintf(
+					"le retrait est en cours de traitement et sera confirme par le fournisseur sous peu (reference: %s)",
+					withdrawalID,
+				),
+			}
 		}
 
-		// Erreur métier définitive (ex: numéro invalide, compte inexistant) → Annulation sûre
+		// Erreur métier définitive → reverse + failed
 		return failAfterDebit(err, "cash-out definitively rejected by provider")
 	}
 
-	// CashOut accepte : NE PAS reverse (fonds engagés côté provider)
+	// CashOut accepte : NE PAS reverse
 	if err := withdrawal.MarkProcessing(cashOutResp.ProviderRef); err != nil {
 		logger.Error().Err(err).
 			Str("withdrawal_id", withdrawalID).
@@ -387,11 +412,9 @@ func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
 	desc := fmt.Sprintf("Payout reverse for withdrawal %s (%s)", withdrawalID, reason)
 
 	req := &walletusecase.CreditWalletRequest{
-		ShopID:      shopID,
-		AmountCents: amountCents,
-		// 🛡️ P0 : Utiliser un type dédié à l'annulation pour la traçabilité du ledger (au lieu de Deposit)
-		// Assurez-vous que entity.WalletTxRefund existe dans votre package entity. Sinon, utilisez entity.WalletTxDeposit.
-		TransactionType: entity.WalletTxRefund,
+		ShopID:          shopID,
+		AmountCents:     amountCents,
+		TransactionType: entity.WalletTxDeposit, // crédit de compensation — JAMAIS Refund // si absent en local → entity.WalletTxDeposit
 		ReferenceType:   &refType,
 		ReferenceID:     &refID,
 		Description:     &desc,
@@ -413,14 +436,11 @@ func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
 	return nil
 }
 
-// isNetworkOrTimeoutError vérifie si l'erreur est une erreur réseau/timeout ambiguë
-// où le provider a pu traiter la demande malgré tout (risque de double paiement si on annule).
 func isNetworkOrTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
 	errStr := strings.ToLower(err.Error())
-	// Ajoutez ici les mots-clés spécifiques à votre provider YengaPay si nécessaire
 	return strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "context deadline exceeded") ||
 		strings.Contains(errStr, "no route to host") ||

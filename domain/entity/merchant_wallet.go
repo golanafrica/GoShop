@@ -20,21 +20,24 @@ const (
 	WalletTxSaleCreditPlan  WalletTransactionType = "sale_credit_plan"
 	WalletTxDeposit         WalletTransactionType = "deposit"
 	WalletTxUnfreezeDeposit WalletTransactionType = "unfreeze_deposit"
+	// Compensation cash-out fail (reverse debit payout) — crédit explicite
+	WalletTxPayoutReversal WalletTransactionType = "payout_reversal"
 
 	// Débits
 	WalletTxCommissionDebit WalletTransactionType = "commission_debit"
 	WalletTxPayout          WalletTransactionType = "payout"
-	WalletTxRefund          WalletTransactionType = "refund"
+	WalletTxRefund          WalletTransactionType = "refund" // débit marchand (remboursement client)
 	WalletTxClawback        WalletTransactionType = "clawback"
 	WalletTxFreezePenalty   WalletTransactionType = "freeze_penalty"
-	WalletTxDebtAdd         WalletTransactionType = "debt_add"   // hausse dette (audit)
-	WalletTxDebtSweep       WalletTransactionType = "debt_sweep" // prélèvement sur crédit
+	WalletTxDebtAdd         WalletTransactionType = "debt_add"
+	WalletTxDebtSweep       WalletTransactionType = "debt_sweep"
 )
 
 func (t WalletTransactionType) IsValid() bool {
 	switch t {
 	case WalletTxSaleCredit, WalletTxCOD, WalletTxSaleTontine,
 		WalletTxSaleCreditPlan, WalletTxDeposit, WalletTxUnfreezeDeposit,
+		WalletTxPayoutReversal,
 		WalletTxCommissionDebit, WalletTxPayout, WalletTxRefund,
 		WalletTxClawback, WalletTxFreezePenalty,
 		WalletTxDebtAdd, WalletTxDebtSweep:
@@ -46,7 +49,8 @@ func (t WalletTransactionType) IsValid() bool {
 func (t WalletTransactionType) IsCredit() bool {
 	switch t {
 	case WalletTxSaleCredit, WalletTxCOD, WalletTxSaleTontine,
-		WalletTxSaleCreditPlan, WalletTxDeposit, WalletTxUnfreezeDeposit:
+		WalletTxSaleCreditPlan, WalletTxDeposit, WalletTxUnfreezeDeposit,
+		WalletTxPayoutReversal:
 		return true
 	}
 	return false
@@ -220,7 +224,6 @@ func (w *MerchantWallet) CreditAndHold(amountCents int64) error {
 // TRANSACTIONS
 // ============================================================
 
-// Credit crédite sans sweep (legacy). Préférer CreditWithDebtSweep pour les ventes.
 func (w *MerchantWallet) Credit(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("amount must be positive")
@@ -231,8 +234,6 @@ func (w *MerchantWallet) Credit(amountCents int64) error {
 	return nil
 }
 
-// CreditWithDebtSweep crédite puis prélève sur debt_cents.
-// Retourne (net ajouté à balance, montant sweepé sur dette).
 func (w *MerchantWallet) CreditWithDebtSweep(creditCents int64) (netToBalance int64, swept int64, err error) {
 	if w == nil {
 		return 0, 0, errors.New("wallet is nil")
@@ -240,7 +241,6 @@ func (w *MerchantWallet) CreditWithDebtSweep(creditCents int64) (netToBalance in
 	if creditCents <= 0 {
 		return 0, 0, errors.New("credit must be positive")
 	}
-	// Autorisé même frozen : on réduit la dette / on récupère
 	swept = creditCents
 	if swept > w.DebtCents {
 		swept = w.DebtCents
@@ -256,7 +256,6 @@ func (w *MerchantWallet) CreditWithDebtSweep(creditCents int64) (netToBalance in
 	return netToBalance, swept, nil
 }
 
-// AddDebt augmente debt_cents (sans toucher balance).
 func (w *MerchantWallet) AddDebt(amountCents int64) error {
 	if w == nil {
 		return errors.New("wallet is nil")
@@ -286,8 +285,6 @@ func (w *MerchantWallet) Debit(amountCents int64) error {
 	return nil
 }
 
-// ApplyClawback : legacy — débite balance uniquement (peut aller négatif via MaxNegative).
-// Préférer ApplyClawbackToDebt pour le modèle dette explicite.
 func (w *MerchantWallet) ApplyClawback(amountCents int64) error {
 	if amountCents <= 0 {
 		return errors.New("clawback amount must be positive")
@@ -304,8 +301,6 @@ func (w *MerchantWallet) ApplyClawback(amountCents int64) error {
 	return nil
 }
 
-// ApplyClawbackToDebt : prend sur balance (sans descendre sous 0), reste → debt_cents.
-// Ne gèle pas. Ne rend pas balance négative.
 func (w *MerchantWallet) ApplyClawbackToDebt(amountCents int64) (fromBalance int64, toDebt int64, err error) {
 	if w == nil {
 		return 0, 0, errors.New("wallet is nil")
@@ -334,7 +329,6 @@ func (w *MerchantWallet) DebtAfterCredit(creditCents int64) int64 {
 	if creditCents < 0 {
 		creditCents = 0
 	}
-	// Après un crédit avec sweep : dette restante
 	debt := w.DebtCents - creditCents
 	if debt < 0 {
 		return 0
@@ -403,7 +397,6 @@ func (w *MerchantWallet) Unfreeze(depositAmountCents int64) error {
 	if !w.IsFrozen {
 		return errors.New("wallet is not frozen")
 	}
-	// Couvrir dette explicite ou balance négative legacy
 	need := w.DebtCents
 	if w.BalanceCents < 0 {
 		need += -w.BalanceCents
@@ -446,7 +439,6 @@ func (w *MerchantWallet) IsPositive() bool { return w.BalanceCents > 0 }
 func (w *MerchantWallet) IsZero() bool     { return w.BalanceCents == 0 }
 func (w *MerchantWallet) IsNegative() bool { return w.BalanceCents < 0 }
 
-// GetDebt : dette explicite + éventuel solde négatif legacy.
 func (w *MerchantWallet) GetDebt() int64 {
 	d := w.DebtCents
 	if w.BalanceCents < 0 {
