@@ -3,6 +3,7 @@ package freezejobusecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -88,10 +89,24 @@ func (uc *FreezeJobUsecase) UpdateConfig(ctx context.Context, cfg *FreezeJobConf
 }
 
 // RunJob déclenche le scheduler manuellement (en arrière-plan)
-func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string) {
-	// 🛡️ CORRECTION CRITIQUE : Utiliser context.Background() au lieu de ctx (r.Context())
-	// car le contexte HTTP est annulé dès que la réponse est envoyée, ce qui tuait la goroutine.
+// 🛡️ CORRECTION P1 : Vérifie les droits RBAC avant de lancer le job
+func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string, isSuperAdmin bool) error {
+	if !isSuperAdmin {
+		// Un admin délégué ne peut pas forcer l'exécution si le job est désactivé
+		cfg, err := uc.GetConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to read freeze job config: %w", err)
+		}
+		if !cfg.Enabled {
+			return errors.New("freeze job is disabled by super admin")
+		}
+	}
+
+	// Lancer en goroutine pour ne pas bloquer la requête HTTP
+	// On utilise context.Background() pour que la goroutine survive à la fin de la requête HTTP
 	go uc.scheduler.RunManual(context.Background(), mode)
+
+	return nil
 }
 
 func (uc *FreezeJobUsecase) ListGraceExpired(ctx context.Context) ([]*GraceExpiredWallet, error) {

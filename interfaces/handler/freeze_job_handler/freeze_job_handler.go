@@ -48,7 +48,23 @@ func (h *FreezeJobHandler) RunJob(w http.ResponseWriter, r *http.Request) error 
 		return utils.NewAppError("INVALID_MODE", "mode must be 'live' or 'dry_run'", http.StatusBadRequest)
 	}
 
-	h.uc.RunJob(r.Context(), mode)
+	// 🛡️ CORRECTION P1 : Récupérer le rôle de l'utilisateur depuis le contexte
+	role, _ := utils.UserRoleFromContext(r.Context())
+	isSuperAdmin := (role == "super_admin")
+
+	// Appel mis à jour avec le 3ème argument (isSuperAdmin)
+	if err := h.uc.RunJob(r.Context(), mode, isSuperAdmin); err != nil {
+		// Si l'erreur vient du blocage RBAC, on retourne un 403 Forbidden explicite
+		if err.Error() == "freeze job is disabled by super admin" {
+			return utils.NewAppError(
+				"FORBIDDEN",
+				"Action réservée au Super Admin lorsque le freeze job est désactivé",
+				http.StatusForbidden,
+			)
+		}
+		return utils.NewAppError("RUN_JOB_FAILED", err.Error(), http.StatusInternalServerError)
+	}
+
 	utils.WriteJSON(w, http.StatusAccepted, map[string]interface{}{"success": true, "message": "Job triggered successfully in background", "mode": mode})
 	return nil
 }

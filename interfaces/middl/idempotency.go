@@ -105,8 +105,12 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			// 4. Vérifier si la clé existe déjà
 			existingKey, err := config.IdempotencyRepo.FindByKey(r.Context(), idempotencyKey)
 			if err != nil {
-				logger.Error().Err(err).Msg("❌ Erreur recherche clé d'idempotence")
-				utils.WriteAppError(w, utils.ErrInternalServer)
+				logger.Error().Err(err).Msg("❌ Erreur critique lors de la recherche de la clé d'idempotence")
+				utils.WriteAppError(w, utils.NewAppError(
+					"IDEMPOTENCY_STORAGE_ERROR",
+					"Impossible de vérifier l'état d'idempotence. Veuillez réessayer.",
+					http.StatusServiceUnavailable, // 503
+				))
 				return
 			}
 
@@ -160,9 +164,14 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			newKey := entity.NewIdempotencyKey(idempotencyKey, userID, endpoint, bodyBytes, config.TTL)
 
 			if err := config.IdempotencyRepo.Create(r.Context(), newKey); err != nil {
-				logger.Error().Err(err).Msg("❌ Erreur création clé d'idempotence")
-				// Continuer sans idempotence (dégradation gracieuse)
-				next.ServeHTTP(w, r)
+				// 🛡️ CORRECTION P1 : FAIL-FAST
+				// Ne jamais exécuter une requête financière sans garantie d'idempotence.
+				logger.Error().Err(err).Msg("❌ Échec critique de la création de la clé d'idempotence")
+				utils.WriteAppError(w, utils.NewAppError(
+					"IDEMPOTENCY_STORAGE_UNAVAILABLE",
+					"Impossible de garantir l'idempotence de la requête pour des raisons techniques. Veuillez réessayer plus tard.",
+					http.StatusServiceUnavailable, // 503
+				))
 				return
 			}
 
@@ -171,6 +180,8 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			next.ServeHTTP(recorder, r)
 
 			// 8. Stocker la réponse pour les futures requêtes
+			// Note: Si cette étape échoue, on loggue un warning mais on ne bloque pas,
+			// car la requête métier a déjà réussi et la clé existe déjà (étape 6).
 			responseHeaders := make(map[string]string)
 			for k := range recorder.Header() {
 				responseHeaders[k] = recorder.Header().Get(k)
@@ -189,7 +200,7 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 				responseHeaders,
 				responseBody,
 			); err != nil {
-				logger.Warn().Err(err).Msg("⚠️ Impossible de stocker la réponse (idempotence dégradée)")
+				logger.Warn().Err(err).Msg("⚠️ Impossible de stocker la réponse (idempotence dégradée pour les futurs replays)")
 			}
 
 			logger.Debug().

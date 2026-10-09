@@ -361,11 +361,19 @@ func (a *App) setupRouter() {
 	// 🛡️ SÉCURITÉ CRITIQUE : Enregistrement des Providers de Paiement
 	// ============================================================
 
+	// 🛡️ CORRECTION P1 : Fail-Fast pour le secret Webhook en production
+	yengaWebhookSecret := os.Getenv("YENGA_PAY_WEBHOOK_SECRET")
+	appEnv := os.Getenv("APP_ENV") // Déclaré une seule fois ici pour éviter l'erreur "no new variables"
+
+	if yengaWebhookSecret == "" && (appEnv == "production" || appEnv == "prod") {
+		a.Logger.Fatal().Msg("❌ FATAL: YENGA_PAY_WEBHOOK_SECRET is required in production to verify webhook signatures.")
+	}
+
 	yengaPayConfig := paymentinfra.YengaPayConfig{
 		APIKey:         os.Getenv("YENGA_PAY_API_KEY"),
 		OrganizationID: os.Getenv("YENGA_PAY_ORGANIZATION_ID"),
 		ProjectID:      os.Getenv("YENGA_PAY_PROJECT_ID"),
-		WebhookSecret:  os.Getenv("YENGA_PAY_WEBHOOK_SECRET"),
+		WebhookSecret:  yengaWebhookSecret, // <-- On utilise la variable qu'on vient de vérifier
 		Env:            os.Getenv("YENGA_PAY_ENV"),
 	}
 
@@ -384,7 +392,6 @@ func (a *App) setupRouter() {
 		a.Logger.Warn().Msg("⚠️ Yenga Pay provider not configured globally (missing YENGA_PAY_API_KEY)")
 	}
 
-	appEnv := os.Getenv("APP_ENV")
 	if appEnv == "production" {
 		a.Logger.Info().Msg("✅ Production environment: Mock payment providers are DISABLED")
 	} else {
@@ -1300,10 +1307,18 @@ func (a *App) setupRouter() {
 	uploadFileUC := uploadusecase.NewUploadFileUsecase(uploadStorage, uploadTokenRepo)
 	uploadHandler := uploadhandler.NewUploadHandler(uploadFileUC)
 
+	// 🛡️ CORRECTION P1 : Fail-Fast pour les secrets en production
 	fileSecretKey := os.Getenv("FILE_SIGNING_SECRET")
+
 	if fileSecretKey == "" {
+		// Si nous sommes en production, le secret est OBLIGATOIRE.
+		if os.Getenv("APP_ENV") == "production" || os.Getenv("APP_ENV") == "prod" {
+			a.Logger.Fatal().Msg("❌ FATAL: FILE_SIGNING_SECRET is required in production environment. Refusing to start with default dev secret.")
+		}
+
+		// En développement/test, on tolère le fallback (avec un warning clair)
 		fileSecretKey = "dev-secret-key-change-in-production-32chars"
-		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY)")
+		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY - DO NOT USE IN PRODUCTION)")
 	} else {
 		a.Logger.Info().Msg("✅ v4.10.0 File signing secret initialized")
 	}
