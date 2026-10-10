@@ -14,6 +14,7 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -28,13 +29,16 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $PayInTimeoutSec         = 300
 $EligibilityBackdateDays = 6
 $SchedulerWaitSec        = 12
 
 $Timestamp        = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail    = "merchant.claw.real.$Timestamp@goshop.com"
-$MerchantPassword = "Password123!"
 $ShopName         = "Claw Real $Timestamp"
 $ShopSlug         = "claw-real-$Timestamp"
 
@@ -256,14 +260,14 @@ try {
         first_name = "Client"
         last_name  = "ClawReal"
         email      = "client.claw.real.$Timestamp@test.com"
-        phone      = "+22677515151"
+        phone      = $CustomerPhone
     }
     if (-not $res.Success) {
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body @{
             first_name   = "Client"
             last_name    = "ClawReal"
             email        = "client.claw.real.$Timestamp@test.com"
-            phone_number = "+22677515151"
+            phone_number = $CustomerPhone
         }
     }
     Assert-Ok -Res $res -Label "Customer" -Codes @(200, 201)
@@ -295,7 +299,7 @@ try {
     Write-Step -N "05/10" -Msg "Initiate YengaPay + REAL checkout (NO phone SQL)"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" -Headers $script:State.MerchantHeaders -Body @{
         provider     = "yenga_pay"
-        phone_number = "+22677515151"
+        phone_number = $CustomerPhone
         description  = "E2E clawback real pay-in order $orderId"
         metadata     = @{ flow = "indirect" }
     }
@@ -418,31 +422,31 @@ try {
     Write-Host ("  Wallet BEFORE dispute: {0} cents" -f $wb) -ForegroundColor White
 
     # ----- 08 Open dispute post-release -----
-Write-Step -N "08/10" -Msg "Open dispute on RELEASED escrow"
+    Write-Step -N "08/10" -Msg "Open dispute on RELEASED escrow"
 
-$openBody = @{
-    reason = "E2E clawback real post-release product not as described $Timestamp"
-}
-# Route officielle GoShop: POST /api/orders/{id}/dispute
-$res = Invoke-SafeApi -Method Post `
-    -Uri "$BaseUrl/api/orders/$orderId/dispute" `
-    -Headers $script:State.MerchantHeaders `
-    -Body $openBody
+    $openBody = @{
+        reason = "E2E clawback real post-release product not as described $Timestamp"
+    }
+    # Route officielle GoShop: POST /api/orders/{id}/dispute
+    $res = Invoke-SafeApi -Method Post `
+        -Uri "$BaseUrl/api/orders/$orderId/dispute" `
+        -Headers $script:State.MerchantHeaders `
+        -Body $openBody
 
-if (-not $res.Success) {
-    Write-Fail ("Open dispute failed HTTP {0}: {1}" -f $res.StatusCode, $res.Raw)
-}
+    if (-not $res.Success) {
+        Write-Fail ("Open dispute failed HTTP {0}: {1}" -f $res.StatusCode, $res.Raw)
+    }
 
-$disputeId = Get-Prop $res.Data @("dispute.id", "data.dispute.id", "id", "data.id")
-if (-not $disputeId) {
-    Write-Fail ("dispute id missing: {0}" -f ($res.Data | ConvertTo-Json -Compress -Depth 6))
-}
-$script:State.DisputeId = [string]$disputeId
-Write-Ok ("Dispute opened {0} (post-release)" -f $disputeId)
+    $disputeId = Get-Prop $res.Data @("dispute.id", "data.dispute.id", "id", "data.id")
+    if (-not $disputeId) {
+        Write-Fail ("dispute id missing: {0}" -f ($res.Data | ConvertTo-Json -Compress -Depth 6))
+    }
+    $script:State.DisputeId = [string]$disputeId
+    Write-Ok ("Dispute opened {0} (post-release)" -f $disputeId)
 
-$esc2 = Invoke-Sql -Sql "SELECT status FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
-Write-Host ("  Escrow after open dispute: {0}" -f $esc2) -ForegroundColor White
-# post-release: reste "released" (normal)
+    $esc2 = Invoke-Sql -Sql "SELECT status FROM escrow_accounts WHERE order_id = '$orderId'::uuid LIMIT 1;"
+    Write-Host ("  Escrow after open dispute: {0}" -f $esc2) -ForegroundColor White
+    # post-release: reste "released" (normal)
 
     # 09 Resolve customer_wins
     Write-Step -N "09/10" -Msg "Admin resolve customer_wins (clawback + real refund canal)"
@@ -454,9 +458,9 @@ Write-Host ("  Escrow after open dispute: {0}" -f $esc2) -ForegroundColor White
     }
     $resolved = $false
     $resolveUrls = @(
-    "$BaseUrl/api/admin/disputes/$disputeId/resolve",
-    "$BaseUrl/api/admin/orders/$orderId/dispute/resolve"
-)
+        "$BaseUrl/api/admin/disputes/$disputeId/resolve",
+        "$BaseUrl/api/admin/orders/$orderId/dispute/resolve"
+    )
     foreach ($url in $resolveUrls) {
         $res = Invoke-SafeApi -Method Post -Uri $url -Headers $script:State.AdminHeaders -Body $resolveBody
         if ($res.Success -and ($res.StatusCode -eq 200 -or $res.StatusCode -eq 201)) {

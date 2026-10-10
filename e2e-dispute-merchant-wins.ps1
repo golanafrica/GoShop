@@ -16,12 +16,15 @@ $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 $InjectDebt    = if ($env:INJECT_DEBT_CENTS) { [int64]$env:INJECT_DEBT_CENTS } else { [int64]0 }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail = "merchant.mwins.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 $ShopSlug      = "mwins-shop-$Timestamp"
 $ShopName      = "MWins Shop $Timestamp"
-$CustomerPhone = "+22677515151"
 $PriceCents    = 100000
 $PaymentAmount = 1000
 
@@ -192,7 +195,7 @@ try {
     Write-Step -N "03/09" -Msg "Merchant + shop + KYC"
     $reg = Invoke-SafeApi -Method Post -Uri "$BaseUrl/register" -Body @{
         email      = $MerchantEmail
-        password   = $MerchantPass
+        password   = $MerchantPassword
         first_name = "Merchant"
         last_name  = "MWins"
     }
@@ -204,7 +207,7 @@ try {
 
     $mLogin = Invoke-SafeApi -Method Post -Uri "$BaseUrl/login" -Body @{
         email    = $MerchantEmail
-        password = $MerchantPass
+        password = $MerchantPassword
     }
     if (-not $mLogin.Success) { throw ("Merchant login: {0}" -f $mLogin.Raw) }
     $mToken = Get-Prop $mLogin.Data @("access_token", "token")
@@ -300,8 +303,8 @@ try {
     $script:State.PaymentId = $paymentId
     Write-Ok ("Payment {0} ref={1}" -f $paymentId, $providerRef)
 
-    # Webhook format exact debt-sweep (CRITIQUE)
-    $json = '{"apiEnv":"test","paymentStatus":"DONE","transId":"' + $providerRef + '","projectId":"65687","paymentIntentId":"' + $providerRef + '","paymentSource":"OrangeMoneyAPI","customerNumber":"77515151","paymentAmount":' + $PaymentAmount + ',"paymentFees":25,"contryOrigin":"BF","reference":"' + $paymentId + '","currency":"XOF","isPaylink":false}'
+    # 🛡️ Webhook format exact avec le vrai customerNumber dynamique (CRITIQUE)
+    $json = '{"apiEnv":"test","paymentStatus":"DONE","transId":"' + $providerRef + '","projectId":"65687","paymentIntentId":"' + $providerRef + '","paymentSource":"OrangeMoneyAPI","customerNumber":"' + $CustomerMsisdn8 + '","paymentAmount":' + $PaymentAmount + ',"paymentFees":25,"contryOrigin":"BF","reference":"' + $paymentId + '","currency":"XOF","isPaylink":false}'
     $hash = New-WebhookHash -JsonBody $json -Secret $WebhookSecret
     $wh = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "x-webhook-hash"   = $hash
@@ -384,7 +387,6 @@ try {
     Write-Info ("Wallet before resolve: bal={0} debt={1}" -f $w0.Bal, $w0.Debt)
 
     # 06 Debt inject
-         # 06 Optional debt inject (PK = shop_id, pas de colonne id)
     Write-Step -N "06/09" -Msg ("Optional debt inject ({0})" -f $InjectDebt)
     if ($InjectDebt -gt 0) {
         $sqlUpsert = @"

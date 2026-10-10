@@ -13,6 +13,7 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -27,9 +28,13 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$RealMsisdn      = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le payload
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $Timestamp        = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail    = "merchant.claw.$Timestamp@goshop.com"
-$MerchantPassword = "Password123!"
 $ShopName         = "Boutique Claw $Timestamp"
 $ShopSlug         = "claw-shop-$Timestamp"
 $EligibilityBackdateDays = 6
@@ -128,17 +133,17 @@ Write-Host " BaseUrl: $BaseUrl | BackdateDays=$EligibilityBackdateDays" -Foregro
 Write-Host "================================================================" -ForegroundColor Magenta
 
 try {
-        # ----- 01 Health -----
+    # ----- 01 Health -----
     Write-Step "01/10" "Health check"
     $res = Invoke-SafeApi -Method Get -Uri "$BaseUrl/health"
     if ($res.StatusCode -eq 0) {
         $res = Invoke-SafeApi -Method Get -Uri "$BaseUrl/api/health"
     }
-    # 200 = ideal ; 401/404 = process up (route protegee ou absente)
     if ($res.StatusCode -eq 0) {
         Write-Fail "API unreachable (pas de reponse HTTP)"
     }
     Write-Ok "API live (HTTP $($res.StatusCode))"
+
     # ----- 02 Admin login -----
     Write-Step "02/10" "Admin login"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/login" -Body @{
@@ -186,7 +191,6 @@ try {
     $script:State.ShopId = $shopId
     Write-Ok "Shop $shopId ($ShopSlug)"
 
-        # KYC = colonne shops.kyc_status (migration 019)
     Invoke-Sql "UPDATE shops SET kyc_status = 'verified', kyc_verified_at = NOW() WHERE id = '$shopId'::uuid;" | Out-Null
     $kycCheck = Invoke-Sql "SELECT kyc_status FROM shops WHERE id = '$shopId'::uuid;"
     if ($kycCheck -match "verified") {
@@ -197,7 +201,6 @@ try {
     }
 
     # ----- 04 Product, customer, order -----
-        # ----- 04 Product, customer, order (aligné GitHub E2E) -----
     Write-Step "04/10" "Product, customer, order"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/products" -Headers $script:State.MerchantHeaders -Body @{
         name        = "Produit Claw $Timestamp"
@@ -214,14 +217,14 @@ try {
         first_name = "Jean"
         last_name  = "Claw"
         email      = "client.claw.$Timestamp@test.com"
-        phone      = "+22670000000"
+        phone      = $CustomerPhone
     }
     if (-not $res.Success) {
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body @{
             first_name   = "Jean"
             last_name    = "Claw"
             email        = "client.claw.$Timestamp@test.com"
-            phone_number = "+22670000000"
+            phone_number = $CustomerPhone
         }
     }
     Assert-Ok $res "Customer" @(200, 201)
@@ -241,11 +244,10 @@ try {
     Write-Ok "Order $orderId"
 
     # ----- 05 Pay-in (webhook local) -----
-            # ----- 05 Pay-in via /orders/{id}/pay + webhook -----
     Write-Step "05/10" "Initiate payment + webhook SUCCESS"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" -Headers $script:State.MerchantHeaders -Body @{
         provider     = "yenga_pay"
-        phone_number = "+22670000000"
+        phone_number = $CustomerPhone
         description  = "E2E clawback order $orderId"
         metadata     = @{ flow = "indirect" }
     }
@@ -257,11 +259,8 @@ try {
     $script:State.ProviderRef = $providerRef
     Write-Ok "Payment $paymentId ref=$providerRef"
 
-    # MSISDN NON-seed (pas 70000000 / 70123456 / ...) pour que resolveRefundDestination accepte
-    $realMsisdn = "77515151"
-
     # Webhook avec VRAI customerNumber (pas seed)
-    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"$realMsisdn`",`"paymentAmount`":1000,`"paymentFees`":25,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"$RealMsisdn`",`"paymentAmount`":1000,`"paymentFees`":25,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
     $hash = New-HmacSha256Hex -payload $payloadJson -secret $WebhookSecret
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "Content-Type"     = "application/json; charset=utf-8"
@@ -269,14 +268,14 @@ try {
         "x-yengapay-event" = "payment.success"
     } -Body $payloadJson
     Assert-Ok $res "Webhook payment" @(200)
-    Write-Ok "Webhook payment.success 200 (customerNumber=$realMsisdn)"
+    Write-Ok "Webhook payment.success 200 (customerNumber=$RealMsisdn)"
 
     # Force canal pay-in (au cas ou webhook n'a pas ecrase le seed du /pay)
     Invoke-Sql @"
 UPDATE payments
-SET customer_phone = '+226$realMsisdn',
+SET customer_phone = '$CustomerPhone',
     metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-        'customer_number', '$realMsisdn',
+        'customer_number', '$RealMsisdn',
         'payment_source', COALESCE(NULLIF(metadata->>'payment_source', ''), 'OrangeMoneyAPI'),
         'operator', COALESCE(NULLIF(metadata->>'operator', ''), 'ORANGE')
     ),
@@ -286,7 +285,7 @@ WHERE id = '$paymentId'::uuid;
 
     $canal = Invoke-Sql "SELECT customer_phone || '|' || COALESCE(metadata->>'customer_number','') FROM payments WHERE id = '$paymentId'::uuid;"
     Write-Host "  Canal pay-in: $canal" -ForegroundColor DarkGray
-    if ($canal -notmatch "77515151") {
+    if ($canal -notmatch $RealMsisdn) {
         Write-Fail "Pay-in channel not set (got: $canal)"
     }
     Write-Ok "Pay-in channel OK for refund ($canal)"
@@ -295,9 +294,7 @@ WHERE id = '$paymentId'::uuid;
     $st = Invoke-Sql "SELECT status FROM payments WHERE id = '$paymentId'::uuid;"
     if ($st -match "success") { Write-Ok "Payment status = success" } else { Write-Warn "Payment status = $st" }
 
-    
     # ----- 06 Shipping + delivery -----
-        # ----- 06 Shipping + delivery (routes GitHub) -----
     Write-Step "06/10" "Shipping + delivery proofs"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/delivery/proof/shipping" -Headers $script:State.MerchantHeaders -Body @{
         order_id         = $orderId
@@ -320,7 +317,6 @@ WHERE id = '$paymentId'::uuid;
     Write-Ok "Delivery OK"
 
     # ----- 07 Auto-release -----
-        # ----- 07 Auto-release -----
     Write-Step "07/10" "Escrow auto-release (scheduler)"
     $sqlElig = @"
 UPDATE delivery_proofs
@@ -344,7 +340,7 @@ WHERE order_id = '$orderId'::uuid
     Write-Ok "Scheduler triggered (HTTP $($res.StatusCode))"
     Start-Sleep -Seconds 12
 
-        # ----- 08 Open dispute (post-release) -----
+    # ----- 08 Open dispute (post-release) -----
     Write-Step "08/10" "Open dispute on RELEASED escrow"
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/dispute" -Headers $script:State.MerchantHeaders -Body @{
         reason = "Produit non conforme - E2E clawback post-release $Timestamp"
@@ -428,11 +424,12 @@ WHERE order_id = '$orderId'::uuid
     }
 
     if ("$dispFinal" -match "resolved_customer") {
-    Write-Ok "Dispute resolved_customer"
-}
-else {
-    Write-Warn "Dispute status: $dispFinal"
-}
+        Write-Ok "Dispute resolved_customer"
+    }
+    else {
+        Write-Warn "Dispute status: $dispFinal"
+    }
+
     # ----- 10 Summary -----
     Write-Step "10/10" "Summary"
     Write-Host "  Shop     : $shopId ($ShopSlug)" -ForegroundColor White

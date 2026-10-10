@@ -11,8 +11,11 @@
 #
 # Env:
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
-#   $env:GOSHOP_BASE_URL  (default http://localhost:8080)
-#   $env:DB_SERVICE       (default db)
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
+#   $env:MERCHANT_PASSWORD    (default: random)
+#   $env:CUSTOMER_PASSWORD    (default: random)
+#   $env:GOSHOP_BASE_URL      (default http://localhost:8080)
+#   $env:DB_SERVICE           (default db)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -27,6 +30,11 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+$CustomerPassword = if ($env:CUSTOMER_PASSWORD) { $env:CUSTOMER_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $NbTranches    = 3
 $DelaiJours    = 5
 $TotalCents    = 300000   # 3 000 FCFA
@@ -34,9 +42,7 @@ $CommissionBps = 500      # 5% (release_escrow_funds.go)
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "installment-shop-$Timestamp"
 $MerchantEmail = "merchant.installment.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 $CustomerEmail = "customer.installment.$Timestamp@goshop.com"
-$CustomerPass  = "Password123!"
 
 $ExpectedCommission = [int64](($TotalCents * $CommissionBps) / 10000)
 $ExpectedNet        = $TotalCents - $ExpectedCommission
@@ -169,11 +175,11 @@ try {
     # 02 Merchant + plan
     Write-Step -N "02/08" -Msg "Merchant + product + installment plan"
     $reg = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{
-        email = $MerchantEmail; password = $MerchantPass; role = "merchant"
+        email = $MerchantEmail; password = $MerchantPassword; role = "merchant"
     } -OkStatus @(200, 201)
     if (-not $reg.Ok) { Write-Fail ("Register merchant failed: {0}" -f $reg.Raw) }
 
-    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPass }
+    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPassword }
     $mTok = Get-Prop $ml.Data @('access_token','token','data.access_token')
     if (-not $mTok) { Write-Fail "Merchant token missing" }
 
@@ -229,9 +235,9 @@ try {
     # 03 Customer + order
     Write-Step -N "03/08" -Msg "Customer + installment order"
     $null = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{
-        email = $CustomerEmail; password = $CustomerPass; role = "user"
+        email = $CustomerEmail; password = $CustomerPassword; role = "user"
     } -OkStatus @(200, 201, 409)
-    $cl = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $CustomerEmail; password = $CustomerPass }
+    $cl = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $CustomerEmail; password = $CustomerPassword }
     $cTok = Get-Prop $cl.Data @('access_token','token','data.access_token')
     $cUserId = Get-Prop $cl.Data @('user.id','data.user.id','id','data.id')
     if (-not $cUserId) {
@@ -242,12 +248,12 @@ try {
         first_name = "Client"
         last_name  = "Credit"
         email      = $CustomerEmail
-        phone      = "+22677515151"
+        phone      = $CustomerPhone
         user_id    = "$cUserId"
     } -OkStatus @(200, 201)
     $custId = Get-Prop $cust.Data @('id','data.id','customer.id')
     if (-not $custId) {
-        $custId = Invoke-Sql ("INSERT INTO customers (id, shop_id, first_name, last_name, phone, email, user_id, kyc_level, created_at, updated_at) VALUES (gen_random_uuid(), '{0}'::uuid, 'Client', 'Credit', '+22677515151', '{1}', '{2}', 'verified', NOW(), NOW()) RETURNING id::text;" -f $shopId, $CustomerEmail, $cUserId)
+        $custId = Invoke-Sql ("INSERT INTO customers (id, shop_id, first_name, last_name, phone, email, user_id, kyc_level, created_at, updated_at) VALUES (gen_random_uuid(), '{0}'::uuid, 'Client', 'Credit', '{1}', '{2}', '{3}', 'verified', NOW(), NOW()) RETURNING id::text;" -f $shopId, $CustomerPhone, $CustomerEmail, $cUserId)
     }
     if (-not $custId) { Write-Fail "Customer id missing" }
     $script:State.CustomerId = $custId

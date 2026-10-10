@@ -16,7 +16,7 @@
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
 #   $env:GOSHOP_BASE_URL
 #   $env:DB_SERVICE / DB_USER / DB_NAME
-#   $env:WITHDRAW_FAIL_MSISDN  (default +22600000000)
+#   $env:WITHDRAW_FAIL_MSISDN  (default +22699999999 - MUST NOT be whitelisted)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -33,12 +33,15 @@ $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
 $SeedBalance   = [int64]100000
 $WithdrawAmt   = [int64]50000
-$FailMsisdn    = if ($env:WITHDRAW_FAIL_MSISDN) { $env:WITHDRAW_FAIL_MSISDN } else { "+22600000000" }
+# 🛡️ Numéro volontairement NON whitelisté pour forcer l'échec 403 du Sandbox YengaPay
+$FailMsisdn    = if ($env:WITHDRAW_FAIL_MSISDN) { $env:WITHDRAW_FAIL_MSISDN } else { "+22699999999" }
+
+# 🛡️ Mot de passe dynamique (pas de hardcode)
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
 
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "wd-reverse-$Timestamp"
 $MerchantEmail = "merchant.wdrev.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 
 $script:Passed = 0
 $script:Failed = 0
@@ -251,7 +254,7 @@ try {
     Write-Step -N "03/08" -Msg "Merchant + shop + KYC"
     $reg = Invoke-Json -Method Post -Uri "$BaseUrl/register" -Body @{
         email      = $MerchantEmail
-        password   = $MerchantPass
+        password   = $MerchantPassword
         first_name = "Wd"
         last_name  = "Reverse"
         role       = "merchant"
@@ -263,7 +266,7 @@ try {
 
     $mLogin = Invoke-Json -Method Post -Uri "$BaseUrl/login" -Body @{
         email    = $MerchantEmail
-        password = $MerchantPass
+        password = $MerchantPassword
     }
     if (-not $mLogin.Ok) { Write-Fail ("Merchant login failed: {0}" -f $mLogin.Raw) }
     $mToken = Get-Prop $mLogin.Data @("access_token", "token", "data.access_token", "data.token")

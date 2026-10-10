@@ -9,12 +9,18 @@ $ErrorActionPreference = "Stop"
 
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
-$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "" }
-$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "" }
-$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "" }
+$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "CHANGE_ME_YENGA_PAY_WEBHOOK_SECRET" }
+$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
+$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "CHANGE_ME_ADMIN_PASSWORD" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
+
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+$CustomerPassword = if ($env:CUSTOMER_PASSWORD) { $env:CUSTOMER_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
 
 $NMembers      = 3
 $CircleType    = "FAMILY"
@@ -22,7 +28,6 @@ $ProductPrice  = 3000000
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "tontine-redeem-$Timestamp"
 $MerchantEmail = "merchant.tontine.redeem.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 $InjectDebt    = 1000000
 
 $script:Passed = 0
@@ -112,9 +117,9 @@ function Get-HmacHex {
 function New-CustomerVerified {
     param([int]$Index, [string]$ShopSlug, [hashtable]$MerchantHeaders, [string]$ShopId, [string]$MerchantUserId)
     $email = "cust.tontine.redeem.$Timestamp.$Index@goshop.com"
-    $pass  = "Password123!"
-    $null = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{ email = $email; password = $pass; role = "user" } -OkStatus @(200, 201, 409)
-    $login = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $email; password = $pass }
+    
+    $null = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{ email = $email; password = $CustomerPassword; role = "user" } -OkStatus @(200, 201, 409)
+    $login = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $email; password = $CustomerPassword }
     if (-not $login.Ok) { throw ("Customer login failed {0}: {1}" -f $Index, $login.Raw) }
     $token = Get-Prop $login.Data @('access_token','token','data.access_token')
     $userId = Get-Prop $login.Data @('user.id','data.user.id','id','user_id','data.id')
@@ -125,6 +130,7 @@ function New-CustomerVerified {
     if (-not $userId) { $userId = Invoke-Sql ("SELECT id::text FROM users WHERE email = '{0}' LIMIT 1;" -f $email) }
     
     $hdr = @{ Authorization = "Bearer $token"; "X-Shop-Slug" = $ShopSlug }
+    # 🛡️ Utilisation d'un numéro unique pour la fiche client, mais le webhook injectera le numéro whitelisté
     $phone = "+22670{0}" -f (100000 + $Index).ToString("D6")
     $cBody = @{ first_name = ("Client{0}" -f $Index); last_name = "Tontine"; phone = $phone; email = $email; user_id = "$userId" }
     
@@ -163,8 +169,8 @@ try {
 
     # 02 Merchant + Shop + Product + Tontine Settings
     Write-Step -N "02/08" -Msg "Merchant + shop + product + tontine settings"
-    $reg = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{ email = $MerchantEmail; password = $MerchantPass; role = "merchant" } -OkStatus @(200, 201)
-    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPass }
+    $reg = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{ email = $MerchantEmail; password = $MerchantPassword; role = "merchant" } -OkStatus @(200, 201)
+    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPassword }
     $mTok = Get-Prop $ml.Data @('access_token','token','data.access_token')
     $mUserId = Get-Prop $ml.Data @('user.id','data.user.id','id','user_id','data.id')
     if (-not $mUserId) { $mUserId = Invoke-Sql ("SELECT id::text FROM users WHERE email = '{0}' LIMIT 1;" -f $MerchantEmail) }
@@ -185,7 +191,6 @@ try {
     $script:State.ProductId = $productId
     Write-Ok ("Product {0}" -f $productId)
 
-    # 🆕 CORRECTION : Réintégration de la configuration des paramètres tontine (indispensable)
     $ts = Invoke-Json -Method PUT -Uri ("$BaseUrl/api/shops/{0}/tontine-settings" -f $shopId) -Headers $script:State.MerchantHeaders -Body @{
         product_id              = $productId
         is_tontine_enabled      = $true
@@ -248,7 +253,8 @@ try {
     Write-Step -N "04/08" -Msg "Pay cycle 1 + webhooks SUCCESS"
     for ($i = 0; $i -lt $NMembers; $i++) {
         $ci = $script:State.Customers[$i]
-        $pay = Invoke-Json -Method POST -Uri ("$BaseUrl/api/tontine/groups/{0}/pay" -f $groupId) -Headers $ci.Headers -Body @{ operator = "orange_money"; phone_number = "+22670123456"; flow = "indirect" } -OkStatus @(200, 201)
+        # 🛡️ Utilisation du numéro de téléphone dynamique (whitelisté) pour le paiement
+        $pay = Invoke-Json -Method POST -Uri ("$BaseUrl/api/tontine/groups/{0}/pay" -f $groupId) -Headers $ci.Headers -Body @{ operator = "orange_money"; phone_number = $CustomerPhone; flow = "indirect" } -OkStatus @(200, 201)
         if (-not $pay.Ok) { Write-Fail ("Pay member {0} HTTP {1}: {2}" -f $i, $pay.Status, $pay.Raw) }
         $pref = Get-Prop $pay.Data @('provider_ref','data.provider_ref','reference','payment.provider_ref','data.payment.provider_ref')
         if (-not $pref) { Write-Fail ("provider_ref missing member {0} : {1}" -f $i, $pay.Raw) }
@@ -260,9 +266,11 @@ try {
         $pref = $script:State.ProviderRefs[$i]
         $txnId = "TXN-TONTINE-REDEEM-$Timestamp-$i"
         $payAmountMain = [int]([math]::Max(1, [math]::Floor($amtCycle / 100)))
+        
+        # 🛡️ Injection du numéro whitelisté (8 chiffres) dans les métadonnées du webhook
         $payloadObj = [ordered]@{
             apiEnv = "test"; paymentStatus = "SUCCESS"; transId = $txnId; projectId = "e2e-project"
-            paymentIntentId = $txnId; paymentSource = "orange_money"; customerNumber = "+22670123456"
+            paymentIntentId = $txnId; paymentSource = "orange_money"; customerNumber = $CustomerMsisdn8
             paymentAmount = $payAmountMain; paymentFees = 0; contryOrigin = "BF"; reference = $pref; currency = "XOF"
         }
         $bodyStr = ($payloadObj | ConvertTo-Json -Compress -Depth 6)
@@ -289,15 +297,14 @@ try {
     Invoke-Sql ("UPDATE merchant_wallets SET debt_cents = {0} WHERE shop_id = '{1}'::uuid;" -f $InjectDebt, $shopId) | Out-Null
     $wDebt = Get-WalletRow -ShopId $shopId
     Write-Ok ("debt_cents = {0}" -f $wDebt.Debt)
+    
     # 07 Create Voucher & Redeem
     Write-Step -N "07/08" -Msg "Create Voucher & Redeem"
     $c0Id = $script:State.Customers[0].Id
     
-    # Récupérer le participant_id réel
     $participantId = Invoke-Sql ("SELECT id::text FROM tontine_participants WHERE group_id = '{0}'::uuid AND customer_id = '{1}'::uuid LIMIT 1;" -f $groupId, $c0Id)
     if (-not $participantId) { Write-Fail "Participant ID not found for customer $c0Id" }
     
-    # 🆕 CORRECTION : Le webhook a probablement déjà créé le voucher. On le récupère, sinon on le crée.
     $existingVoucher = Invoke-Sql ("SELECT voucher_code FROM tontine_vouchers WHERE group_id = '{0}'::uuid AND participant_id = '{1}'::uuid AND cycle_number = 1 LIMIT 1;" -f $groupId, $participantId)
     
     if ($existingVoucher) {

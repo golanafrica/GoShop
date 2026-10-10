@@ -14,6 +14,8 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
+#   $env:MERCHANT_PASSWORD    (default: random)
 #   $env:GOSHOP_BASE_URL
 #   $env:DB_SERVICE (default db)
 # ============================================================
@@ -31,13 +33,17 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $NMembers      = 3
 $CircleType    = "FAMILY"
 $ProductPrice  = 3000000
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "tontine-net-$Timestamp"
 $MerchantEmail = "merchant.tontine.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 
 $script:Passed = 0
 $script:Failed = 0
@@ -107,7 +113,7 @@ function Invoke-Json {
         }
         return @{ Ok = ($OkStatus -contains $code); Status = $code; Data = $data; Raw = $resp.Content }
     }
-        catch {
+    catch {
         $ex = $_.Exception
         $code = 0
         $raw = $null
@@ -221,6 +227,7 @@ function New-CustomerVerified {
         "X-Shop-Slug" = $ShopSlug
     }
 
+    # 🛡️ Utilisation d'un numéro unique pour la fiche client, mais le webhook injectera le numéro whitelisté
     $phone = "+22670{0}" -f (100000 + $Index).ToString("D6")
     $cBody = @{
         first_name = ("Client{0}" -f $Index)
@@ -290,12 +297,12 @@ try {
     # 03 Merchant + shop + product + tontine settings
     Write-Step -N "03/10" -Msg "Merchant + shop + product + tontine settings"
     $reg = Invoke-Json -Method POST -Uri "$BaseUrl/register" -Body @{
-        email = $MerchantEmail; password = $MerchantPass; role = "merchant"
+        email = $MerchantEmail; password = $MerchantPassword; role = "merchant"
     } -OkStatus @(200, 201)
     if (-not $reg.Ok) { Write-Fail ("Register merchant failed {0}" -f $reg.Status) }
     Write-Ok ("Register HTTP {0}" -f $reg.Status)
 
-    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPass }
+    $ml = Invoke-Json -Method POST -Uri "$BaseUrl/login" -Body @{ email = $MerchantEmail; password = $MerchantPassword }
     $mTok = Get-Prop $ml.Data @('access_token','token','data.access_token')
     if (-not $mTok) { Write-Fail "Merchant token missing" }
 
@@ -368,7 +375,7 @@ try {
     # 05 Create group + joins (JWT CLIENT: FindByUserID + RequireShopAccess via collab)
     Write-Step -N "05/10" -Msg "Create group + joins"
     $c0 = $script:State.Customers[0]
-      $g = Invoke-Json -Method POST -Uri "$BaseUrl/api/tontine/groups" -Headers $c0.Headers -Body @{
+    $g = Invoke-Json -Method POST -Uri "$BaseUrl/api/tontine/groups" -Headers $c0.Headers -Body @{
         name         = ("Groupe E2E Net {0}" -f $Timestamp)
         product_id   = $productId
         circle_type  = $CircleType
@@ -425,9 +432,10 @@ try {
 
     for ($i = 0; $i -lt $NMembers; $i++) {
         $ci = $script:State.Customers[$i]
+        # 🛡️ Utilisation du numéro de téléphone dynamique (whitelisté) pour le paiement
         $pay = Invoke-Json -Method POST -Uri ("$BaseUrl/api/tontine/groups/{0}/pay" -f $groupId) -Headers $ci.Headers -Body @{
             operator     = "orange_money"
-            phone_number = "+22670123456"
+            phone_number = $CustomerPhone
             flow         = "indirect"
         } -OkStatus @(200, 201)
         if (-not $pay.Ok) { Write-Fail ("Pay member {0} HTTP {1}: {2}" -f $i, $pay.Status, $pay.Raw) }
@@ -441,6 +449,8 @@ try {
         $pref = $script:State.ProviderRefs[$i]
         $txnId = "TXN-TONTINE-NET-$Timestamp-$i"
         $payAmountMain = [int]([math]::Max(1, [math]::Floor($amtCycle / 100)))
+        
+        # 🛡️ Injection du numéro whitelisté (8 chiffres) dans les métadonnées du webhook
         $payloadObj = [ordered]@{
             apiEnv          = "test"
             paymentStatus   = "SUCCESS"
@@ -448,7 +458,7 @@ try {
             projectId       = "e2e-project"
             paymentIntentId = $txnId
             paymentSource   = "orange_money"
-            customerNumber  = "+22670123456"
+            customerNumber  = $CustomerMsisdn8
             paymentAmount   = $payAmountMain
             paymentFees     = 0
             contryOrigin    = "BF"

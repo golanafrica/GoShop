@@ -13,12 +13,15 @@ $DbService = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser    = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName    = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $Timestamp         = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail     = "edge.e2e.$Timestamp@goshop.com"
-$MerchantPassword  = "Password123!"
 $ShopName          = "Edge Shop $Timestamp"
 $ShopSlug          = "edge-shop-$Timestamp"
-$CustomerPhone     = "+22677515151"
 $ProductPriceCents = 100000
 $feesFcfa          = 25
 
@@ -239,8 +242,9 @@ try {
     if (-not $paymentId) { Write-Fail "payment_id missing: $($res.Data | ConvertTo-Json -Compress)" }
     Write-Ok "Payment $paymentId ref=$providerRef"
 
+    # 🛡️ Webhook avec le vrai customerNumber dynamique (8 chiffres)
     $amountFcfa = [int]($ProductPriceCents / 100)
-    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"70000000`",`"paymentAmount`":$amountFcfa,`"paymentFees`":$feesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$providerRef`",`"projectId`":`"00000`",`"paymentIntentId`":`"$providerRef`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"$CustomerMsisdn8`",`"paymentAmount`":$amountFcfa,`"paymentFees`":$feesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$paymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
     $whash = Get-HmacSha256Hex -Payload $payloadJson -Secret $WebhookSecret
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "x-webhook-hash"   = $whash

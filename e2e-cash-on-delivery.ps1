@@ -11,10 +11,17 @@ $ErrorActionPreference = "Stop"
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
 $AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
-$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "LassinaYacine19778&" }
+$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
+
+# 🛡️ Numéros de téléphone whitelistés pour le Sandbox YengaPay
+$CustomerPhone = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+
+# 🛡️ Mots de passe générés dynamiquement (pas de mot de passe en clair dans le code)
+$MerchantPass  = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+$CustomerPass  = if ($env:CUSTOMER_PASSWORD) { $env:CUSTOMER_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
 
 $OrderAmount   = 1000000 # 10 000 FCFA
 $CommissionBps = 250     # 2.50% (CODCommissionRateBps)
@@ -23,9 +30,7 @@ $ExpectedComm  = [int64](($OrderAmount * $CommissionBps) / 10000) # 25000 cents 
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "cod-shop-$Timestamp"
 $MerchantEmail = "merchant.cod.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 $CustomerEmail = "customer.cod.$Timestamp@goshop.com"
-$CustomerPass  = "Password123!"
 
 $script:Passed = 0
 $script:Failed = 0
@@ -149,7 +154,7 @@ try {
     
     # Le MARCHAND crée le profil client dans son CRM
     $cust = Invoke-Json -Method POST -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body @{ 
-        first_name = "Client"; last_name = "COD"; email = $CustomerEmail; phone = "+22677515151"; user_id = $cUserId 
+        first_name = "Client"; last_name = "COD"; email = $CustomerEmail; phone = $CustomerPhone; user_id = $cUserId 
     } -OkStatus @(200, 201)
     
     $custId = Get-Prop $cust.Data @('id','data.id','customer.id','data.customer.id')

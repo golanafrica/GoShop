@@ -10,6 +10,8 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
+#   $env:E2E_WITHDRAW_PHONE   (default: +22665150303)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -24,9 +26,14 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone et mots de passe dynamiques (pas de hardcode)
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$WithdrawPhone   = if ($env:E2E_WITHDRAW_PHONE) { $env:E2E_WITHDRAW_PHONE } else { "+22665150303" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $Timestamp        = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail    = "merchant.debt.$Timestamp@goshop.com"
-$MerchantPassword = "Password123!"
 $ShopName         = "Debt Sweep Shop $Timestamp"
 $ShopSlug         = "debt-shop-$Timestamp"
 $BackdateDays     = 6
@@ -179,12 +186,12 @@ function Complete-OrderFlow {
     }
     Write-Ok ("Product {0} = {1} stock={2}" -f $Label, $productId, $stockNow)
 
-    $rnd = Get-Random -Minimum 100000 -Maximum 999999
+    # 🛡️ Utilisation du numéro de téléphone dynamique (whitelisté)
     $custBody = @{
         first_name = "Client"
         last_name  = "Debt$Label"
         email      = "client.debt.$Label.$Timestamp@test.com"
-        phone      = "+22670$rnd"
+        phone      = $CustomerPhone
     }
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body $custBody
     if (-not $res.Success) {
@@ -192,7 +199,7 @@ function Complete-OrderFlow {
             first_name   = "Client"
             last_name    = "Debt$Label"
             email        = "client.debt.$Label.$Timestamp@test.com"
-            phone_number = "+22670$rnd"
+            phone_number = $CustomerPhone
         }
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body $custBody
     }
@@ -217,7 +224,7 @@ function Complete-OrderFlow {
     # Route qui marche (ancien E2E) : POST /api/orders/{id}/pay
     $payBody = @{
         provider     = "yenga_pay"
-        phone_number = "+22677515151"
+        phone_number = $CustomerPhone
         description  = "E2E debt sweep order $orderId"
         metadata     = @{ flow = "indirect" }
     }
@@ -232,8 +239,8 @@ function Complete-OrderFlow {
     }
     Write-Ok ("Payment {0} = {1} ref={2}" -f $Label, $paymentId, $providerRef)
 
-    # Webhook simule (customerNumber pour MSISDN refund)
-    $json = '{"apiEnv":"test","paymentStatus":"DONE","transId":"' + $providerRef + '","projectId":"65687","paymentIntentId":"' + $providerRef + '","paymentSource":"OrangeMoneyAPI","customerNumber":"77515151","paymentAmount":1000,"paymentFees":25,"contryOrigin":"BF","reference":"' + $paymentId + '","currency":"XOF","isPaylink":false}'
+    # 🛡️ Webhook simule avec le vrai customerNumber (8 chiffres)
+    $json = '{"apiEnv":"test","paymentStatus":"DONE","transId":"' + $providerRef + '","projectId":"65687","paymentIntentId":"' + $providerRef + '","paymentSource":"OrangeMoneyAPI","customerNumber":"' + $CustomerMsisdn8 + '","paymentAmount":1000,"paymentFees":25,"contryOrigin":"BF","reference":"' + $paymentId + '","currency":"XOF","isPaylink":false}'
     $hash = New-WebhookHash -JsonBody $json -Secret $WebhookSecret
     $wh = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
         "x-webhook-hash"   = $hash
@@ -308,6 +315,7 @@ WHERE order_id = '$orderId'::uuid;
 
     return @{ OrderId = $orderId; PaymentId = $paymentId }
 }
+
 try {
     Write-Host "================================================================" -ForegroundColor Magenta
     Write-Host " GOSHOP E2E - Debt Sweep on Auto-Release" -ForegroundColor Magenta
@@ -479,7 +487,7 @@ ORDER BY created_at DESC LIMIT 3;
     $wd = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" -Headers $script:State.MerchantHeaders -Body @{
         amount_cents       = 10000
         payment_method     = "ORANGE_MONEY"
-        destination_number = "+22677515151"
+        destination_number = $WithdrawPhone
     }
     if ($debtNow -gt 0) {
         if (-not $wd.Success) {

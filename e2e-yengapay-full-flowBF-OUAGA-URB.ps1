@@ -11,6 +11,7 @@
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
 #   $env:GOSHOP_BASE_URL
+#   $env:WITHDRAW_MSISDN   (default +22677515151 — numéro OTP whitelist Yenga)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -31,7 +32,10 @@ $PayInTimeoutSec  = 300
 $PayInPollSec     = 5
 $SchedulerWaitSec = 10
 
-# >>> PROFIL ZONE (urbain Ouaga) <<<
+# Cash-out happy path : numéro autorisé OTP sur projet Yenga SANDBOX
+# NE PAS utiliser +22699999999 ici (réservé au test reverse fail)
+$WithdrawMsisdn = if ($env:WITHDRAW_MSISDN) { $env:WITHDRAW_MSISDN } else { "+22677515151" }
+
 # >>> PROFIL ZONE <<<
 # "BF-OUAGA-URB" | "INTERNATIONAL" | "INT-30" | "RURAL-10"
 $ZoneProfile = "INTERNATIONAL"
@@ -47,7 +51,6 @@ LIMIT 1;
 "@
     }
     "INTERNATIONAL" {
-        # CEDEAO 14j — backdate 16 > 14
         $EligibilityBackdateDays = 16
         $ZoneSelectSql = @"
 SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
@@ -58,7 +61,6 @@ LIMIT 1;
 "@
     }
     "INT-30" {
-        # Afrique / Europe / Amérique 30j — backdate 31 > 30
         $EligibilityBackdateDays = 31
         $ZoneSelectSql = @"
 SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
@@ -71,7 +73,6 @@ LIMIT 1;
 "@
     }
     default {
-        # RURAL-10
         $EligibilityBackdateDays = 10
         $ZoneSelectSql = @"
 SELECT id::text || '|' || zone_code || '|' || installment_release_delay_days::text
@@ -193,10 +194,11 @@ function Invoke-SafeApi {
                 }
             } catch {}
         }
+        $parsedErr = $null
         try {
-            $parsed = $errBody | ConvertFrom-Json
-            if ($parsed.message) { $errBody = $parsed.message }
-            elseif ($parsed.error) { $errBody = $parsed.error }
+            $parsedErr = $errBody | ConvertFrom-Json
+            if ($parsedErr.message) { $errBody = $parsedErr.message }
+            elseif ($parsedErr.error) { $errBody = $parsedErr.error }
         } catch {}
 
         if ($status -eq 202) {
@@ -213,8 +215,8 @@ function Invoke-SafeApi {
             Success    = $false
             Error      = $errBody
             StatusCode = $status
-            Data       = $null
-            Raw        = $errBody
+            Data       = $parsedErr
+            Raw        = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $errBody }
         }
     }
 }
@@ -362,7 +364,7 @@ function Send-SimulatedPaymentWebhook {
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Magenta
 Write-Host " GOSHOP E2E - REAL PAY-IN + Auto-Release (zone=$ZoneProfile) + Withdrawal" -ForegroundColor Magenta
-Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn | BackdateDays=$EligibilityBackdateDays" -ForegroundColor DarkGray
+Write-Host " BaseUrl: $BaseUrl | RealPayIn=$RealPayIn | BackdateDays=$EligibilityBackdateDays | WithdrawMSISDN=$WithdrawMsisdn" -ForegroundColor DarkGray
 Write-Host "================================================================" -ForegroundColor Magenta
 
 try {
@@ -472,7 +474,6 @@ try {
         }
     }
     else {
-        # Fallback INSERT uniquement pour profil urbain si seed manquant
         if ($ZoneProfile -eq "BF-OUAGA-URB") {
             $zoneId = Invoke-SqlQuery @"
 INSERT INTO delivery_zones (
@@ -739,23 +740,26 @@ WHERE dp.order_id = '$orderId'::uuid
         Write-Warn "Merchant wallet still 0 - credit failed or skipped after claim"
     }
 
-    # 10 Withdrawal
+    # 10 Withdrawal (MSISDN whitelist Yenga)
     Write-Step "10/13" "Create withdrawal"
     if ($walletN -lt $WithdrawCents) {
         Write-Warn "Wallet $walletN < $WithdrawCents - skip withdrawal"
     }
     else {
+        Write-Host "  dest=$WithdrawMsisdn amount=$WithdrawCents" -ForegroundColor DarkGray
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" `
             -Headers $script:State.MerchantHeaders `
             -Body @{
-                amount_cents = $WithdrawCents
-                payment_method = "ORANGE_MONEY"
-                destination_number = "+22670123456"
-                destination_name = "Jean Test"
-                description = "E2E withdrawal $Timestamp"
+                amount_cents       = $WithdrawCents
+                payment_method     = "ORANGE_MONEY"
+                destination_number = $WithdrawMsisdn
+                destination_name   = "Jean Test"
+                description        = "E2E withdrawal $Timestamp"
             }
         if (-not $res.Success) {
-            Write-Warn "Withdrawal failed: HTTP $($res.StatusCode) - $($res.Error)"
+            $wid = Get-Prop $res.Data @("withdrawal_id", "id")
+            $wst = Get-Prop $res.Data @("withdrawal_status", "status")
+            Write-Warn ("Withdrawal failed: HTTP {0} - {1} (withdrawal_id={2} status={3})" -f $res.StatusCode, $res.Error, $wid, $wst)
         }
         else {
             $script:State.WithdrawalId  = [string](Get-Prop $res.Data @("id", "data.id"))
@@ -770,7 +774,7 @@ WHERE dp.order_id = '$orderId'::uuid
     if ($script:State.WithdrawalRef -or $script:State.WithdrawalId) {
         $payoutRef = if ($script:State.WithdrawalRef) { $script:State.WithdrawalRef } else { $script:State.WithdrawalId }
         $opTx = "OP-E2E-$Timestamp"
-        $payoutJson = "{`"id`":`"$payoutRef`",`"transId`":`"$payoutRef`",`"projectId`":`"00000`",`"amount`":$([int]($WithdrawCents / 100)),`"fees`":5,`"currency`":`"XOF`",`"paymentMethod`":`"ORANGE_MONEY`",`"destNumber`":`"+22670123456`",`"status`":`"SUCCESS`",`"operatorTransId`":`"$opTx`",`"paymentStatus`":`"DONE`"}"
+        $payoutJson = "{`"id`":`"$payoutRef`",`"transId`":`"$payoutRef`",`"projectId`":`"00000`",`"amount`":$([int]($WithdrawCents / 100)),`"fees`":5,`"currency`":`"XOF`",`"paymentMethod`":`"ORANGE_MONEY`",`"destNumber`":`"$WithdrawMsisdn`",`"status`":`"SUCCESS`",`"operatorTransId`":`"$opTx`",`"paymentStatus`":`"DONE`"}"
         $pHash = Get-HmacSha256Hex -Payload $payoutJson -Secret $WebhookSecret
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
             "Content-Type"     = "application/json; charset=utf-8"
@@ -806,11 +810,13 @@ WHERE dp.order_id = '$orderId'::uuid
 
     # 13 Summary
     Write-Step "13/13" "Split Payment summary (SQL)"
+    $walletBalFinal = Invoke-SqlQuery "SELECT COALESCE(balance_cents,0)::text FROM merchant_wallets WHERE shop_id = '$shopId'::uuid;"
     Write-Host "  Escrow   : $escAfter" -ForegroundColor White
     Write-Host "  Platform : balance=$platBal cents | txns=$platTxn" -ForegroundColor White
-    Write-Host "  Wallet   : $walletBal cents" -ForegroundColor White
+    Write-Host "  Wallet   : $walletBalFinal cents (was $walletBal after release)" -ForegroundColor White
     Write-Host "  Zone     : $zoneInfo" -ForegroundColor White
     Write-Host "  Profile  : $ZoneProfile | Backdate=$EligibilityBackdateDays" -ForegroundColor DarkGray
+    Write-Host "  Withdraw : dest=$WithdrawMsisdn amount=$WithdrawCents" -ForegroundColor DarkGray
     Write-Host "  Shop     : $shopId | Order=$orderId | Payment=$paymentId" -ForegroundColor DarkGray
 
     Write-Host ""

@@ -13,6 +13,8 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
+#   $env:E2E_WITHDRAW_PHONE   (default: +22665150303)
 # ============================================================
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -27,6 +29,13 @@ $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Numéros de téléphone whitelistés pour le Sandbox YengaPay
+$CustomerPhone = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$WithdrawPhone = if ($env:E2E_WITHDRAW_PHONE) { $env:E2E_WITHDRAW_PHONE } else { "+22665150303" }
+
+# 🛡️ Mot de passe généré dynamiquement (pas de mot de passe en clair dans le code)
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $PayInTimeoutSec         = 300
 $EligibilityBackdateDays = 6
 $SchedulerWaitSec        = 12
@@ -36,7 +45,6 @@ $ExpectedNetRelease      = 95000
 
 $Timestamp        = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail    = "merchant.chain.$Timestamp@goshop.com"
-$MerchantPassword = "Password123!"
 $ShopName         = "Chain Debt $Timestamp"
 $ShopSlug         = "chain-debt-$Timestamp"
 
@@ -203,14 +211,14 @@ function Complete-ReleasedOrder {
         first_name = "Client"
         last_name  = "Chain$Label"
         email      = "client.chain.$Label.$Timestamp@test.com"
-        phone      = "+22670$rnd"
+        phone      = $CustomerPhone
     }
     if (-not $res.Success) {
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" -Headers $script:State.MerchantHeaders -Body @{
             first_name   = "Client"
             last_name    = "Chain$Label"
             email        = "client.chain.$Label.$Timestamp@test.com"
-            phone_number = "+22670$rnd"
+            phone_number = $CustomerPhone
         }
     }
     Assert-Ok -Res $res -Label ("Customer {0}" -f $Label) -Codes @(200, 201)
@@ -237,7 +245,7 @@ function Complete-ReleasedOrder {
 
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/orders/$orderId/pay" -Headers $script:State.MerchantHeaders -Body @{
         provider     = "yenga_pay"
-        phone_number = "+22677515151"
+        phone_number = $CustomerPhone
         description  = "E2E chain $Label order $orderId"
         metadata     = @{ flow = "indirect" }
     }
@@ -431,7 +439,7 @@ try {
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" -Headers $script:State.MerchantHeaders -Body @{
         amount_cents       = $WithdrawPartialCents
         payment_method     = "ORANGE_MONEY"
-        destination_number = "+22677515151"
+        destination_number = $WithdrawPhone
         destination_name   = "Chain Test"
         description        = "E2E partial withdraw $Timestamp"
     }
@@ -491,7 +499,7 @@ try {
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" -Headers $script:State.MerchantHeaders -Body @{
         amount_cents       = 10000
         payment_method     = "ORANGE_MONEY"
-        destination_number = "+22677515151"
+        destination_number = $WithdrawPhone
     }
     if ($res.Success) {
         Write-Fail ("Withdrawal accepted while debt={0}" -f $debtAfterClaw)
@@ -541,7 +549,7 @@ try {
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" -Headers $script:State.MerchantHeaders -Body @{
         amount_cents       = 5000
         payment_method     = "ORANGE_MONEY"
-        destination_number = "+22677515151"
+        destination_number = $WithdrawPhone
     }
     if ($debtNow -gt 0) {
         if ($res.Success) {

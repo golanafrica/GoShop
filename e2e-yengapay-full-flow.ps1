@@ -5,6 +5,8 @@
 # Env:
 #   $env:YENGA_PAY_WEBHOOK_SECRET
 #   $env:ADMIN_EMAIL / $env:ADMIN_PASSWORD
+#   $env:E2E_CUSTOMER_PHONE   (default: +22676619457)
+#   $env:E2E_WITHDRAW_PHONE   (default: +22665150303)
 #   $env:GOSHOP_BASE_URL
 # ============================================================
 
@@ -14,9 +16,18 @@ $ErrorActionPreference = "Stop"
 
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
-$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "c38ccab5-836d-4453-a6e0-2eb0b9df3097" }
+$WebhookSecret = if ($env:YENGA_PAY_WEBHOOK_SECRET) { $env:YENGA_PAY_WEBHOOK_SECRET } else { "CHANGE_ME_YENGA_PAY_WEBHOOK_SECRET" }
 $AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
-$AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "LassinaYacine19778&" }
+
+# 🛡️ Mots de passe et numéros dynamiques (pas de hardcode)
+$AdminPassword    = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+$CustomerPassword = if ($env:CUSTOMER_PASSWORD) { $env:CUSTOMER_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
+$CustomerPhone   = if ($env:E2E_CUSTOMER_PHONE) { $env:E2E_CUSTOMER_PHONE } else { "+22676619457" }
+$WithdrawPhone   = if ($env:E2E_WITHDRAW_PHONE) { $env:E2E_WITHDRAW_PHONE } else { "+22665150303" }
+$CustomerMsisdn8 = $CustomerPhone -replace '^\+226', '' # Extrait les 8 chiffres pour le webhook
+
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
@@ -70,12 +81,10 @@ ORDER BY installment_release_delay_days ASC, priority DESC LIMIT 1;
 
 $Timestamp         = Get-Date -Format "yyyyMMddHHmmss"
 $MerchantEmail     = "merchant.e2e.$Timestamp@goshop.com"
-$MerchantPassword  = "Password123!"
 $ShopName          = "Boutique E2E $Timestamp"
 $ShopSlug          = "e2e-shop-$Timestamp"
+$CustomerEmail     = "customer.e2e.$Timestamp@goshop.com"
 
-# 🆕 Numéro réaliste pour garantir que le webhook fallback le capture correctement (évite le filtre 70000000)
-$CustomerPhone     = "+22677515151" 
 $ProductPriceCents = 100000
 $WithdrawCents     = 50000
 $feesFcfa          = 25
@@ -331,8 +340,8 @@ function Send-SimulatedPaymentWebhook {
     $transId  = if ($ProviderRef) { "$ProviderRef" } else { "YP-E2E-$Timestamp" }
     $intentId = if ($ProviderRef) { "$ProviderRef" } else { "" }
     
-    # 🆕 Utilisation du vrai CustomerPhone dans le payload pour tester le fallback du webhook
-    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$transId`",`"projectId`":`"00000`",`"paymentIntentId`":`"$intentId`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"77515151`",`"paymentAmount`":$AmountFcfa,`"paymentFees`":$FeesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$PaymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
+    # 🛡️ Utilisation du numéro whitelisté (8 chiffres) dans le payload du webhook
+    $payloadJson = "{`"apiEnv`":`"test`",`"paymentStatus`":`"DONE`",`"transId`":`"$transId`",`"projectId`":`"00000`",`"paymentIntentId`":`"$intentId`",`"paymentSource`":`"OrangeMoneyAPI`",`"customerNumber`":`"$CustomerMsisdn8`",`"paymentAmount`":$AmountFcfa,`"paymentFees`":$FeesFcfa,`"contryOrigin`":`"BF`",`"reference`":`"$PaymentId`",`"currency`":`"XOF`",`"isPaylink`":false}"
     
     $hash = Get-HmacSha256Hex -Payload $payloadJson -Secret $WebhookSecret
     $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
@@ -417,14 +426,14 @@ try {
         -Headers $script:State.MerchantHeaders `
         -Body @{
             first_name = "Jean"; last_name = "Testeur"
-            email = "jean.$Timestamp@test.com"; phone = $CustomerPhone
+            email = $CustomerEmail; phone = $CustomerPhone
         }
     if (-not $res.Success) {
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/customers" `
             -Headers $script:State.MerchantHeaders `
             -Body @{
                 first_name = "Jean"; last_name = "Testeur"
-                email = "jean.$Timestamp@test.com"; phone_number = $CustomerPhone
+                email = $CustomerEmail; phone_number = $CustomerPhone
             }
     }
     Assert-Ok $res "create customer"
@@ -705,11 +714,11 @@ WHERE dp.order_id = '$orderId'::uuid
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/api/withdrawals" `
             -Headers $script:State.MerchantHeaders `
             -Body @{
-                amount_cents = $WithdrawCents
-                payment_method = "ORANGE_MONEY"
-                destination_number = "+22670123456"
-                destination_name = "Jean Test"
-                description = "E2E withdrawal $Timestamp"
+                amount_cents       = $WithdrawCents
+                payment_method     = "ORANGE_MONEY"
+                destination_number = $WithdrawPhone
+                destination_name   = "Jean Test"
+                description        = "E2E withdrawal $Timestamp"
             }
         if (-not $res.Success) {
             Write-Warn "Withdrawal failed: HTTP $($res.StatusCode) - $($res.Error)"
@@ -727,7 +736,10 @@ WHERE dp.order_id = '$orderId'::uuid
     if ($script:State.WithdrawalRef -or $script:State.WithdrawalId) {
         $payoutRef = if ($script:State.WithdrawalRef) { $script:State.WithdrawalRef } else { $script:State.WithdrawalId }
         $opTx = "OP-E2E-$Timestamp"
-        $payoutJson = "{`"id`":`"$payoutRef`",`"transId`":`"$payoutRef`",`"projectId`":`"00000`",`"amount`":$([int]($WithdrawCents / 100)),`"fees`":5,`"currency`":`"XOF`",`"paymentMethod`":`"ORANGE_MONEY`",`"destNumber`":`"+22670123456`",`"status`":`"SUCCESS`",`"operatorTransId`":`"$opTx`",`"paymentStatus`":`"DONE`"}"
+        
+        # 🛡️ Utilisation du numéro de retrait dynamique (whitelisté)
+        $payoutJson = "{`"id`":`"$payoutRef`",`"transId`":`"$payoutRef`",`"projectId`":`"00000`",`"amount`":$([int]($WithdrawCents / 100)),`"fees`":5,`"currency`":`"XOF`",`"paymentMethod`":`"ORANGE_MONEY`",`"destNumber`":`"$WithdrawPhone`",`"status`":`"SUCCESS`",`"operatorTransId`":`"$opTx`",`"paymentStatus`":`"DONE`"}"
+        
         $pHash = Get-HmacSha256Hex -Payload $payoutJson -Secret $WebhookSecret
         $res = Invoke-SafeApi -Method Post -Uri "$BaseUrl/webhooks/yenga_pay" -Headers @{
             "Content-Type"     = "application/json; charset=utf-8"

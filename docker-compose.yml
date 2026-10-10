@@ -11,6 +11,10 @@
       - .env
     ports:
       - "8080:8080"
+    # DNS publics : évite les échecs lookup via 127.0.0.11 (Yenga, etc.)
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - APP_ENV=development
       - LOG_LEVEL=debug

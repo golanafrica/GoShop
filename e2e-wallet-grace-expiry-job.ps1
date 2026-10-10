@@ -23,16 +23,18 @@ $ErrorActionPreference = "Stop"
 
 # -------------------- CONFIG --------------------
 $BaseUrl       = if ($env:GOSHOP_BASE_URL) { $env:GOSHOP_BASE_URL } else { "http://localhost:8080" }
-$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "" }
+$AdminEmail    = if ($env:ADMIN_EMAIL) { $env:ADMIN_EMAIL } else { "superadmin.yacine@goshop.com" }
 $AdminPassword = if ($env:ADMIN_PASSWORD) { $env:ADMIN_PASSWORD } else { "CHANGE_ME_ADMIN_PASSWORD" }
 $DbService     = if ($env:DB_SERVICE) { $env:DB_SERVICE } else { "db" }
 $DbUser        = if ($env:DB_USER) { $env:DB_USER } else { "postgres" }
 $DbName        = if ($env:DB_NAME) { $env:DB_NAME } else { "goshop_db" }
 
+# 🛡️ Mots de passe dynamiques (pas de hardcode)
+$MerchantPassword = if ($env:MERCHANT_PASSWORD) { $env:MERCHANT_PASSWORD } else { "TestPass!" + (Get-Random -Minimum 1000 -Maximum 9999) }
+
 $Timestamp     = Get-Date -Format "yyyyMMddHHmmss"
 $ShopSlug      = "grace-expiry-shop-$Timestamp"
 $MerchantEmail = "merchant.grace.$Timestamp@goshop.com"
-$MerchantPass  = "Password123!"
 $SeedBalance   = 50000
 $SeedDebt      = 15000
 
@@ -274,7 +276,7 @@ try {
 
     $reg = Invoke-Api -Method Post -Uri "$BaseUrl/register" -Body @{
         email      = $MerchantEmail
-        password   = $MerchantPass
+        password   = $MerchantPassword
         first_name = "Grace"
         last_name  = "Expiry"
     } -AllowError
@@ -284,7 +286,7 @@ try {
 
     $mLogin = Invoke-Api -Method Post -Uri "$BaseUrl/login" -Body @{
         email    = $MerchantEmail
-        password = $MerchantPass
+        password = $MerchantPassword
     }
     if (-not $mLogin.Ok) { Write-Fail ("Merchant login failed status={0} raw={1}" -f $mLogin.Status, $mLogin.Raw) }
     $script:State.MerchantToken = Extract-TokenFromResponse $mLogin
