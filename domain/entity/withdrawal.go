@@ -11,11 +11,12 @@ import (
 type WithdrawalStatus string
 
 const (
-	WithdrawalStatusPending    WithdrawalStatus = "pending"
-	WithdrawalStatusProcessing WithdrawalStatus = "processing"
-	WithdrawalStatusSuccess    WithdrawalStatus = "success"
-	WithdrawalStatusFailed     WithdrawalStatus = "failed"
-	WithdrawalStatusCancelled  WithdrawalStatus = "cancelled"
+	WithdrawalStatusPending             WithdrawalStatus = "pending"
+	WithdrawalStatusProcessing          WithdrawalStatus = "processing"
+	WithdrawalStatusSuccess             WithdrawalStatus = "success"
+	WithdrawalStatusFailed              WithdrawalStatus = "failed"
+	WithdrawalStatusCancelled           WithdrawalStatus = "cancelled"
+	WithdrawalStatusCompensationPending WithdrawalStatus = "compensation_pending" // 🆕 NOUVEAU : Pour les échecs de reverse nécessitant une réconciliation
 )
 
 // WithdrawalPaymentMethod représente la méthode de paiement du retrait
@@ -51,6 +52,11 @@ type Withdrawal struct {
 	ProcessedAt           *time.Time              `json:"processed_at,omitempty" db:"processed_at"`
 	CreatedAt             time.Time               `json:"created_at" db:"created_at"`
 	UpdatedAt             time.Time               `json:"updated_at" db:"updated_at"`
+
+	// 🆕 NOUVEAUX CHAMPS : Suivi de la compensation en cas d'échec du reverse immédiat
+	CompensationAttempts int        `json:"compensation_attempts" db:"compensation_attempts"`
+	LastCompensationAt   *time.Time `json:"last_compensation_at,omitempty" db:"last_compensation_at"`
+	FailureReason        *string    `json:"failure_reason,omitempty" db:"failure_reason"`
 }
 
 // NewWithdrawal crée un nouveau retrait
@@ -120,4 +126,14 @@ func (w *Withdrawal) MarkFailed(errorMsg string) error {
 	w.ProcessedAt = &now
 	w.UpdatedAt = now
 	return nil
+}
+
+// MarkCompensationPending marque le retrait comme en attente de compensation (nouveau)
+func (w *Withdrawal) MarkCompensationPending(reason string) {
+	now := time.Now().UTC()
+	w.Status = WithdrawalStatusCompensationPending
+	w.FailureReason = &reason
+	w.CompensationAttempts++
+	w.LastCompensationAt = &now
+	w.UpdatedAt = now
 }

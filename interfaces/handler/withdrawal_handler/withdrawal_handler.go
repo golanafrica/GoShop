@@ -129,14 +129,15 @@ func (h *WithdrawalHandler) CreateWithdrawal(w http.ResponseWriter, r *http.Requ
 			Float64("duration_seconds", duration).
 			Msg("Failed to create withdrawal")
 
+		// 🛡️ Gestion riche des erreurs métier (ex: compensation_pending ou failed)
 		var outcome *withdrawalusecase.ErrWithdrawalOutcome
 		if errors.As(err, &outcome) && outcome != nil {
 			body := map[string]interface{}{
-				"code":              "WITHDRAWAL_FAILED",
-				"message":           outcome.Error(),
-				"status":            http.StatusBadRequest,
-				"withdrawal_id":     outcome.WithdrawalID,
-				"withdrawal_status": outcome.Status, // "failed" | "processing"
+				"code":          "WITHDRAWAL_FAILED",
+				"message":       outcome.Error(),
+				"http_status":   http.StatusBadRequest, // Code HTTP séparé du statut métier
+				"withdrawal_id": outcome.WithdrawalID,
+				"status":        outcome.Status, // "failed" | "processing" | "compensation_pending"
 			}
 			utils.WriteJSON(w, http.StatusBadRequest, body)
 			return nil

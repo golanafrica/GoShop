@@ -20,7 +20,7 @@ import (
 // Utilisé après reverse cash-out fail, ou quand le retrait reste en processing (timeout réseau).
 type ErrWithdrawalOutcome struct {
 	WithdrawalID string
-	Status       string // "failed" | "processing"
+	Status       string // "failed" | "processing" | "compensation_pending"
 	Message      string
 }
 
@@ -260,21 +260,38 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 
 	debited := true
 
-	// Helper local : reverse + mark failed + erreur typée (withdrawal_id exposé)
+	// 🆕 Helper local mis à jour : reverse + mark failed/compensation_pending + erreur typée
 	failAfterDebit := func(cause error, reason string) (*withdrawaldto.WithdrawalResponse, error) {
 		revErr := uc.reversePayoutDebit(ctx, shop.ID.String(), req.AmountCents, withdrawalID, reason)
-		if revErr != nil {
-			logger.Error().
-				Err(revErr).
-				Str("withdrawal_id", withdrawalID).
-				Str("original_error", cause.Error()).
-				Msg("CRITICAL: payout debit reverse failed — manual reconciliation required")
+		if revErr == nil {
+			// Reverse OK → status final failed
+			_ = markWithdrawalFailed(uc, ctx, withdrawal, cause.Error())
+			msg := fmt.Sprintf("%s: %v (reversed)", reason, cause)
+			return nil, &ErrWithdrawalOutcome{
+				WithdrawalID: withdrawalID,
+				Status:       "failed",
+				Message:      msg,
+			}
 		}
-		_ = markWithdrawalFailed(uc, ctx, withdrawal, cause.Error())
-		msg := fmt.Sprintf("%s: %v", reason, cause)
+
+		// 🆕 Reverse a échoué → compensation_pending (état audit + retry)
+		logger.Error().
+			Err(revErr).
+			Str("withdrawal_id", withdrawalID).
+			Str("original_error", cause.Error()).
+			Msg("CRITICAL: payout debit reverse failed — moving to compensation_pending for reconciliation")
+
+		failReason := fmt.Sprintf("%s | reverse failed: %v", reason, revErr)
+		withdrawal.MarkCompensationPending(failReason)
+
+		if updateErr := uc.withdrawalRepo.Update(ctx, withdrawal); updateErr != nil {
+			logger.Error().Err(updateErr).Msg("CRITICAL: Failed to update withdrawal to compensation_pending")
+		}
+
+		msg := fmt.Sprintf("%s: %v (compensation pending)", reason, cause)
 		return nil, &ErrWithdrawalOutcome{
 			WithdrawalID: withdrawalID,
-			Status:       "failed",
+			Status:       "compensation_pending",
 			Message:      msg,
 		}
 	}
@@ -353,7 +370,7 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 			}
 		}
 
-		// Erreur métier définitive → reverse + failed
+		// Erreur métier définitive → reverse + failed/compensation_pending
 		return failAfterDebit(err, "cash-out definitively rejected by provider")
 	}
 
@@ -414,7 +431,7 @@ func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
 	req := &walletusecase.CreditWalletRequest{
 		ShopID:          shopID,
 		AmountCents:     amountCents,
-		TransactionType: entity.WalletTxDeposit, // crédit de compensation — JAMAIS Refund // si absent en local → entity.WalletTxDeposit
+		TransactionType: entity.WalletTxDeposit, // crédit de compensation
 		ReferenceType:   &refType,
 		ReferenceID:     &refID,
 		Description:     &desc,
