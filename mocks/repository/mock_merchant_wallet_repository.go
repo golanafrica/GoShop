@@ -235,6 +235,21 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) FindGracePeriodExpired(ctx a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindGracePeriodExpired", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindGracePeriodExpired), ctx)
 }
 
+// FindGracePeriodExpiredPaginated mocks base method.
+func (m *MockMerchantWalletRepository) FindGracePeriodExpiredPaginated(ctx context.Context, limit, offset int) ([]*entity.MerchantWallet, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindGracePeriodExpiredPaginated", ctx, limit, offset)
+	ret0, _ := ret[0].([]*entity.MerchantWallet)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindGracePeriodExpiredPaginated indicates an expected call of FindGracePeriodExpiredPaginated.
+func (mr *MockMerchantWalletRepositoryMockRecorder) FindGracePeriodExpiredPaginated(ctx, limit, offset any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindGracePeriodExpiredPaginated", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindGracePeriodExpiredPaginated), ctx, limit, offset)
+}
+
 // FindGracePeriodExpiringSoon mocks base method.
 func (m *MockMerchantWalletRepository) FindGracePeriodExpiringSoon(ctx context.Context, daysRemaining int) ([]*entity.MerchantWallet, error) {
 	m.ctrl.T.Helper()

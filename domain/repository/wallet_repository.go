@@ -55,6 +55,9 @@ type MerchantWalletRepository interface {
 	// FindGracePeriodExpired retourne les wallets dont la période de grâce est expirée
 	FindGracePeriodExpired(ctx context.Context) ([]*entity.MerchantWallet, error)
 
+	// FindGracePeriodExpiredPaginated retourne les wallets grace expirée avec pagination (évite OOM)
+	FindGracePeriodExpiredPaginated(ctx context.Context, limit, offset int) ([]*entity.MerchantWallet, error)
+
 	// SumTotalBalance somme totale de tous les soldes
 	SumTotalBalance(ctx context.Context) (int64, error)
 
