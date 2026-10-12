@@ -1,25 +1,4 @@
-## Audit README.md (avant réécriture)
 
-| Zone | Problème | Priorité |
-|------|----------|----------|
-| **Statut / version** | Affiche encore **v4.5.0** (21 juil. 2026) alors que `main` a **v5.0 zones** + **v5.1 debt-sweep** | P0 |
-| **Fonctionnalités** | Pas de section **Wallet / escrow / dette / clawback / gate retrait** | P0 |
-| **Nouveautés** | v5.0 présent en double (haut + bas) ; **aucune** entrée v5.1 | P0 |
-| **Tests** | Uniquement Go + WebSocket PS1 ; **scripts finance** absents | P0 |
-| **Doc links** | Chemins faux (`docs/architecture.md` vs `docs/01-architecture.md`, etc.) | P0 |
-| **Licence footer** | En-tête **Apache 2.0**, bas de page **Propriétaire** — incohérent | P0 |
-| **Go version** | Badge **1.25**, texte « Go 1.23+ » / stack « 1.23 » | P1 |
-| **API Routes** | Withdrawals listés ; **pas** `GET /api/wallet` ni champs debt | P1 |
-| **Migrations** | Tableau s’arrête à 034 + 051–053 en vrac ; **pas** `debt_cents` / idempotency wallet si présents en repo | P1 |
-| **Tables** | Pas `merchant_wallets`, `wallet_transactions`, `escrow`, `disputes` | P1 |
-| **Roadmap** | Phase 8+ « en cours » ; **debt-sweep non coché** | P1 |
-| **Archi tree** | OK globalement ; schedulers escrow/installment non cités | P2 |
-
-**Verdict :** le README est une bonne vitrine **v4.5**, mais **trompeur** pour un clone 2026-10 (finance anti-fraude non documentée, liens docs cassés, version / licence contradictoires).
-
----
-
-Ci-dessous le **README complet** aligné v5.1 (contenu utile conservé, corrections ci-dessus appliquées).
 
 ```markdown
 # 🛒 GoShop - Plateforme E-commerce SaaS Multi-tenant pour l'Afrique
