@@ -1110,3 +1110,50 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByReferenceIDAdmin(
 	`
 	return r.scanTransaction(r.queryRowContext(ctx, query, refType, refID))
 }
+
+func (r *MerchantWalletRepositoryInfrastructure) FindGracePeriodExpiredPaginated(ctx context.Context, limit, offset int) ([]*entity.MerchantWallet, error) {
+	query := `
+		SELECT shop_id, balance_cents, held_cents, debt_cents, is_frozen, frozen_at, frozen_until, frozen_reason, 
+		       max_negative_balance_cents, total_sales_cents, total_commissions_cents, total_payouts_cents, created_at, updated_at
+		FROM merchant_wallets
+		WHERE is_frozen = true 
+		  AND frozen_until < NOW()
+		ORDER BY frozen_until ASC
+		LIMIT $1 OFFSET $2
+	`
+	rows, err := r.queryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expired wallets: %w", err)
+	}
+	defer rows.Close()
+
+	var wallets []*entity.MerchantWallet
+	for rows.Next() {
+		var w entity.MerchantWallet
+		var fa, fu sql.NullTime
+		var fr sql.NullString
+
+		err := rows.Scan(
+			&w.ShopID, &w.BalanceCents, &w.HeldCents, &w.DebtCents, &w.IsFrozen,
+			&fa, &fu, &fr, &w.MaxNegativeBalanceCents, &w.TotalSalesCents,
+			&w.TotalCommissionsCents, &w.TotalPayoutsCents, &w.CreatedAt, &w.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan wallet: %w", err)
+		}
+
+		if fa.Valid {
+			w.FrozenAt = &fa.Time
+		}
+		if fu.Valid {
+			w.FrozenUntil = &fu.Time
+		}
+		if fr.Valid {
+			w.FrozenReason = &fr.String
+		}
+
+		wallets = append(wallets, &w)
+	}
+
+	return wallets, rows.Err()
+}
