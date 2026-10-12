@@ -117,6 +117,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindByShopID(ctx, shopID, limit,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByShopID", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindByShopID), ctx, shopID, limit, offset)
 }
 
+// FindCompensationPending mocks base method.
+func (m *MockWithdrawalRepository) FindCompensationPending(ctx context.Context, limit, maxAttempts int) ([]*entity.Withdrawal, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindCompensationPending", ctx, limit, maxAttempts)
+	ret0, _ := ret[0].([]*entity.Withdrawal)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindCompensationPending indicates an expected call of FindCompensationPending.
+func (mr *MockWithdrawalRepositoryMockRecorder) FindCompensationPending(ctx, limit, maxAttempts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompensationPending", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindCompensationPending), ctx, limit, maxAttempts)
+}
+
 // Update mocks base method.
 func (m *MockWithdrawalRepository) Update(ctx context.Context, withdrawal *entity.Withdrawal) error {
 	m.ctrl.T.Helper()

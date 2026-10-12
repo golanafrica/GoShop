@@ -115,10 +115,14 @@ func (w *Withdrawal) MarkSuccess(feesCents, netAmountCents int64, operatorTxID s
 	return nil
 }
 
-// MarkFailed marque le retrait comme échoué
+// MarkFailed marque le retrait comme echoue.
+// Autorise pending, processing ET compensation_pending
+// (fin de retry job apres reverse reussi).
 func (w *Withdrawal) MarkFailed(errorMsg string) error {
-	if w.Status != WithdrawalStatusPending && w.Status != WithdrawalStatusProcessing {
-		return errors.New("withdrawal must be pending or processing to mark as failed")
+	if w.Status != WithdrawalStatusPending &&
+		w.Status != WithdrawalStatusProcessing &&
+		w.Status != WithdrawalStatusCompensationPending {
+		return errors.New("withdrawal must be pending, processing or compensation_pending to mark as failed")
 	}
 	now := time.Now().UTC()
 	w.Status = WithdrawalStatusFailed
@@ -126,6 +130,18 @@ func (w *Withdrawal) MarkFailed(errorMsg string) error {
 	w.ProcessedAt = &now
 	w.UpdatedAt = now
 	return nil
+}
+
+// RecordCompensationAttempt enregistre une tentative de reverse echouee
+// sans changer le status (reste compensation_pending).
+func (w *Withdrawal) RecordCompensationAttempt(errMsg string) {
+	now := time.Now().UTC()
+	w.CompensationAttempts++
+	w.LastCompensationAt = &now
+	w.UpdatedAt = now
+	if errMsg != "" {
+		w.FailureReason = &errMsg
+	}
 }
 
 // MarkCompensationPending marque le retrait comme en attente de compensation (nouveau)

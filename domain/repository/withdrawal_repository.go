@@ -10,7 +10,7 @@ import (
 
 //go:generate mockgen -destination=../../mocks/repository/mock_withdrawal_repository.go -package=repository . WithdrawalRepository
 
-// WithdrawalRepository définit le contrat pour la persistance des retraits
+// WithdrawalRepository definit le contrat pour la persistance des retraits
 type WithdrawalRepository interface {
 	Create(ctx context.Context, withdrawal *entity.Withdrawal) error
 	FindByID(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error)
@@ -19,6 +19,10 @@ type WithdrawalRepository interface {
 	Update(ctx context.Context, withdrawal *entity.Withdrawal) error
 	CountByShopID(ctx context.Context, shopID uuid.UUID) (int, error)
 
-	// WithTX retourne le repository attaché à une transaction
+	// FindCompensationPending retourne les retraits a retenter (FIFO).
+	// maxAttempts > 0 exclut les rows deja au plafond ; 0 = pas de filtre attempts.
+	FindCompensationPending(ctx context.Context, limit int, maxAttempts int) ([]*entity.Withdrawal, error)
+
+	// WithTX retourne le repository attache a une transaction
 	WithTX(tx Tx) WithdrawalRepository
 }

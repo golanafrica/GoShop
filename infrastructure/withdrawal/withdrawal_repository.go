@@ -13,19 +13,17 @@ import (
 
 type WithdrawalRepositoryPostgres struct {
 	db *sql.DB
-	tx repository.Tx // 🆕 AJOUTÉ pour supporter les transactions
+	tx repository.Tx
 }
 
 func NewWithdrawalRepositoryPostgres(db *sql.DB) repository.WithdrawalRepository {
 	return &WithdrawalRepositoryPostgres{db: db}
 }
 
-// WithTX retourne le repository attaché à une transaction
 func (r *WithdrawalRepositoryPostgres) WithTX(tx repository.Tx) repository.WithdrawalRepository {
 	return &WithdrawalRepositoryPostgres{tx: tx, db: r.db}
 }
 
-// Helpers pour exécuter les requêtes (soit via tx, soit via db)
 func (r *WithdrawalRepositoryPostgres) execContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
 	if r.tx != nil {
 		return r.tx.ExecContext(ctx, query, args...)
@@ -47,14 +45,23 @@ func (r *WithdrawalRepositoryPostgres) queryContext(ctx context.Context, query s
 	return r.db.QueryContext(ctx, query, args...)
 }
 
+const withdrawalSelectCols = `
+	id, shop_id, provider, provider_ref, amount, currency, fees, net_amount,
+	status, payment_method, destination_number, destination_name, destination_email,
+	description, error_message, operator_transaction_id, processed_at, created_at, updated_at,
+	COALESCE(compensation_attempts, 0), last_compensation_at, failure_reason
+`
+
 func (r *WithdrawalRepositoryPostgres) Create(ctx context.Context, w *entity.Withdrawal) error {
 	query := `
 		INSERT INTO withdrawals (
 			id, shop_id, provider, provider_ref, amount, currency, fees, net_amount,
 			status, payment_method, destination_number, destination_name, destination_email,
-			description, error_message, operator_transaction_id, processed_at, created_at, updated_at
+			description, error_message, operator_transaction_id, processed_at, created_at, updated_at,
+			compensation_attempts, last_compensation_at, failure_reason
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+			$20, $21, $22
 		)
 	`
 	_, err := r.execContext(ctx, query,
@@ -63,6 +70,7 @@ func (r *WithdrawalRepositoryPostgres) Create(ctx context.Context, w *entity.Wit
 		w.DestinationNumber, w.DestinationName, w.DestinationEmail,
 		w.Description, w.ErrorMessage, w.OperatorTransactionID, w.ProcessedAt,
 		w.CreatedAt, w.UpdatedAt,
+		w.CompensationAttempts, w.LastCompensationAt, w.FailureReason,
 	)
 	if err != nil {
 		return fmt.Errorf("create withdrawal: %w", err)
@@ -71,33 +79,18 @@ func (r *WithdrawalRepositoryPostgres) Create(ctx context.Context, w *entity.Wit
 }
 
 func (r *WithdrawalRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error) {
-	query := `
-		SELECT id, shop_id, provider, provider_ref, amount, currency, fees, net_amount,
-		       status, payment_method, destination_number, destination_name, destination_email,
-		       description, error_message, operator_transaction_id, processed_at, created_at, updated_at
-		FROM withdrawals
-		WHERE id = $1
-	`
+	query := `SELECT ` + withdrawalSelectCols + ` FROM withdrawals WHERE id = $1`
 	return r.scan(r.queryRowContext(ctx, query, id))
 }
 
-// 🆕 FindByProviderRef trouve un retrait par sa référence YengaPay (pour les webhooks)
 func (r *WithdrawalRepositoryPostgres) FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error) {
-	query := `
-		SELECT id, shop_id, provider, provider_ref, amount, currency, fees, net_amount,
-		       status, payment_method, destination_number, destination_name, destination_email,
-		       description, error_message, operator_transaction_id, processed_at, created_at, updated_at
-		FROM withdrawals
-		WHERE provider_ref = $1
-	`
+	query := `SELECT ` + withdrawalSelectCols + ` FROM withdrawals WHERE provider_ref = $1`
 	return r.scan(r.queryRowContext(ctx, query, providerRef))
 }
 
 func (r *WithdrawalRepositoryPostgres) FindByShopID(ctx context.Context, shopID uuid.UUID, limit, offset int) ([]*entity.Withdrawal, error) {
 	query := `
-		SELECT id, shop_id, provider, provider_ref, amount, currency, fees, net_amount,
-		       status, payment_method, destination_number, destination_name, destination_email,
-		       description, error_message, operator_transaction_id, processed_at, created_at, updated_at
+		SELECT ` + withdrawalSelectCols + `
 		FROM withdrawals
 		WHERE shop_id = $1
 		ORDER BY created_at DESC
@@ -120,16 +113,73 @@ func (r *WithdrawalRepositoryPostgres) FindByShopID(ctx context.Context, shopID 
 	return withdrawals, rows.Err()
 }
 
+// FindCompensationPending file d'attente du job retry (FIFO).
+func (r *WithdrawalRepositoryPostgres) FindCompensationPending(
+	ctx context.Context,
+	limit int,
+	maxAttempts int,
+) ([]*entity.Withdrawal, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `
+		SELECT ` + withdrawalSelectCols + `
+		FROM withdrawals
+		WHERE status = 'compensation_pending'
+	`
+	args := []interface{}{}
+	argN := 1
+
+	if maxAttempts > 0 {
+		query += fmt.Sprintf(` AND COALESCE(compensation_attempts, 0) < $%d`, argN)
+		args = append(args, maxAttempts)
+		argN++
+	}
+
+	query += fmt.Sprintf(`
+		ORDER BY COALESCE(last_compensation_at, created_at) ASC, created_at ASC
+		LIMIT $%d
+	`, argN)
+	args = append(args, limit)
+
+	rows, err := r.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find compensation_pending: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*entity.Withdrawal
+	for rows.Next() {
+		w, err := r.scanFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
 func (r *WithdrawalRepositoryPostgres) Update(ctx context.Context, w *entity.Withdrawal) error {
 	query := `
 		UPDATE withdrawals SET
-			provider_ref = $2, status = $3, fees = $4, net_amount = $5,
-			error_message = $6, operator_transaction_id = $7, processed_at = $8, updated_at = $9
+			provider_ref = $2,
+			status = $3,
+			fees = $4,
+			net_amount = $5,
+			error_message = $6,
+			operator_transaction_id = $7,
+			processed_at = $8,
+			updated_at = $9,
+			compensation_attempts = $10,
+			last_compensation_at = $11,
+			failure_reason = $12
 		WHERE id = $1
 	`
 	_, err := r.execContext(ctx, query,
 		w.ID, w.ProviderRef, string(w.Status), w.FeesCents, w.NetAmountCents,
 		w.ErrorMessage, w.OperatorTransactionID, w.ProcessedAt, w.UpdatedAt,
+		w.CompensationAttempts, w.LastCompensationAt, w.FailureReason,
 	)
 	if err != nil {
 		return fmt.Errorf("update withdrawal: %w", err)
@@ -155,6 +205,7 @@ func (r *WithdrawalRepositoryPostgres) scan(row *sql.Row) (*entity.Withdrawal, e
 		&w.DestinationNumber, &w.DestinationName, &w.DestinationEmail,
 		&w.Description, &w.ErrorMessage, &w.OperatorTransactionID, &w.ProcessedAt,
 		&w.CreatedAt, &w.UpdatedAt,
+		&w.CompensationAttempts, &w.LastCompensationAt, &w.FailureReason,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("withdrawal not found")
@@ -173,6 +224,7 @@ func (r *WithdrawalRepositoryPostgres) scanFromRows(rows *sql.Rows) (*entity.Wit
 		&w.DestinationNumber, &w.DestinationName, &w.DestinationEmail,
 		&w.Description, &w.ErrorMessage, &w.OperatorTransactionID, &w.ProcessedAt,
 		&w.CreatedAt, &w.UpdatedAt,
+		&w.CompensationAttempts, &w.LastCompensationAt, &w.FailureReason,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan withdrawal: %w", err)

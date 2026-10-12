@@ -1679,7 +1679,19 @@ func (a *App) setupRouter() {
 		walletGraceExpirySchedule = "0 */6 * * *"
 	}
 
-	// 🆕 P2.2 : Passing 12 arguments (added walletGraceExpirySched and walletGraceExpirySchedule)
+	compensationPendingSchedule := os.Getenv("COMPENSATION_PENDING_SCHEDULE")
+	if compensationPendingSchedule == "" {
+		compensationPendingSchedule = "*/5 * * * *"
+	}
+
+	compensationPendingSched := appscheduler.NewCompensationPendingScheduler(
+		a.DB,
+		withdrawalRepo,
+		creditWalletUC,
+		notifService,
+		a.Logger.Logger,
+	)
+
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
 		onlinePaymentSched,
@@ -1687,6 +1699,7 @@ func (a *App) setupRouter() {
 		escrowAutoReleaseSched,
 		installmentAutoReleaseSched,
 		walletGraceExpirySched,
+		compensationPendingSched,
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
@@ -1694,10 +1707,11 @@ func (a *App) setupRouter() {
 		escrowAutoReleaseSchedule,
 		installmentSchedule,
 		walletGraceExpirySchedule,
+		compensationPendingSchedule,
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
-		a.Logger.Error().Err(err).Msg("❌ Failed to start scheduler")
+		a.Logger.Error().Err(err).Msg("Failed to start scheduler")
 	} else {
 		a.Logger.Info().
 			Str("cod_schedule", cronSchedule).
@@ -1706,7 +1720,8 @@ func (a *App) setupRouter() {
 			Str("escrow_auto_release_schedule", escrowAutoReleaseSchedule).
 			Str("installment_schedule", installmentSchedule).
 			Str("wallet_grace_expiry_schedule", walletGraceExpirySchedule).
-			Msg("✅ v5.2.0 All schedulers started successfully")
+			Str("compensation_pending_schedule", compensationPendingSchedule).
+			Msg("All schedulers started successfully")
 	}
 
 	a.Router = r
