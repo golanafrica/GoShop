@@ -78,7 +78,6 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			}
 
 			// 2. Extraire l'ID utilisateur du contexte (doit être authentifié)
-			// Utilise le helper utils.GetUserID() qui extrait depuis le contexte
 			userID, ok := utils.GetUserID(r.Context())
 			if !ok || userID == "" {
 				logger.Warn().
@@ -102,6 +101,8 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			// Restaurer le body pour les handlers suivants
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
+			endpoint := r.Method + " " + r.URL.Path
+
 			// 4. Vérifier si la clé existe déjà
 			existingKey, err := config.IdempotencyRepo.FindByKey(r.Context(), idempotencyKey)
 			if err != nil {
@@ -109,70 +110,93 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 				utils.WriteAppError(w, utils.NewAppError(
 					"IDEMPOTENCY_STORAGE_ERROR",
 					"Impossible de vérifier l'état d'idempotence. Veuillez réessayer.",
-					http.StatusServiceUnavailable, // 503
+					http.StatusServiceUnavailable,
 				))
 				return
 			}
 
 			// 5. Cas : Clé existe déjà
 			if existingKey != nil {
-				// Vérifier si expirée
 				if existingKey.IsExpired() {
-					// Clé expirée, supprimer et continuer
+					// 🛡️ P1 Fix : Clé expirée, on la supprime et on force la création d'une nouvelle clé protégée.
+					// (L'ancien code sautait directement au handler, laissant la requête sans protection).
 					_ = config.IdempotencyRepo.DeleteByKey(r.Context(), idempotencyKey)
-					next.ServeHTTP(w, r)
+					existingKey = nil // Force le flux à tomber dans l'étape 6 pour créer une nouvelle clé
+				} else {
+					// 🛡️ P1 Fix : Vérifications de sécurité strictes pour éviter le cache poisoning
+					if existingKey.UserID != userID {
+						logger.Warn().
+							Str("idempotency_key", idempotencyKey).
+							Str("expected_user_id", existingKey.UserID).
+							Str("actual_user_id", userID).
+							Msg("⚠️ Sécurité : Tentative de réutilisation de clé d'idempotence par un autre utilisateur")
+						utils.WriteAppError(w, utils.NewAppError(
+							"IDEMPOTENCY_UNAUTHORIZED",
+							"Idempotency-Key belongs to another user",
+							http.StatusForbidden,
+						))
+						return
+					}
+
+					if existingKey.Endpoint != endpoint {
+						logger.Warn().
+							Str("idempotency_key", idempotencyKey).
+							Str("expected_endpoint", existingKey.Endpoint).
+							Str("actual_endpoint", endpoint).
+							Msg("⚠️ Sécurité : Tentative de réutilisation de clé d'idempotence sur un endpoint différent")
+						utils.WriteAppError(w, utils.NewAppError(
+							"IDEMPOTENCY_CONFLICT",
+							"Idempotency-Key belongs to a different endpoint",
+							http.StatusConflict,
+						))
+						return
+					}
+
+					if !existingKey.IsSameRequest(bodyBytes) {
+						logger.Warn().
+							Str("idempotency_key", idempotencyKey).
+							Str("user_id", userID).
+							Msg("⚠️ Conflit d'idempotence : même clé, requête différente")
+						utils.WriteAppError(w, utils.NewAppError(
+							"IDEMPOTENCY_CONFLICT",
+							"Idempotency-Key already used with different request body. Use a new key.",
+							http.StatusConflict,
+						))
+						return
+					}
+
+					// Même requête = renvoyer la réponse cachée
+					logger.Info().
+						Str("idempotency_key", idempotencyKey).
+						Int("cached_status", existingKey.ResponseStatus).
+						Msg("✅ Réponse cachée renvoyée (idempotence)")
+
+					for k, v := range existingKey.ResponseHeaders {
+						w.Header().Set(k, v)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("X-Idempotent-Replayed", "true")
+					w.WriteHeader(existingKey.ResponseStatus)
+
+					responseBody, _ := json.Marshal(existingKey.ResponseBody)
+					w.Write(responseBody)
 					return
 				}
+			}
 
-				// Vérifier si même requête (hash match)
-				if !existingKey.IsSameRequest(bodyBytes) {
-					// Conflit : même clé mais requête différente
-					logger.Warn().
-						Str("idempotency_key", idempotencyKey).
-						Str("user_id", userID).
-						Msg("⚠️ Conflit d'idempotence : même clé, requête différente")
+			// 6. Cas : Nouvelle clé (ou clé expirée qui vient d'être supprimée ci-dessus)
+			if existingKey == nil {
+				newKey := entity.NewIdempotencyKey(idempotencyKey, userID, endpoint, bodyBytes, config.TTL)
+				if err := config.IdempotencyRepo.Create(r.Context(), newKey); err != nil {
+					// 🛡️ CORRECTION P1 : FAIL-FAST
+					logger.Error().Err(err).Msg("❌ Échec critique de la création de la clé d'idempotence")
 					utils.WriteAppError(w, utils.NewAppError(
-						"IDEMPOTENCY_CONFLICT",
-						"Idempotency-Key already used with different request body. Use a new key.",
-						http.StatusConflict,
+						"IDEMPOTENCY_STORAGE_UNAVAILABLE",
+						"Impossible de garantir l'idempotence de la requête pour des raisons techniques. Veuillez réessayer plus tard.",
+						http.StatusServiceUnavailable,
 					))
 					return
 				}
-
-				// Même requête = renvoyer la réponse cachée
-				logger.Info().
-					Str("idempotency_key", idempotencyKey).
-					Int("cached_status", existingKey.ResponseStatus).
-					Msg("✅ Réponse cachée renvoyée (idempotence)")
-
-				// Restaurer les headers
-				for k, v := range existingKey.ResponseHeaders {
-					w.Header().Set(k, v)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-Idempotent-Replayed", "true")
-				w.WriteHeader(existingKey.ResponseStatus)
-
-				// Écrire le body
-				responseBody, _ := json.Marshal(existingKey.ResponseBody)
-				w.Write(responseBody)
-				return
-			}
-
-			// 6. Cas : Nouvelle clé, créer l'entrée
-			endpoint := r.Method + " " + r.URL.Path
-			newKey := entity.NewIdempotencyKey(idempotencyKey, userID, endpoint, bodyBytes, config.TTL)
-
-			if err := config.IdempotencyRepo.Create(r.Context(), newKey); err != nil {
-				// 🛡️ CORRECTION P1 : FAIL-FAST
-				// Ne jamais exécuter une requête financière sans garantie d'idempotence.
-				logger.Error().Err(err).Msg("❌ Échec critique de la création de la clé d'idempotence")
-				utils.WriteAppError(w, utils.NewAppError(
-					"IDEMPOTENCY_STORAGE_UNAVAILABLE",
-					"Impossible de garantir l'idempotence de la requête pour des raisons techniques. Veuillez réessayer plus tard.",
-					http.StatusServiceUnavailable, // 503
-				))
-				return
 			}
 
 			// 7. Capturer la réponse du handler
@@ -180,8 +204,6 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			next.ServeHTTP(recorder, r)
 
 			// 8. Stocker la réponse pour les futures requêtes
-			// Note: Si cette étape échoue, on loggue un warning mais on ne bloque pas,
-			// car la requête métier a déjà réussi et la clé existe déjà (étape 6).
 			responseHeaders := make(map[string]string)
 			for k := range recorder.Header() {
 				responseHeaders[k] = recorder.Header().Get(k)
@@ -189,7 +211,6 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 
 			var responseBody map[string]interface{}
 			if err := json.Unmarshal(recorder.body.Bytes(), &responseBody); err != nil {
-				// Si pas JSON, stocker vide
 				responseBody = make(map[string]interface{})
 			}
 
@@ -206,7 +227,7 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 			logger.Debug().
 				Str("idempotency_key", idempotencyKey).
 				Int("status", recorder.statusCode).
-				Msg("✅ Clé d'idempotence créée et réponse stockée")
+				Msg("✅ Clé d'idempotence créée/mise à jour et réponse stockée")
 		})
 	}
 }
