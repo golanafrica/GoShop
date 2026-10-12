@@ -180,7 +180,11 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				}
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
-			uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
+
+			// 🛡️ P0 : Propager l'erreur si la confirmation de commande échoue, pour permettre un replay sûr.
+			if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
+				return fmt.Errorf("failed to ensure order confirmed on retry: %w", err)
+			}
 			return nil
 		}
 
@@ -324,8 +328,12 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					Str("escrow_id", escrow.ID).
 					Msg("Funds locked in Escrow atomically (Phase 2 settlement)")
 
-				// Mise à jour de la commande si nécessaire
-				uc.ensureOrderConfirmed(ctx, paymentEntity, logger)
+				// 🛡️ P0 : Confirmer la commande. Si cela échoue, on propage l'erreur pour que le webhook reste processed=false et soit rejoué.
+				// Au prochain replay, escrow_created=true, donc on sautera la création d'escrow et on réessaiera uniquement ensureOrderConfirmed.
+				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
+					processErr = fmt.Errorf("failed to ensure order confirmed: %w", err)
+					return processErr
+				}
 
 				// Tout est réussi, on retourne nil directement pour éviter le double update en fin de fonction
 				return nil
@@ -410,9 +418,12 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		if orderUUID, err := uuid.Parse(orderIDStr); err == nil {
 			payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
 			if searchErr == nil && len(payments) > 0 {
-				// P1-D: prefer non-terminal, then most recent success candidate
-				chosen := pickBestPaymentForOrder(payments)
-				return chosen, "order_id", nil
+				// 🛡️ P0 : Plus de fallback aveugle sur payments[0]. On exige une identification sans ambiguïté.
+				chosen, err := pickBestPaymentForOrder(payments)
+				if err != nil {
+					return nil, "", err
+				}
+				return chosen, "order_id_fallback", nil
 			}
 			if logger != nil && searchErr != nil {
 				logger.Debug().Err(searchErr).Msg("FindByOrderIDUnscoped failed")
@@ -423,27 +434,32 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
 }
 
-// pickBestPaymentForOrder: avoid blind payments[0] (P1-D light).
-func pickBestPaymentForOrder(payments []*entity.Payment) *entity.Payment {
+// pickBestPaymentForOrder: 🛡️ P0 Fix - avoid blind payments[0] fallback.
+func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error) {
 	if len(payments) == 0 {
-		return nil
+		return nil, fmt.Errorf("no payments found for order")
 	}
 	if len(payments) == 1 {
-		return payments[0]
+		return payments[0], nil
 	}
-	// Prefer non-terminal (still open)
+
+	// 1. Prefer non-terminal (still open, e.g., pending/processing)
 	for _, p := range payments {
 		if p != nil && !p.IsTerminal() {
-			return p
+			return p, nil
 		}
 	}
-	// Else prefer SUCCESS already waiting for escrow
+
+	// 2. Prefer SUCCESS already waiting for escrow (edge case where webhook is retried)
 	for _, p := range payments {
 		if p != nil && p.Status == entity.PaymentStatusSuccess {
-			return p
+			return p, nil
 		}
 	}
-	return payments[0]
+
+	// 3. If multiple terminal payments exist (e.g., multiple failed attempts), we CANNOT safely guess.
+	// Return an error to force manual reconciliation or rely on strict provider_ref matching earlier.
+	return nil, fmt.Errorf("ambiguous payment state for order: multiple terminal payments exist, manual reconciliation required")
 }
 
 func persistYengaIDs(p *entity.Payment, event *payment.WebhookEvent) {
@@ -474,9 +490,10 @@ func markSuccessProviderRef(p *entity.Payment, event *payment.WebhookEvent) stri
 	return event.ProviderRef
 }
 
-func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) {
+// 🛡️ P0 Fix : Retourne maintenant une erreur pour permettre la propagation en cas d'échec.
+func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) error {
 	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
-		return
+		return nil
 	}
 
 	orderIDStr := paymentEntity.OrderID.String()
@@ -485,11 +502,11 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 		if logger != nil {
 			logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: order not found")
 		}
-		return
+		return fmt.Errorf("order not found for payment: %w", err)
 	}
 
 	if order.Status != string(entity.OrderStatusPending) {
-		return
+		return nil // Already confirmed or in another state, nothing to do (idempotent)
 	}
 
 	order.MarkAccepted()
@@ -497,12 +514,13 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 		if logger != nil {
 			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
 		}
-		return
+		return fmt.Errorf("failed to update order status: %w", err)
 	}
 
 	if logger != nil {
 		logger.Info().Str("order_id", orderIDStr).Msg("Order confirmed after payment SUCCESS (webhook)")
 	}
+	return nil
 }
 
 // recordWebhook: INSERT audit. processed starts false when signature is valid.
