@@ -1088,6 +1088,18 @@ func (a *App) setupRouter() {
 	freezeJobHandler := freezejobhandler.NewFreezeJobHandler(freezeJobUC)
 	a.Logger.Info().Msg("✅ P2.3 Freeze job usecase & handler initialized")
 
+	// ============================================================
+	// 🆕 P0-A : COMPENSATION PENDING SCHEDULER
+	// ============================================================
+	compensationPendingSched := appscheduler.NewCompensationPendingScheduler(
+		a.DB, // 🆕 Ajouté : premier argument requis
+		withdrawalRepo,
+		creditWalletUC,
+		notifService,
+		a.Logger.Logger,
+	)
+	a.Logger.Info().Msg("✅ P0-A Compensation pending scheduler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -1220,6 +1232,7 @@ func (a *App) setupRouter() {
 		batchRepo,
 		escrowAutoReleaseSched,
 		deliveryProofRepo,
+		compensationPendingSched,
 	)
 
 	commissionRateHandler := commissionratehandler.NewCommissionRateHandler(
@@ -1565,6 +1578,8 @@ func (a *App) setupRouter() {
 			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
 			r.Post("/trigger-escrow-auto-release", middl.ErrorHandler(schedulerHandler.TriggerEscrowAutoRelease))
 			r.Post("/force-auto-release/{order_id}", middl.ErrorHandler(schedulerHandler.ForceAutoRelease))
+			// 🆕 AJOUTE CETTE LIGNE ICI :
+			r.Post("/trigger-compensation-pending", middl.ErrorHandler(schedulerHandler.TriggerCompensationPending))
 		})
 
 		r.Route("/admin/commission-rates", func(r chi.Router) {
@@ -1683,14 +1698,6 @@ func (a *App) setupRouter() {
 	if compensationPendingSchedule == "" {
 		compensationPendingSchedule = "*/5 * * * *"
 	}
-
-	compensationPendingSched := appscheduler.NewCompensationPendingScheduler(
-		a.DB,
-		withdrawalRepo,
-		creditWalletUC,
-		notifService,
-		a.Logger.Logger,
-	)
 
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,

@@ -11,7 +11,9 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/service"
+	"Goshop/domain/tenant"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -138,11 +140,23 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		Str("shop_id", w.ShopID.String()).
 		Logger()
 
+	// 🛡️ CORRECTION CRITIQUE : Le CreditWalletUsecase exige un contexte avec un tenant.
+	// Nous devons reconstruire un contexte valide à partir du ShopID du retrait.
+	shopUUID, err := uuid.Parse(w.ShopID.String())
+	if err != nil {
+		return fmt.Errorf("invalid shop UUID in withdrawal: %w", err)
+	}
+
+	// On crée un objet Shop minimal juste pour satisfaire le middleware de tenant
+	shop := &entity.Shop{ID: shopUUID}
+	shopCtx := tenant.WithTenant(ctx, shop)
+
 	refType := "withdrawal_reversal"
 	refID := w.ID.String()
 	desc := fmt.Sprintf("Compensation retry reverse for withdrawal %s", w.ID.String())
 
-	_, err := s.creditWalletUC.Execute(ctx, &walletusecase.CreditWalletRequest{
+	// 🛡️ On utilise shopCtx au lieu de ctx pour que le repository accepte la requête
+	_, err = s.creditWalletUC.Execute(shopCtx, &walletusecase.CreditWalletRequest{
 		ShopID:          w.ShopID.String(),
 		AmountCents:     w.AmountCents,
 		TransactionType: entity.WalletTxDeposit,
@@ -151,8 +165,18 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		Description:     &desc,
 		HoldAfterCredit: false,
 	})
+
 	if err != nil {
-		w.RecordCompensationAttempt(err.Error())
+		// Si la méthode RecordCompensationAttempt n'existe pas sur ton entité,
+		// remplace ces 2 lignes par :
+		// w.CompensationAttempts++
+		// now := time.Now().UTC()
+		// w.LastCompensationAt = &now
+		// reason := fmt.Sprintf("Retry failed: %v", err)
+		// w.FailureReason = &reason
+
+		w.RecordCompensationAttempt(err.Error()) // (Si cette méthode existe dans ton entity/withdrawal.go)
+
 		if updErr := s.withdrawalRepo.Update(ctx, w); updErr != nil {
 			log.Error().Err(updErr).Msg("Failed to persist compensation attempt")
 		}

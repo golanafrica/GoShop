@@ -22,10 +22,11 @@ import (
 
 // SchedulerHandler gère les endpoints admin du scheduler
 type SchedulerHandler struct {
-	scheduler              *appscheduler.CommissionScheduler
-	batchRepo              repository.CommissionBatchRepository
-	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler // 🆕 v4.8.3
-	deliveryProofRepo      repository.DeliveryProofRepository       // 🆕 v4.8.4
+	scheduler                *appscheduler.CommissionScheduler
+	batchRepo                repository.CommissionBatchRepository
+	escrowAutoReleaseSched   *appscheduler.EscrowAutoReleaseScheduler   // 🆕 v4.8.3
+	deliveryProofRepo        repository.DeliveryProofRepository         // 🆕 v4.8.4
+	compensationPendingSched *appscheduler.CompensationPendingScheduler // 🆕 P0-A Compensation Retry
 }
 
 // NewSchedulerHandler crée une nouvelle instance
@@ -34,12 +35,14 @@ func NewSchedulerHandler(
 	batchRepo repository.CommissionBatchRepository,
 	escrowAutoReleaseSched *appscheduler.EscrowAutoReleaseScheduler, // 🆕 v4.8.3
 	deliveryProofRepo repository.DeliveryProofRepository, // 🆕 v4.8.4
+	compensationPendingSched *appscheduler.CompensationPendingScheduler, // 🆕 P0-A Compensation Retry
 ) *SchedulerHandler {
 	return &SchedulerHandler{
-		scheduler:              scheduler,
-		batchRepo:              batchRepo,
-		escrowAutoReleaseSched: escrowAutoReleaseSched, // 🆕 v4.8.3
-		deliveryProofRepo:      deliveryProofRepo,      // 🆕 v4.8.4
+		scheduler:                scheduler,
+		batchRepo:                batchRepo,
+		escrowAutoReleaseSched:   escrowAutoReleaseSched,
+		deliveryProofRepo:        deliveryProofRepo,
+		compensationPendingSched: compensationPendingSched,
 	}
 }
 
@@ -65,13 +68,11 @@ func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *htt
 
 	logger.Info().Msg("🔧 Manual commission collection triggered by admin")
 
-	// Récupérer l'ID de l'admin qui déclenche (optionnel)
 	executedBy := r.Header.Get("X-Admin-ID")
 	if executedBy == "" {
 		executedBy = "admin-manual"
 	}
 
-	// Lancer la collecte en arrière-plan
 	go func() {
 		bgCtx := context.Background()
 		if err := h.scheduler.RunNightlyCollection(bgCtx); err != nil {
@@ -82,7 +83,6 @@ func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *htt
 		}
 	}()
 
-	// Réponse immédiate
 	utils.WriteJSON(w, http.StatusAccepted, map[string]interface{}{
 		"success":     true,
 		"message":     "Commission collection triggered in background",
@@ -96,7 +96,7 @@ func (h *SchedulerHandler) TriggerManualCollection(w http.ResponseWriter, r *htt
 // ============================================================
 
 // @Summary Déclencher manuellement l'auto-release des escrows
-// @Description Lance immédiatement le processus d'auto-release des escrows éligibles (livré + 3 jours sans litige).
+// @Description Lance immédiatement le processus d'auto-release des escrows éligibles.
 // @Tags Admin Scheduler
 // @Accept json
 // @Produce json
@@ -113,13 +113,11 @@ func (h *SchedulerHandler) TriggerEscrowAutoRelease(w http.ResponseWriter, r *ht
 
 	logger.Info().Msg("🔧 Manual escrow auto-release triggered by admin")
 
-	// Récupérer l'ID de l'admin qui déclenche (optionnel)
 	executedBy := r.Header.Get("X-Admin-ID")
 	if executedBy == "" {
 		executedBy = "admin-manual"
 	}
 
-	// Lancer l'auto-release en arrière-plan
 	go func() {
 		bgCtx := context.Background()
 		if err := h.escrowAutoReleaseSched.RunAutoRelease(bgCtx); err != nil {
@@ -134,10 +132,57 @@ func (h *SchedulerHandler) TriggerEscrowAutoRelease(w http.ResponseWriter, r *ht
 		}
 	}()
 
-	// Réponse immédiate
 	utils.WriteJSON(w, http.StatusAccepted, map[string]interface{}{
 		"success":     true,
 		"message":     "Escrow auto-release triggered in background",
+		"executed_by": executedBy,
+	})
+	return nil
+}
+
+// ============================================================
+// 🆕 P0-A : COMPENSATION PENDING RETRY TRIGGER
+// ============================================================
+
+// @Summary Déclencher manuellement le retry des retraits en compensation_pending
+// @Description Force l'exécution synchrone du job de retry pour les retraits en attente de compensation.
+// @Tags Admin Scheduler
+// @Accept json
+// @Produce json
+// @Param X-Admin-ID header string false "ID de l'administrateur déclencheur"
+// @Success 200 {object} map[string]interface{} "Job exécuté avec succès"
+// @Failure 401 {object} utils.AppError "Non autorisé"
+// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
+// @Failure 503 {object} utils.AppError "Scheduler non configuré"
+// @Security ApiKeyAuth
+// @Router /api/admin/scheduler/trigger-compensation-pending [post]
+func (h *SchedulerHandler) TriggerCompensationPending(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	if h.compensationPendingSched == nil {
+		return utils.NewAppError(
+			"SCHEDULER_UNAVAILABLE",
+			"compensation pending scheduler not configured",
+			http.StatusServiceUnavailable,
+		)
+	}
+
+	executedBy := r.Header.Get("X-Admin-ID")
+	if executedBy == "" {
+		executedBy = "admin-manual"
+	}
+
+	logger.Info().
+		Str("executed_by", executedBy).
+		Msg("Manual compensation_pending job triggered")
+
+	// Exécution synchrone pour le E2E et le debug admin
+	h.compensationPendingSched.Run()
+
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"success":     true,
+		"message":     "Compensation pending job completed",
 		"executed_by": executedBy,
 	})
 	return nil
@@ -163,8 +208,6 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// 🔒 SÉCURITÉ : Vérifier si l'endpoint est activé
-	// En production, ENABLE_FORCE_RELEASE ne doit PAS être défini ou doit être "false"
 	enableForceRelease := os.Getenv("ENABLE_FORCE_RELEASE")
 	appEnv := strings.ToLower(os.Getenv("APP_ENV"))
 	if enableForceRelease != "true" || appEnv == "production" {
@@ -191,13 +234,11 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Récupérer l'ID de l'admin pour audit
 	executedBy := r.Header.Get("X-Admin-ID")
 	if executedBy == "" {
 		executedBy = "admin-unknown"
 	}
 
-	// 📝 Log d'audit critique
 	logger.Warn().
 		Str("order_id", orderID).
 		Int("days_ago", daysAgo).
@@ -205,7 +246,6 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 		Str("remote_ip", r.RemoteAddr).
 		Msg("⚠️ FORCE AUTO-RELEASE TRIGGERED (bypassing 3-day protection)")
 
-	// 1. Forcer le delivery_date
 	if err := h.deliveryProofRepo.ForceDeliveryDate(ctx, orderID, daysAgo); err != nil {
 		logger.Error().Err(err).Msg("Failed to force delivery date")
 		return utils.NewAppError("FORCE_DATE_FAILED", err.Error(), http.StatusInternalServerError)
@@ -216,7 +256,6 @@ func (h *SchedulerHandler) ForceAutoRelease(w http.ResponseWriter, r *http.Reque
 		Int("days_ago", daysAgo).
 		Msg("✅ Delivery date forced, triggering scheduler")
 
-	// 2. Déclencher le scheduler en arrière-plan
 	go func() {
 		bgCtx := context.Background()
 		if err := h.escrowAutoReleaseSched.RunAutoRelease(bgCtx); err != nil {
@@ -256,7 +295,6 @@ func (h *SchedulerHandler) GetRecentBatches(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Paramètre limit (défaut: 10, max: 100)
 	limit := 10
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
@@ -264,9 +302,7 @@ func (h *SchedulerHandler) GetRecentBatches(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	logger.Debug().
-		Int("limit", limit).
-		Msg("Fetching recent batches")
+	logger.Debug().Int("limit", limit).Msg("Fetching recent batches")
 
 	batches, err := h.batchRepo.FindRecentBatches(ctx, limit)
 	if err != nil {
@@ -300,24 +336,19 @@ func (h *SchedulerHandler) GetBatchDetails(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Récupérer l'ID du batch depuis l'URL
 	batchID := r.PathValue("id")
 	if batchID == "" {
 		return utils.NewAppError("MISSING_BATCH_ID", "batch ID is required", http.StatusBadRequest)
 	}
 
-	logger.Debug().
-		Str("batch_id", batchID).
-		Msg("Fetching batch details")
+	logger.Debug().Str("batch_id", batchID).Msg("Fetching batch details")
 
-	// Récupérer le batch
 	batch, err := h.batchRepo.FindBatchByID(ctx, batchID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to fetch batch")
 		return utils.NewAppError("BATCH_NOT_FOUND", err.Error(), http.StatusNotFound)
 	}
 
-	// Récupérer les items du batch
 	items, err := h.batchRepo.FindItemsByBatchID(ctx, batchID)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to fetch batch items")
@@ -349,7 +380,6 @@ func (h *SchedulerHandler) GetDailyStats(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	logger := zerolog.Ctx(ctx)
 
-	// Paramètre days (défaut: 30, max: 365)
 	days := 30
 	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
 		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 && d <= 365 {
@@ -357,9 +387,7 @@ func (h *SchedulerHandler) GetDailyStats(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	logger.Debug().
-		Int("days", days).
-		Msg("Fetching daily stats")
+	logger.Debug().Int("days", days).Msg("Fetching daily stats")
 
 	stats, err := h.batchRepo.GetDailyStats(ctx, days)
 	if err != nil {
@@ -367,7 +395,6 @@ func (h *SchedulerHandler) GetDailyStats(w http.ResponseWriter, r *http.Request)
 		return utils.NewAppError("STATS_FETCH_FAILED", err.Error(), http.StatusInternalServerError)
 	}
 
-	// Calculer les totaux
 	var totalCollected int64
 	var totalFailed int64
 	var totalSuccessful int

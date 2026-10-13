@@ -204,3 +204,12 @@ func (s *CronScheduler) Stop() {
 	<-ctx.Done()
 	s.logger.Info().Msg("Cron scheduler stopped")
 }
+
+// RunCompensationPendingNow declenche le job compensation_pending (admin/E2E, synchrone).
+func (s *CronScheduler) RunCompensationPendingNow() {
+	if s.compensationPendingSched == nil {
+		s.logger.Warn().Msg("compensationPendingSched is nil, skip")
+		return
+	}
+	s.compensationPendingSched.Run()
+}
