@@ -1,4 +1,3 @@
-Voici un **CHANGELOG à jour** (v5.2 en tête, restes inchangés en substance). Prêt à coller dans `CHANGELOG.md`.
 
 ```markdown
 # Changelog
@@ -10,42 +9,43 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [v5.2.0-financial-integrity] - 2026-10-08
+## [v5.2.0-financial-integrity] - 2026-10-14
 
-### 🚀 Nouveautés Majeures
-- **Wallet Grace Expiry Job (P2)** : scheduler + API admin pour détecter les grâces de gel expirées — **audit + notification / preview uniquement** (pas de clawback, debt sweep, unfreeze auto). OFF par défaut (`platform_settings`), kill switch `FREEZE_JOB_HARD_DISABLED`.
-- **Intégrité cash-out (P0)** : si le débit wallet a lieu avant un CashOut Yenga en échec → **reverse** synchrone ; webhook `payout.failed` → reverse **idempotent** avec ledger.
-- **Webhook pay-in (P1-C)** : `payment_webhooks.processed = true` **uniquement après succès métier** ; en échec métier, `processed` reste false pour permettre le **retry** provider.
+### 🚀 Résolutions d'Audit de Sécurité & Résilience (P0/P1/P2)
+Cette version clôture les recommandations critiques de l'audit de sécurité, transformant GoShop en une plateforme avec une intégrité financière de niveau "Bank-Grade".
+
+- **Retraits & Compensation (P0-A)** : Implémentation du statut `compensation_pending`. Ajout d'un `CompensationPendingScheduler` avec verrouillage advisory, retry automatique et injection stricte du contexte multi-tenant. Le reverse est désormais **idempotent** via le ledger. Ajout d'un test E2E de chaos validant la restauration du solde.
+- **Webhooks Paiement (P0-B)** : Suppression du fallback ambigu `payments[0]` dans `pickBestPaymentForOrder`. Matching strict par `provider_ref`. Atomicité garantie : `ensureOrderConfirmed` retourne désormais une erreur en cas d'échec, permettant un replay sûr du webhook sans créer de doublon d'escrow.
+- **Idempotence HTTP (P1)** : Prévention du cache poisoning inter-utilisateurs. Le middleware vérifie désormais strictement que la clé d'idempotence correspond au même `UserID` et `Endpoint`. Correction du bypass des clés expirées (recréation sécurisée au lieu d'une simple suppression).
+- **Freeze Job (P1/P2)** : 
+  - Pagination SQL (`LIMIT`/`OFFSET`) via `FindGracePeriodExpiredPaginated` pour éliminer tout risque de fuite de mémoire (OOM) sur les grands volumes.
+  - Comptage strict des échecs de vérification d'idempotence comme `skipped`.
+  - Envoi **réel** des notifications administrateur via `notifService.SendNotification` (fin des notifications "fantômes").
 
 ### 🛠️ Architecture & Ops
-- **Migration auto** : service Compose one-shot `migrate` + `tests/loadtest/scripts/migrate.sh` (`schema_migrations`, skip déjà appliquées) — plus de dépendance exclusive à `initdb.d` pour les nouveaux `.sql`.
-- **Freeze job** : tables `wallet_freeze_job_runs` / `wallet_freeze_job_actions`, advisory lock, dry-run / live, idempotence `shop_id` + `frozen_until`.
-- **Installment** : ledger `commission_debit` (et `debt_sweep` si câblé) sur release escrow ; wiring `WalletTxnRepo` dans `internal/app/app.go`.
-- **Tontine** : alignement crédit **net + held**, redeem + debt sweep (E2E) ; migration `name` sur `tontine_groups` si absente en env legacy.
+- **Migration auto** : Service Compose one-shot `migrate` + scripts dédiés (`schema_migrations`, skip des déjà appliquées) — plus de dépendance exclusive à `initdb.d` pour les nouveaux `.sql`.
+- **Installment** : Ledger `commission_debit` (et `debt_sweep` si câblé) sur release escrow ; wiring `WalletTxnRepo` dans `internal/app/app.go`.
+- **Tontine** : Alignement crédit **net + held**, redeem + debt sweep (validé par E2E) ; migration `name` sur `tontine_groups` si absente en env legacy.
 
 ### 🧪 Tests & Qualité
-- `e2e-wallet-grace-expiry-job.ps1` — preview, dry-run, live, idempotence, sécurité finance, RBAC marchand.
-- `e2e-tontine-net-held.ps1`, `e2e-tontine-redeem-debt-sweep.ps1`, `e2e-installment-escrow-release.ps1`, `e2e-cash-on-delivery.ps1`.
-- Unitaires : `withdrawal_usecase` (reverse), `payment_usecase` (webhook processed lifecycle).
-- Auth E2E : login public **`POST /login`** (pas `/api/auth/login`).
+- **Nouveaux E2E** : 
+  - `e2e-compensation-pending-job.ps1` : Validation du retry automatique, restauration du solde et intégrité du ledger.
+  - `e2e-wallet-grace-expiry-job.ps1` : Preview, dry-run, live, idempotence, sécurité finance, RBAC marchand.
+  - `e2e-tontine-net-held.ps1`, `e2e-tontine-redeem-debt-sweep.ps1`, `e2e-installment-escrow-release.ps1`, `e2e-cash-on-delivery.ps1`.
+- **Unitaires** : `withdrawal_usecase` (reverse idempotent), `payment_usecase` (webhook processed lifecycle).
+- **Auth E2E** : Login public via `POST /login` (standardisé).
 
 ### 📚 Documentation
 - [docs/13-wallet-grace-expiry-job.md](docs/13-wallet-grace-expiry-job.md) + [docs/adr/ADR-wallet-grace-expiry-job.md](docs/adr/ADR-wallet-grace-expiry-job.md)
 - [docs/payment-system.md](docs/payment-system.md) **v5.2** — reverse cash-out, payout webhook, cycle `processed`
-- [docs/12-wallet-debt-sweep.md](docs/12-wallet-debt-sweep.md) — compensation retrait
+- [docs/12-wallet-debt-sweep.md](docs/12-wallet-debt-sweep.md) — modèle, flux, API, E2E, fichiers de référence
 - [docs/11-tontine-system.md](docs/11-tontine-system.md) — net+held / redeem
 - [docs/06-migration-plan.md](docs/06-migration-plan.md) — runner Compose
 
-### 🔒 Security / Intéité financière
-- Pas de solde « avalé » sur CashOut refusé (reverse P0-A / P0-B).
-- Webhooks pay-in rejouables après erreur métier (P1-C).
-- Job freeze **sans** impact sur `debt_cents` / ledger clawback.
-
-### 📝 Commits de référence (indicatif)
-- `a826c92` — grace expiry job + admin API + E2E + docs
-- `07d7418` / `b58a09e` — reverse withdrawal + webhook processed after success
-- `ca3d737` — docs finance v5.2
-- `a68e341` — auto-migrate Compose
+### 🔒 Sécurité / Intégrité Financière
+- ✅ Pas de solde « avalé » sur CashOut refusé (reverse P0-A / P0-B).
+- ✅ Webhooks pay-in rejouables après erreur métier sans corrompre l'état (P1-C).
+- ✅ Job freeze **sans** impact silencieux sur `debt_cents` ou ledger clawback.
 
 ---
 
@@ -75,7 +75,7 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### 📚 Documentation
 - **Nouveau** : [docs/12-wallet-debt-sweep.md](docs/12-wallet-debt-sweep.md) — modèle, flux, API, E2E, fichiers de référence.
 
-### 🔒 Security / Intéité financière
+### 🔒 Security / Intégrité financière
 - Impossible de retirer des fonds tant qu’une dette post-litige n’est pas soldée par les rentrées suivantes.
 - Ledger audit : types `clawback`, `debt_add`, `debt_sweep` (idempotence soft sur contraintes uniques).
 
@@ -300,3 +300,5 @@ openssl rand -base64 32 | Select-Object -First 1 | ForEach-Object { $_.Substring
 # Database Password (PowerShell)
 -join ((65..90) + (97..122) + (48..57) + (33..47) | Get-Random -Count 24 | ForEach-Object {[char]$_})
 ```
+
+---
