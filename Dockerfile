@@ -31,7 +31,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ./bin/api ./cmd/a
 # Source : https://hub.docker.com/layers/library/alpine/3.22.0
 # Digest vérifié le : 13 août 2026
 # ⚠️ MAINTENANCE : Dependabot ouvre une PR automatique quand le digest change
-FROM alpine:3.22.0@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 # Installer les dépendances runtime minimales
 RUN apk --no-cache add ca-certificates tzdata
 # Créer un utilisateur non-root avec UID explicite
