@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,16 +53,29 @@ func setupTempUploads(t *testing.T) string {
 
 // createTestFile crée un fichier de test dans le répertoire uploads
 // Retourne le chemin au format cross-platform pour la validation
-// createTestFile crée un fichier de test dans le répertoire uploads
+// createTestFile cree un fichier de test avec magic number coherent
 func createTestFile(t *testing.T, filename string) string {
 	t.Helper()
-	// Créer le fichier sur disque avec le chemin OS-compatible
 	diskPath := filepath.Join("uploads", filename)
-	content := []byte("test file content for KYC testing")
+
+	var content []byte
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg":
+		content = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}
+		content = append(content, []byte("JFIF test jpeg payload")...)
+	case ".png":
+		content = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+		content = append(content, []byte("test png payload")...)
+	case ".pdf":
+		content = []byte("%PDF-1.4\n% test pdf payload\n%%EOF\n")
+	default:
+		content = []byte("test file content for KYC testing")
+	}
+
 	if err := os.WriteFile(diskPath, content, 0644); err != nil {
 		t.Fatalf("failed to create test file %s: %v", diskPath, err)
 	}
-	// Retourner avec forward slashes (format attendu par le usecase)
 	return "uploads/" + filename
 }
 
