@@ -1578,7 +1578,7 @@ func (a *App) setupRouter() {
 			r.Get("/stats", middl.ErrorHandler(schedulerHandler.GetDailyStats))
 			r.Post("/trigger-escrow-auto-release", middl.ErrorHandler(schedulerHandler.TriggerEscrowAutoRelease))
 			r.Post("/force-auto-release/{order_id}", middl.ErrorHandler(schedulerHandler.ForceAutoRelease))
-			// 🆕 AJOUTE CETTE LIGNE ICI :
+			// 🆕 P0-A : Compensation pending retry trigger
 			r.Post("/trigger-compensation-pending", middl.ErrorHandler(schedulerHandler.TriggerCompensationPending))
 		})
 
@@ -1605,8 +1605,13 @@ func (a *App) setupRouter() {
 			collaboratorHandler.RegisterAdminPlatformRoutes(r)
 		})
 
+		// 🛡️ CORRECTION AUDIT 1.7 : Protection IDOR sur les routes de collaborateurs de boutique
 		r.Route("/shops/{shop_id}/collaborators", func(r chi.Router) {
 			r.Use(middl.RequireRoles("merchant", "super_admin"))
+			// Résout le shop via Host/X-Shop-Slug et vérifie que l'utilisateur y a accès
+			r.Use(middl.TenantResolver(shopRepo, shopCollabRepo, a.Logger.Logger))
+			r.Use(middl.RequireShopAccess(shopCollabRepo))
+
 			collaboratorHandler.RegisterShopRoutes(r)
 		})
 
