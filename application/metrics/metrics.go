@@ -1096,3 +1096,33 @@ var (
 		Help: "Total number of invalid file signatures",
 	})
 )
+
+// ================================
+// 🆕 MÉTRIQUES D'ALERTE FINANCIÈRE (P0/P1)
+// ================================
+
+var (
+	// WithdrawalCompensationPendingCount compte les retraits actuellement en compensation_pending
+	WithdrawalCompensationPendingCount = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "goshop_withdrawal_compensation_pending_count",
+		Help: "Current number of withdrawals stuck in compensation_pending state",
+	})
+
+	// WebhookProcessingErrorsTotal compte les erreurs de traitement des webhooks
+	WebhookProcessingErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "goshop_webhook_processing_errors_total",
+		Help: "Total number of webhook processing errors by provider and reason",
+	}, []string{"provider", "reason"})
+
+	// DebtSweepExecutedTotal compte les exécutions de debt sweep
+	DebtSweepExecutedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_debt_sweep_executed_total",
+		Help: "Total number of debt sweep operations executed",
+	})
+
+	// ClawbackExecutedTotal compte les exécutions de clawback
+	ClawbackExecutedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "goshop_clawback_executed_total",
+		Help: "Total number of clawback operations executed",
+	})
+)

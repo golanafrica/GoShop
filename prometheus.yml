@@ -8,6 +8,10 @@ global:
     cluster: 'goshop-local'
     environment: 'development'
 
+# 🆕 AJOUT : Fichiers de règles d'alerte (chemin mis à jour pour le dossier prometheus/)
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
 scrape_configs:
   # ========================================
   # GoShop API (dans Docker)

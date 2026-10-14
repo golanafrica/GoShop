@@ -1,0 +1,46 @@
+groups:
+  - name: goshop_financial_alerts
+    rules:
+      # 🚨 Alerte P0 : Retraits bloqués en compensation_pending
+      - alert: WithdrawalCompensationStuck
+        expr: goshop_withdrawal_compensation_pending_count > 0
+        for: 1h
+        labels:
+          severity: critical
+          team: finance
+        annotations:
+          summary: "Retraits bloqués en compensation_pending"
+          description: "{{ $value }} retrait(s) sont bloqués en état 'compensation_pending' depuis plus d'une heure. Vérifier le job de retry et les logs YengaPay."
+
+      # 🚨 Alerte P0 : Erreurs de traitement de webhooks en rafale
+      - alert: WebhookProcessingErrorsSpike
+        expr: rate(goshop_webhook_processing_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: engineering
+        annotations:
+          summary: "Pic d'erreurs de traitement de webhooks"
+          description: "Taux d'erreur de webhook élevé ({{ $value }}/s) pour le provider {{ $labels.provider }}. Raison: {{ $labels.reason }}."
+
+      # ℹ️ Alerte P1 : Détection d'activité Clawback (pour surveillance)
+      - alert: ClawbackActivityDetected
+        expr: increase(goshop_clawback_executed_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: info
+          team: finance
+        annotations:
+          summary: "Activité de Clawback détectée"
+          description: "{{ $value }} opération(s) de clawback exécutée(s) dans la dernière heure. Vérifier que cela correspond aux litiges résolus."
+
+      # ℹ️ Alerte P1 : Détection d'activité Debt Sweep (pour surveillance)
+      - alert: DebtSweepActivityDetected
+        expr: increase(goshop_debt_sweep_executed_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: info
+          team: finance
+        annotations:
+          summary: "Activité de Debt Sweep détectée"
+          description: "{{ $value }} opération(s) de debt sweep exécutée(s) dans la dernière heure. Le système récupère automatiquement les dettes."

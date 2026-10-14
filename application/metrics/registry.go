@@ -246,4 +246,10 @@ func RegisterMetrics() {
 	prometheus.MustRegister(FileExpiredURLs)
 	prometheus.MustRegister(FileInvalidSignatures)
 
+	// ========== Alertes Financières (4) ==========
+	prometheus.MustRegister(WithdrawalCompensationPendingCount)
+	prometheus.MustRegister(WebhookProcessingErrorsTotal)
+	prometheus.MustRegister(DebtSweepExecutedTotal)
+	prometheus.MustRegister(ClawbackExecutedTotal)
+
 }
