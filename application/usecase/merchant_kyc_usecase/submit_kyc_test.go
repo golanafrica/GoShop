@@ -50,18 +50,19 @@ func setupTempUploads(t *testing.T) string {
 	return uploadsDir
 }
 
-// createTestFile crée un fichier de test dans le répertoire uploads
-// createTestFile cree un fichier de test avec un magic number coherent
-// avec l'extension (requis par ValidateFileContent).
-func createTestFile(t *testing.T, filename string) string {
+// createMerchantKYCFile cree un fichier sous uploads/kyc/merchant/{shopID}/
+func createMerchantKYCFile(t *testing.T, shopID, filename string) string {
 	t.Helper()
-	diskPath := filepath.Join("uploads", filename)
+	dir := filepath.Join("uploads", "kyc", "merchant", shopID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	diskPath := filepath.Join(dir, filename)
 
 	var content []byte
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".jpg", ".jpeg":
-		// SOI JPEG
 		content = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}
 		content = append(content, []byte("JFIF test jpeg payload")...)
 	case ".png":
@@ -70,14 +71,34 @@ func createTestFile(t *testing.T, filename string) string {
 	case ".pdf":
 		content = []byte("%PDF-1.4\n% test pdf payload\n%%EOF\n")
 	default:
-		// Contenu invalide volontaire (tests negative path)
 		content = []byte("test file content for KYC testing")
 	}
 
 	if err := os.WriteFile(diskPath, content, 0644); err != nil {
-		t.Fatalf("failed to create test file %s: %v", diskPath, err)
+		t.Fatalf("write %s: %v", diskPath, err)
 	}
-	return "uploads/" + filename
+	return "uploads/kyc/merchant/" + shopID + "/" + filename
+}
+
+// createValidDocuments documents valides sous le path canonique du shop
+func createValidDocuments(t *testing.T, shopID string) []merchantkycusecase.DocumentInput {
+	t.Helper()
+	return []merchantkycusecase.DocumentInput{
+		{
+			DocumentType:  "identity_card",
+			FilePath:      createMerchantKYCFile(t, shopID, "id_card.jpg"),
+			FileName:      "id_card.jpg",
+			FileSizeBytes: 1024 * 1024,
+			MimeType:      "image/jpeg",
+		},
+		{
+			DocumentType:  "business_registry",
+			FilePath:      createMerchantKYCFile(t, shopID, "registry.pdf"),
+			FileName:      "registry.pdf",
+			FileSizeBytes: 2 * 1024 * 1024,
+			MimeType:      "application/pdf",
+		},
+	}
 }
 
 // createActiveShopForSubmit crée un shop actif pour les tests submit
@@ -93,28 +114,6 @@ func createActiveShopForSubmit() *entity.Shop {
 		KYCSubmissionsCount: 0,
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
-	}
-}
-
-// createValidDocuments crée des documents valides avec fichiers réels
-// IMPORTANT: setupTempUploads(t) doit être appelé AVANT cette fonction
-func createValidDocuments(t *testing.T) []merchantkycusecase.DocumentInput {
-	t.Helper()
-	return []merchantkycusecase.DocumentInput{
-		{
-			DocumentType:  "identity_card",
-			FilePath:      createTestFile(t, "id_card.jpg"),
-			FileName:      "id_card.jpg",
-			FileSizeBytes: 1024 * 1024,
-			MimeType:      "image/jpeg",
-		},
-		{
-			DocumentType:  "business_registry",
-			FilePath:      createTestFile(t, "registry.pdf"),
-			FileName:      "registry.pdf",
-			FileSizeBytes: 2 * 1024 * 1024,
-			MimeType:      "application/pdf",
-		},
 	}
 }
 
@@ -176,7 +175,7 @@ func TestSubmitMerchantKYCUsecase_MultiTenantError(t *testing.T) {
 	setupTempUploads(t)
 	ctx := context.Background()
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, uuid.New().String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -200,7 +199,7 @@ func TestSubmitMerchantKYCUsecase_ShopInactive(t *testing.T) {
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, shop.ID.String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -220,7 +219,7 @@ func TestSubmitMerchantKYCUsecase_KYCAlreadyVerified(t *testing.T) {
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, shop.ID.String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -264,7 +263,7 @@ func TestSubmitMerchantKYCUsecase_TooManyDocuments(t *testing.T) {
 	for i := 0; i < 11; i++ {
 		docs[i] = merchantkycusecase.DocumentInput{
 			DocumentType:  "identity_card",
-			FilePath:      createTestFile(t, "doc.jpg"),
+			FilePath:      createMerchantKYCFile(t, shop.ID.String(), "doc.jpg"),
 			FileName:      "doc.jpg",
 			FileSizeBytes: 1024,
 			MimeType:      "image/jpeg",
@@ -294,14 +293,14 @@ func TestSubmitMerchantKYCUsecase_InvalidDocumentType(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "invalid_type",
-				FilePath:      createTestFile(t, "doc.jpg"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "doc.jpg"),
 				FileName:      "doc.jpg",
 				FileSizeBytes: 1024,
 				MimeType:      "image/jpeg",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      createTestFile(t, "registry.pdf"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -328,14 +327,14 @@ func TestSubmitMerchantKYCUsecase_FileTooLarge(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      createTestFile(t, "large.jpg"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "large.jpg"),
 				FileName:      "large.jpg",
 				FileSizeBytes: 6 * 1024 * 1024,
 				MimeType:      "image/jpeg",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      createTestFile(t, "registry.pdf"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -362,14 +361,14 @@ func TestSubmitMerchantKYCUsecase_InvalidMimeType(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      createTestFile(t, "doc.exe"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "doc.exe"),
 				FileName:      "doc.exe",
 				FileSizeBytes: 1024,
 				MimeType:      "application/exe",
 			},
 			{
 				DocumentType:  "business_registry",
-				FilePath:      createTestFile(t, "registry.pdf"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -396,7 +395,7 @@ func TestSubmitMerchantKYCUsecase_MissingIdentityDocument(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "business_registry",
-				FilePath:      createTestFile(t, "registry.pdf"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "registry.pdf"),
 				FileName:      "registry.pdf",
 				FileSizeBytes: 1024,
 				MimeType:      "application/pdf",
@@ -423,7 +422,7 @@ func TestSubmitMerchantKYCUsecase_MissingBusinessRegistry(t *testing.T) {
 		Documents: []merchantkycusecase.DocumentInput{
 			{
 				DocumentType:  "identity_card",
-				FilePath:      createTestFile(t, "id_card.jpg"),
+				FilePath:      createMerchantKYCFile(t, shop.ID.String(), "id_card.jpg"),
 				FileName:      "id_card.jpg",
 				FileSizeBytes: 1024,
 				MimeType:      "image/jpeg",
@@ -470,7 +469,7 @@ func TestSubmitMerchantKYCUsecase_UpdateKYCStatusError(t *testing.T) {
 		Return(errors.New("database error"))
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, shop.ID.String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -531,7 +530,7 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 		Return(2, nil)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, shop.ID.String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -544,7 +543,7 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 	assert.NotNil(t, response.KYCSubmittedAt)
 	assert.Equal(t, 1, response.KYCSubmissionsCount)
 	assert.Equal(t, 2, response.DocumentsCount)
-	assert.Contains(t, response.Message, "succes")
+	assert.Contains(t, response.Message, "succès")
 }
 
 func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
@@ -599,7 +598,7 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 		Return(2, nil)
 
 	req := &merchantkycusecase.SubmitMerchantKYCRequest{
-		Documents: createValidDocuments(t),
+		Documents: createValidDocuments(t, shop.ID.String()),
 	}
 
 	response, err := tc.uc.Execute(ctx, req)
@@ -609,6 +608,44 @@ func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {
 	assert.Equal(t, "pending", response.KYCStatus)
 	assert.Equal(t, 2, response.KYCSubmissionsCount)
 	assert.Equal(t, 2, response.DocumentsCount)
+}
+
+// ============================================================
+// TEST J3 : Rejet des chemins étrangers (Anti-IDOR Storage)
+// ============================================================
+
+func TestSubmitMerchantKYCUsecase_RejectForeignShopPath(t *testing.T) {
+	tc := setupTest(t, false)
+	defer tc.ctrl.Finish()
+
+	setupTempUploads(t)
+	shop := createActiveShopForSubmit()
+	otherShopID := uuid.New().String()
+	ctx := tenant.WithTenant(context.Background(), shop)
+
+	req := &merchantkycusecase.SubmitMerchantKYCRequest{
+		Documents: []merchantkycusecase.DocumentInput{
+			{
+				DocumentType:  "identity_card",
+				FilePath:      createMerchantKYCFile(t, otherShopID, "id_card.jpg"),
+				FileName:      "id_card.jpg",
+				FileSizeBytes: 1024,
+				MimeType:      "image/jpeg",
+			},
+			{
+				DocumentType:  "business_registry",
+				FilePath:      createMerchantKYCFile(t, otherShopID, "registry.pdf"),
+				FileName:      "registry.pdf",
+				FileSizeBytes: 1024,
+				MimeType:      "application/pdf",
+			},
+		},
+	}
+
+	resp, err := tc.uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "file path must be under")
 }
 
 func strPtrSubmit(s string) *string {
