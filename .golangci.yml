@@ -1,0 +1,54 @@
+# .golangci.yml - Configuration pour GoShop (Audit Fintech)
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    # Bugs et erreurs logiques
+    - errcheck        # Vérifie que les erreurs sont bien gérées
+    - govet           # Analyse statique officielle de Go
+    - ineffassign     # Détecte les assignations inutiles
+    - staticcheck     # Analyse de bugs complexes
+    - typecheck       # Vérification des types
+    
+    # Performance et mémoire
+    - gocritic        # Suggestions d'optimisation
+    - prealloc        # Suggestions de pré-allocation de slices
+    - unconvert       # Supprime les conversions de types inutiles
+    
+    # Style et lisibilité
+    - gofmt           # Formatage du code
+    - goimports       # Tri des imports
+    - misspell        # Fautes d'orthographe
+    - unparam         # Paramètres de fonction inutilisés
+    
+    # Sécurité (critique pour fintech)
+    - gosec           # Problèmes de sécurité courants
+    - bodyclose       # Vérifie que les corps de réponse HTTP sont fermés
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104 # Ignore les erreurs non vérifiées dans les tests
+  errcheck:
+    exclude-functions:
+      - (io.Closer).Close # Ignore les Close() dans certains contextes
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck
+    - path: mocks/
+      linters:
+        - gofmt
+        - goimports
