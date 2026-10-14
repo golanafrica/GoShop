@@ -3,7 +3,11 @@ package merchantkychandler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -11,6 +15,7 @@ import (
 
 	"Goshop/application/metrics"
 	merchantkycusecase "Goshop/application/usecase/merchant_kyc_usecase"
+	"Goshop/domain/tenant"
 	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
 
@@ -71,21 +76,185 @@ type DocumentReviewInput struct {
 	RejectionReason *string `json:"rejection_reason,omitempty"`
 }
 
+const maxUploadBytes = 5 * 1024 * 1024
+
 // ============================================================
 // ENDPOINTS MARCHAND
 // ============================================================
 
+// UploadDocument — multipart : path 100% serveur (J3)
+//
+// Form fields:
+//   - file (required)
+//   - document_type (required): identity_card | passport | business_registry | ...
+//
+// @Summary Upload un document KYC marchand
+// @Tags Merchant KYC
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "Fichier JPEG/PNG/PDF"
+// @Param document_type formData string true "Type de document"
+// @Success 201 {object} map[string]interface{}
+// @Router /api/merchant/kyc/upload [post]
+func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	logger := zerolog.Ctx(ctx)
+
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return utils.NewAppError("TENANT_REQUIRED", "multi-tenant context required", http.StatusUnauthorized)
+	}
+
+	if err := r.ParseMultipartForm(maxUploadBytes + 512*1024); err != nil {
+		return utils.NewAppError("INVALID_MULTIPART", "invalid multipart form", http.StatusBadRequest)
+	}
+
+	docType := strings.TrimSpace(r.FormValue("document_type"))
+	if docType == "" {
+		return utils.NewAppError("VALIDATION_ERROR", "document_type is required", http.StatusBadRequest)
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		return utils.NewAppError("VALIDATION_ERROR", "file is required", http.StatusBadRequest)
+	}
+	defer file.Close()
+
+	if header.Size > maxUploadBytes {
+		return utils.NewAppError("FILE_TOO_LARGE", "file exceeds maximum size (5 MB)", http.StatusBadRequest)
+	}
+
+	// Lire en memoire (plafond 5 Mo) pour magic number puis ecrire
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
+	if err != nil {
+		return utils.NewAppError("READ_FAILED", "failed to read upload", http.StatusBadRequest)
+	}
+	if int64(len(data)) > maxUploadBytes {
+		return utils.NewAppError("FILE_TOO_LARGE", "file exceeds maximum size (5 MB)", http.StatusBadRequest)
+	}
+
+	allowedTypes := []utils.FileType{
+		utils.FileTypeJPEG,
+		utils.FileTypePNG,
+		utils.FileTypePDF,
+	}
+	// bytes.NewReader implemente io.ReadSeeker
+	contentResult, err := utils.ValidateFileContent(
+		newBytesReadSeeker(data),
+		maxUploadBytes,
+		allowedTypes,
+	)
+	if err != nil {
+		return utils.NewAppError("CONTENT_VALIDATION", err.Error(), http.StatusBadRequest)
+	}
+	if contentResult == nil || !contentResult.Valid {
+		msg := "invalid file content"
+		if contentResult != nil && contentResult.ErrorMessage != "" {
+			msg = contentResult.ErrorMessage
+		}
+		return utils.NewAppError("CONTENT_VALIDATION", msg, http.StatusBadRequest)
+	}
+
+	originalName := filepath.Base(header.Filename)
+	if originalName == "" || originalName == "." {
+		originalName = "document." + string(contentResult.FileType)
+	}
+	if err := utils.ValidateFileMetadata(originalName, contentResult.MimeType, contentResult.FileType); err != nil {
+		// Si le nom client a une mauvaise extension, on force le nom serveur plus bas
+		logger.Warn().Err(err).Str("original", originalName).Msg("Client filename extension mismatch; using server name")
+		originalName = "document." + extForFileType(contentResult.FileType)
+	}
+
+	serverPath := merchantkycusecase.GenerateMerchantKYCFilePath(
+		shop.ID.String(),
+		docType,
+		contentResult.MimeType,
+	)
+
+	if err := os.MkdirAll(filepath.Dir(serverPath), 0755); err != nil {
+		logger.Error().Err(err).Msg("mkdir upload failed")
+		return utils.NewAppError("STORAGE_ERROR", "failed to prepare storage", http.StatusInternalServerError)
+	}
+
+	if err := os.WriteFile(serverPath, data, 0644); err != nil {
+		logger.Error().Err(err).Str("path", serverPath).Msg("write upload failed")
+		return utils.NewAppError("STORAGE_ERROR", "failed to store file", http.StatusInternalServerError)
+	}
+
+	logger.Info().
+		Str("shop_id", shop.ID.String()).
+		Str("document_type", docType).
+		Str("file_path", serverPath).
+		Int64("size", int64(len(data))).
+		Str("mime", contentResult.MimeType).
+		Msg("Merchant KYC file uploaded (server path)")
+
+	utils.WriteJSON(w, http.StatusCreated, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"document_type":   docType,
+			"file_path":       serverPath,
+			"file_name":       filepath.Base(serverPath),
+			"file_size_bytes": int64(len(data)),
+			"mime_type":       contentResult.MimeType,
+		},
+	})
+	return nil
+}
+
+func extForFileType(ft utils.FileType) string {
+	switch ft {
+	case utils.FileTypePNG:
+		return "png"
+	case utils.FileTypePDF:
+		return "pdf"
+	default:
+		return "jpg"
+	}
+}
+
+// bytesReadSeeker adapte []byte en io.ReadSeeker pour ValidateFileContent
+type bytesReadSeeker struct {
+	data []byte
+	pos  int64
+}
+
+func newBytesReadSeeker(b []byte) *bytesReadSeeker {
+	return &bytesReadSeeker{data: b}
+}
+
+func (r *bytesReadSeeker) Read(p []byte) (int, error) {
+	if r.pos >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.pos:])
+	r.pos += int64(n)
+	return n, nil
+}
+
+func (r *bytesReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	var abs int64
+	switch whence {
+	case io.SeekStart:
+		abs = offset
+	case io.SeekCurrent:
+		abs = r.pos + offset
+	case io.SeekEnd:
+		abs = int64(len(r.data)) + offset
+	default:
+		return 0, fmt.Errorf("invalid whence")
+	}
+	if abs < 0 {
+		return 0, fmt.Errorf("negative position")
+	}
+	r.pos = abs
+	return abs, nil
+}
+
 // @Summary Soumettre une demande de KYC Marchand
-// @Description Permet à un marchand de soumettre ses documents d'identité pour vérification.
 // @Tags Merchant KYC
 // @Accept json
 // @Produce json
-// @Param request body merchantkychandler.SubmitKYCRequest true "Liste des documents à soumettre"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Payload invalide ou documents manquants"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
 // @Router /api/merchant/kyc/submit [post]
 func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
@@ -94,7 +263,7 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 
 	var req SubmitKYCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur décodage JSON")
+		logger.Error().Err(err).Msg("Erreur decodage JSON")
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
@@ -122,7 +291,6 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 	duration := time.Since(start).Seconds()
 
 	if err != nil {
-		// 📊 MÉTRIQUES : Échec soumission
 		metrics.MerchantKYCSubmitTotal.WithLabelValues("error").Inc()
 		metrics.MerchantKYCOperationDuration.WithLabelValues("submit").Observe(duration)
 		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_submit", "merchant_kyc_handler").Inc()
@@ -130,7 +298,7 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 		logger.Error().Err(err).
 			Int("documents_count", len(req.Documents)).
 			Float64("duration_seconds", duration).
-			Msg("❌ Erreur soumission KYC")
+			Msg("Erreur soumission KYC")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -138,6 +306,11 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 		}
 
 		errMsg := err.Error()
+		if strings.Contains(errMsg, "file path must be under") ||
+			strings.Contains(errMsg, "file path must not") ||
+			strings.Contains(errMsg, "content validation") {
+			return utils.NewAppError("KYC_INVALID_FILE", errMsg, http.StatusBadRequest)
+		}
 		if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "no documents") {
 			return utils.NewAppError("KYC_NOT_FOUND", errMsg, http.StatusNotFound)
 		}
@@ -148,7 +321,6 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 		return utils.NewAppError("SUBMIT_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
 
-	// 📊 MÉTRIQUES : Succès soumission
 	metrics.MerchantKYCSubmitTotal.WithLabelValues("success").Inc()
 	metrics.MerchantKYCOperationDuration.WithLabelValues("submit").Observe(duration)
 	metrics.MerchantKYCDocumentsPerSubmit.Observe(float64(len(req.Documents)))
@@ -156,7 +328,7 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 	logger.Info().
 		Int("documents_count", len(req.Documents)).
 		Float64("duration_seconds", duration).
-		Msg("✅ KYC submitted successfully")
+		Msg("KYC submitted successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -168,14 +340,7 @@ func (h *MerchantKYCHandler) SubmitKYC(w http.ResponseWriter, r *http.Request) e
 }
 
 // @Summary Obtenir le statut KYC du marchand
-// @Description Retourne le statut actuel de la vérification KYC du marchand connecté.
 // @Tags Merchant KYC
-// @Accept json
-// @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
 // @Router /api/merchant/kyc/status [get]
 func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
@@ -186,13 +351,12 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 	duration := time.Since(start).Seconds()
 
 	if err != nil {
-		// 📊 MÉTRIQUES : Échec status check
 		metrics.MerchantKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
 		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_status", "merchant_kyc_handler").Inc()
 
 		logger.Error().Err(err).
 			Float64("duration_seconds", duration).
-			Msg("❌ Erreur récupération statut KYC")
+			Msg("Erreur recuperation statut KYC")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -202,13 +366,8 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 		return utils.NewAppError("GET_KYC_STATUS_FAILED", err.Error(), http.StatusInternalServerError)
 	}
 
-	// 📊 MÉTRIQUES : Succès status check
 	metrics.MerchantKYCStatusCheckTotal.Inc()
 	metrics.MerchantKYCOperationDuration.WithLabelValues("get_status").Observe(duration)
-
-	logger.Info().
-		Float64("duration_seconds", duration).
-		Msg("✅ KYC status retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -222,19 +381,6 @@ func (h *MerchantKYCHandler) GetKYCStatus(w http.ResponseWriter, r *http.Request
 // ENDPOINTS ADMIN
 // ============================================================
 
-// @Summary Lister les demandes KYC marchand en attente (Admin)
-// @Description Retourne la liste paginée des boutiques dont le KYC est en attente de validation par un administrateur.
-// @Tags Admin Merchant KYC
-// @Accept json
-// @Produce json
-// @Param limit query int false "Nombre de résultats (défaut: 20)"
-// @Param offset query int false "Décalage (défaut: 0)"
-// @Success 200 {object} map[string]interface{}
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/merchant-kyc/pending [get]
 func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -263,15 +409,12 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 	duration := time.Since(start).Seconds()
 
 	if err != nil {
-		// 📊 MÉTRIQUES : Échec liste pending
 		metrics.MerchantKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
 		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_list", "merchant_kyc_handler").Inc()
 
 		logger.Error().Err(err).
-			Int("limit", limit).
-			Int("offset", offset).
 			Float64("duration_seconds", duration).
-			Msg("❌ Erreur liste shops pending")
+			Msg("Erreur liste shops pending")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -281,38 +424,22 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 		return utils.NewAppError("LIST_PENDING_KYC_FAILED", err.Error(), http.StatusInternalServerError)
 	}
 
-	// 📊 MÉTRIQUES : Succès liste pending
 	metrics.MerchantKYCPendingListTotal.Inc()
 	metrics.MerchantKYCOperationDuration.WithLabelValues("list_pending").Observe(duration)
 
-	// ✅ EXTRACTION SÉCURISÉE du nombre de résultats
-	// On tente d'accéder aux champs publics de ListPendingResponse
 	pendingCount := 0
 	if response != nil {
-		// Tenter d'accéder au champ Shops (slice) ou Count (int) selon la structure
-		// Utilisation de reflection pour accéder dynamiquement aux champs
 		responseValue := reflect.ValueOf(response).Elem()
-
-		// Chercher un champ "Shops" (slice)
 		if shopsField := responseValue.FieldByName("Shops"); shopsField.IsValid() && shopsField.Kind() == reflect.Slice {
 			pendingCount = shopsField.Len()
 		} else if countField := responseValue.FieldByName("Count"); countField.IsValid() && countField.Kind() == reflect.Int {
-			// Ou chercher un champ "Count" (int)
 			pendingCount = int(countField.Int())
 		} else if totalField := responseValue.FieldByName("Total"); totalField.IsValid() && totalField.Kind() == reflect.Int {
-			// Ou chercher un champ "Total" (int)
 			pendingCount = int(totalField.Int())
 		}
 	}
 
 	metrics.MerchantKYCPendingCount.Observe(float64(pendingCount))
-
-	logger.Info().
-		Int("limit", limit).
-		Int("offset", offset).
-		Int("pending_count", pendingCount).
-		Float64("duration_seconds", duration).
-		Msg("✅ Pending KYC list retrieved successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -322,21 +449,6 @@ func (h *MerchantKYCHandler) ListPendingKYC(w http.ResponseWriter, r *http.Reque
 	return nil
 }
 
-// @Summary Réviser une demande KYC marchand (Admin)
-// @Description Permet à un administrateur d'approuver ou de rejeter les documents KYC soumis par une boutique.
-// @Tags Admin Merchant KYC
-// @Accept json
-// @Produce json
-// @Param shop_id path string true "ID de la boutique (UUID)"
-// @Param request body merchantkychandler.ReviewKYCRequest true "Décision de révision (approve/reject) et motifs"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} utils.AppError "Payload invalide ou action invalide"
-// @Failure 401 {object} utils.AppError "Non autorisé"
-// @Failure 403 {object} utils.AppError "Interdit (droits insuffisants)"
-// @Failure 404 {object} utils.AppError "Boutique ou demande KYC introuvable"
-// @Failure 500 {object} utils.AppError "Erreur interne du serveur"
-// @Security ApiKeyAuth
-// @Router /api/admin/merchant-kyc/{shop_id}/review [put]
 func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	start := time.Now()
@@ -349,7 +461,7 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 
 	var req ReviewKYCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur décodage JSON")
+		logger.Error().Err(err).Msg("Erreur decodage JSON")
 		return utils.ErrInvalidPayload
 	}
 	defer r.Body.Close()
@@ -384,7 +496,6 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 	duration := time.Since(start).Seconds()
 
 	if err != nil {
-		// 📊 MÉTRIQUES : Échec review
 		metrics.MerchantKYCReviewTotal.WithLabelValues(req.Action, "error").Inc()
 		metrics.MerchantKYCOperationDuration.WithLabelValues("review").Observe(duration)
 		metrics.ApplicationErrorsTotal.WithLabelValues("merchant_kyc_review", "merchant_kyc_handler").Inc()
@@ -392,10 +503,8 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 		logger.Error().Err(err).
 			Str("shop_id", shopID).
 			Str("action", req.Action).
-			Str("admin_id", adminID).
-			Int("documents_reviewed", len(docReviews)).
 			Float64("duration_seconds", duration).
-			Msg("❌ Erreur revue KYC")
+			Msg("Erreur revue KYC")
 
 		var appErr *utils.AppError
 		if errors.As(err, &appErr) {
@@ -417,17 +526,8 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 		return utils.NewAppError("REVIEW_KYC_FAILED", errMsg, http.StatusInternalServerError)
 	}
 
-	// 📊 MÉTRIQUES : Succès review
 	metrics.MerchantKYCReviewTotal.WithLabelValues(req.Action, "success").Inc()
 	metrics.MerchantKYCOperationDuration.WithLabelValues("review").Observe(duration)
-
-	logger.Info().
-		Str("shop_id", shopID).
-		Str("action", req.Action).
-		Str("admin_id", adminID).
-		Int("documents_reviewed", len(docReviews)).
-		Float64("duration_seconds", duration).
-		Msg("✅ KYC reviewed successfully")
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -439,10 +539,11 @@ func (h *MerchantKYCHandler) ReviewKYC(w http.ResponseWriter, r *http.Request) e
 }
 
 // ============================================================
-// ROUTES REGISTRATION
+// ROUTES
 // ============================================================
 
 func (h *MerchantKYCHandler) RegisterMerchantRoutes(r chi.Router) {
+	r.Post("/upload", middl.ErrorHandler(h.UploadDocument))
 	r.Post("/submit", middl.ErrorHandler(h.SubmitKYC))
 	r.Get("/status", middl.ErrorHandler(h.GetKYCStatus))
 }
