@@ -2,6 +2,7 @@ package middl
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"Goshop/domain/entity"
@@ -13,10 +14,31 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// allowShopSlugHeader détermine si le header X-Shop-Slug est autorisé
+// Règle de sécurité (Audit 1.6) :
+// - En production : IGNORÉ par défaut (sauf si ALLOW_X_SHOP_SLUG=true explicitement)
+// - En dev/test/staging : AUTORISÉ pour faciliter les tests E2E et Postman
+func allowShopSlugHeader() bool {
+	// Escape hatch explicite pour ops (ex: migration temporaire)
+	if os.Getenv("ALLOW_X_SHOP_SLUG") == "true" {
+		return true
+	}
+
+	env := strings.ToLower(os.Getenv("APP_ENV"))
+	switch env {
+	case "production", "prod":
+		return false // 🔒 Production : header ignoré par défaut
+	default:
+		// development, test, local, staging, empty → allow for DX
+		return true
+	}
+}
+
 // TenantResolver résout le tenant (boutique) depuis le host HTTP
 // 🛡️ v4.11.0 : Vérifie que l'utilisateur a accès au shop (owner ou collaborateur)
+// 🛡️ v5.3.0 : X-Shop-Slug ignoré en production (Audit 1.6)
 // Ordre de résolution :
-// 1. Header X-Shop-Slug (pour tests/dev)
+// 1. Header X-Shop-Slug (uniquement en dev/test/staging)
 // 2. Custom domain (ex: mamadou-boutique.com)
 // 3. Sous-domaine (ex: demo.golanafrica.com)
 func TenantResolver(
@@ -29,21 +51,33 @@ func TenantResolver(
 			var shop *entity.Shop
 			var err error
 
-			// 1. Priorité au header X-Shop-Slug (pour tests/dev)
+			// 1. Header X-Shop-Slug (avec restriction de sécurité en production)
 			if slug := r.Header.Get("X-Shop-Slug"); slug != "" {
-				shop, err = shopRepo.FindBySlug(r.Context(), slug)
-				if err != nil {
-					logger.Error().Err(err).Str("slug", slug).Msg("Error finding shop by header")
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-					return
+				if allowShopSlugHeader() {
+					// ✅ Autorisé (dev/test/staging) : utiliser le header
+					shop, err = shopRepo.FindBySlug(r.Context(), slug)
+					if err != nil {
+						logger.Error().Err(err).Str("slug", slug).Msg("Error finding shop by header")
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
+					}
+					if shop == nil {
+						logger.Warn().Str("slug", slug).Msg("Shop not found via header")
+						http.Error(w, "Shop not found", http.StatusNotFound)
+						return
+					}
+				} else {
+					// 🔒 Production : header présent mais ignoré
+					logger.Warn().
+						Str("X-Shop-Slug", slug).
+						Str("remote_addr", r.RemoteAddr).
+						Msg("🚨 X-Shop-Slug header ignored in production (use Host/subdomain)")
+					// On continue sans utiliser le header, on va essayer la résolution par Host
 				}
-				if shop == nil {
-					logger.Warn().Str("slug", slug).Msg("Shop not found via header")
-					http.Error(w, "Shop not found", http.StatusNotFound)
-					return
-				}
-			} else {
-				// 2. Résolution depuis le Host
+			}
+
+			// 2. Si pas encore résolu, essayer via Host
+			if shop == nil {
 				host := extractHost(r.Host)
 
 				// 2a. Essayer par custom_domain
@@ -69,8 +103,8 @@ func TenantResolver(
 
 				// 2c. Si aucun tenant trouvé → 404
 				if shop == nil {
-					logger.Warn().Str("host", host).Msg("Shop not found")
-					http.Error(w, "Shop not found - Use X-Shop-Slug header or subdomain", http.StatusNotFound)
+					logger.Warn().Str("host", host).Msg("Shop not found via Host")
+					http.Error(w, "Shop not found - Use valid Host/subdomain", http.StatusNotFound)
 					return
 				}
 			}

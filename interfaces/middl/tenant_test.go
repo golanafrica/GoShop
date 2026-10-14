@@ -1,4 +1,4 @@
-package middl_test
+package middl
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
-	"Goshop/interfaces/middl"
 	"Goshop/interfaces/utils"
 	mockrepo "Goshop/mocks/repository"
 
@@ -26,7 +25,6 @@ func TestTenantResolver_OwnerAccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// ✅ Utiliser des UUIDs valides (pas "owner-123")
 	ownerUUID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440001")
 	shopID := uuid.New()
 	shop := &entity.Shop{
@@ -45,7 +43,6 @@ func TestTenantResolver_OwnerAccess(t *testing.T) {
 		FindBySlug(gomock.Any(), "test-shop").
 		Return(shop, nil)
 
-	// Mock : IsOwner reçoit un uuid.UUID parsé depuis le string
 	mockShopRepo.EXPECT().
 		IsOwner(gomock.Any(), shopID, ownerUUID).
 		Return(true, nil)
@@ -58,7 +55,7 @@ func TestTenantResolver_OwnerAccess(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -107,7 +104,7 @@ func TestTenantResolver_CollaboratorAccess(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -156,7 +153,7 @@ func TestTenantResolver_AccessDenied(t *testing.T) {
 		t.Fatal("Handler should not be called")
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -196,10 +193,9 @@ func TestTenantResolver_Unauthorized(t *testing.T) {
 		t.Fatal("Handler should not be called")
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
-	// Requête SANS userID dans contexte
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Shop-Slug", "test-shop")
 
@@ -235,7 +231,7 @@ func TestTenantResolver_InactiveShop(t *testing.T) {
 		t.Fatal("Handler should not be called")
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -275,10 +271,9 @@ func TestTenantResolver_InvalidUserID(t *testing.T) {
 		t.Fatal("Handler should not be called")
 	})
 
-	middleware := middl.TenantResolver(mockShopRepo, mockCollabRepo, logger)
+	middleware := TenantResolver(mockShopRepo, mockCollabRepo, logger)
 	wrappedHandler := middleware(handler)
 
-	// Requête avec userID invalide (pas un UUID)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Shop-Slug", "test-shop")
 	ctx := utils.WithUserID(context.Background(), "invalid-uuid-format")
@@ -289,4 +284,32 @@ func TestTenantResolver_InvalidUserID(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "Invalid user ID")
+}
+
+// ============================================================
+// 🆕 v5.3.0 : TESTS POLITIQUE X-Shop-Slug (Audit 1.6)
+// ============================================================
+
+func TestAllowShopSlugHeader_Production(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ALLOW_X_SHOP_SLUG", "")
+	if allowShopSlugHeader() {
+		t.Fatal("expected false in production")
+	}
+}
+
+func TestAllowShopSlugHeader_ProductionEscapeHatch(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ALLOW_X_SHOP_SLUG", "true")
+	if !allowShopSlugHeader() {
+		t.Fatal("expected true with ALLOW_X_SHOP_SLUG")
+	}
+}
+
+func TestAllowShopSlugHeader_Development(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("ALLOW_X_SHOP_SLUG", "")
+	if !allowShopSlugHeader() {
+		t.Fatal("expected true in development")
+	}
 }
