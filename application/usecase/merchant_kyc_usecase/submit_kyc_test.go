@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,10 +51,29 @@ func setupTempUploads(t *testing.T) string {
 }
 
 // createTestFile crée un fichier de test dans le répertoire uploads
+// createTestFile cree un fichier de test avec un magic number coherent
+// avec l'extension (requis par ValidateFileContent).
 func createTestFile(t *testing.T, filename string) string {
 	t.Helper()
 	diskPath := filepath.Join("uploads", filename)
-	content := []byte("test file content for KYC testing")
+
+	var content []byte
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg":
+		// SOI JPEG
+		content = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}
+		content = append(content, []byte("JFIF test jpeg payload")...)
+	case ".png":
+		content = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+		content = append(content, []byte("test png payload")...)
+	case ".pdf":
+		content = []byte("%PDF-1.4\n% test pdf payload\n%%EOF\n")
+	default:
+		// Contenu invalide volontaire (tests negative path)
+		content = []byte("test file content for KYC testing")
+	}
+
 	if err := os.WriteFile(diskPath, content, 0644); err != nil {
 		t.Fatalf("failed to create test file %s: %v", diskPath, err)
 	}
@@ -524,7 +544,7 @@ func TestSubmitMerchantKYCUsecase_Success_FirstSubmission(t *testing.T) {
 	assert.NotNil(t, response.KYCSubmittedAt)
 	assert.Equal(t, 1, response.KYCSubmissionsCount)
 	assert.Equal(t, 2, response.DocumentsCount)
-	assert.Contains(t, response.Message, "succès")
+	assert.Contains(t, response.Message, "succes")
 }
 
 func TestSubmitMerchantKYCUsecase_Success_Resubmission(t *testing.T) {

@@ -177,3 +177,39 @@ func TestValidateFileMetadata_EmptyMimeType(t *testing.T) {
 	err := ValidateFileMetadata("photo.jpg", "", FileTypeJPEG)
 	assert.NoError(t, err)
 }
+
+// ============================================================
+// TESTS : Sécurité Anti-Spoofing (Audit KYC - Semaine 1)
+// ============================================================
+
+func TestValidateFileContent_SpoofedPDFWithEXE(t *testing.T) {
+	// Scénario d'attaque : un exécutable (.exe) renommé en document.pdf
+	// Magic number EXE (MZ) : 4D 5A
+	exeData := []byte{0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00}
+	reader := bytes.NewReader(exeData)
+
+	// L'attaquant prétend que c'est un PDF autorisé
+	result, err := ValidateFileContent(reader, 5*1024*1024, []FileType{FileTypeJPEG, FileTypePNG, FileTypePDF})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.Valid, "Le fichier doit être rejeté car le magic number ne correspond à aucun type autorisé")
+	assert.Contains(t, result.ErrorMessage, "unable to detect file type")
+}
+
+func TestValidateFileMetadata_SpoofedMIMEAndExtension(t *testing.T) {
+	// Scénario d'attaque : un vrai fichier JPEG, mais l'attaquant le nomme "malware.pdf"
+	// et déclare un MIME type "application/pdf" dans le formulaire.
+
+	// Le système a détecté via le magic number que le contenu est RÉELLEMENT un JPEG
+	detectedType := FileTypeJPEG
+
+	// Métadonnées fournies par l'attaquant
+	filename := "malware.pdf"
+	declaredMIME := "application/pdf"
+
+	err := ValidateFileMetadata(filename, declaredMIME, detectedType)
+
+	assert.Error(t, err, "La validation doit échouer car l'extension et le MIME déclarés ne correspondent pas au contenu réel détecté")
+	assert.Contains(t, err.Error(), "does not match")
+}

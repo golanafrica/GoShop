@@ -12,6 +12,7 @@ import (
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	"Goshop/interfaces/utils"
 
 	"github.com/rs/zerolog"
 )
@@ -20,44 +21,40 @@ import (
 // SUBMIT MERCHANT KYC USECASE
 // ============================================================
 //
-// 🎯 Objectif :
-//   Le marchand soumet ses documents KYC pour vérification.
-//   Après soumission, son statut passe à "pending".
+// Objectif :
+//   Le marchand soumet ses documents KYC pour verification.
+//   Apres soumission, son statut passe a "pending".
 //
-// 📋 Règles :
+// Regles :
 //   - Minimum 2 documents requis :
 //     * identity_card OU passport
 //     * business_registry
 //   - Taille max par document : 5 Mo
-//   - Types MIME autorisés : JPEG, PNG, PDF
-//   - Le shop doit être actif
-//   - Le shop ne doit pas déjà être vérifié
+//   - Types MIME autorises : JPEG, PNG, PDF
+//   - Magic number verifie sur le contenu disque (anti-spoof)
+//   - Le shop doit etre actif
+//   - Le shop ne doit pas deja etre verifie
 //
-// 🔄 Workflow :
-//   1. Vérifier que le shop existe et est actif
-//   2. Valider les documents soumis
-//   3. 🛡️ Vérifier l'existence physique des fichiers (anti-path traversal)
-//   4. BEGIN TRANSACTION
-//   5. Supprimer les anciens documents (si re-soumission)
-//   6. Créer les nouveaux documents
-//   7. Mettre à jour le statut KYC du shop à "pending"
-//   8. COMMIT TRANSACTION
-//   9. Retourner le statut mis à jour
-//
-// 🛡️ ATOMICITÉ :
-//   Toutes les opérations DB (5, 6, 7) sont encapsulées dans une
-//   transaction. Si une étape échoue, ROLLBACK automatique.
+// Workflow :
+//   1. Verifier multi-tenant + shop actif
+//   2. Valider metadata documents (type, taille, MIME declare)
+//   3. Existence physique + anti-path traversal
+//   4. ValidateFileContent + ValidateFileMetadata
+//   5. BEGIN TRANSACTION
+//   6. Supprimer anciens docs si re-soumission
+//   7. Creer nouveaux docs + statut pending
+//   8. COMMIT
 //
 // ============================================================
 
-// SubmitMerchantKYCUsecase gère la soumission KYC par un marchand
+// SubmitMerchantKYCUsecase gere la soumission KYC par un marchand
 type SubmitMerchantKYCUsecase struct {
 	shopRepo  repository.ShopRepository
 	kycRepo   repository.ShopKYCDocumentRepository
 	txManager repository.TxManager
 }
 
-// NewSubmitMerchantKYCUsecase crée une nouvelle instance
+// NewSubmitMerchantKYCUsecase cree une nouvelle instance
 func NewSubmitMerchantKYCUsecase(
 	shopRepo repository.ShopRepository,
 	kycRepo repository.ShopKYCDocumentRepository,
@@ -70,21 +67,21 @@ func NewSubmitMerchantKYCUsecase(
 	}
 }
 
-// SubmitMerchantKYCRequest représente la requête de soumission KYC
+// SubmitMerchantKYCRequest represente la requete de soumission KYC
 type SubmitMerchantKYCRequest struct {
 	Documents []DocumentInput `json:"documents"`
 }
 
-// DocumentInput représente un document soumis
+// DocumentInput represente un document soumis
 type DocumentInput struct {
-	DocumentType  string `json:"document_type"` // identity_card, passport, business_registry, etc.
+	DocumentType  string `json:"document_type"`
 	FilePath      string `json:"file_path"`
 	FileName      string `json:"file_name"`
 	FileSizeBytes int64  `json:"file_size_bytes"`
 	MimeType      string `json:"mime_type"`
 }
 
-// SubmitMerchantKYCResponse représente la réponse
+// SubmitMerchantKYCResponse represente la reponse
 type SubmitMerchantKYCResponse struct {
 	ShopID              string    `json:"shop_id"`
 	ShopName            string    `json:"shop_name"`
@@ -102,7 +99,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 ) (*SubmitMerchantKYCResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
-	// 1. Récupérer le shop du contexte (multi-tenant)
+	// 1. Multi-tenant
 	shop, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("multi-tenant context required: %w", err)
@@ -112,104 +109,137 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		Str("shop_id", shop.ID.String()).
 		Str("shop_name", shop.Name).
 		Int("documents_count", len(req.Documents)).
-		Msg("📄 Début soumission KYC marchand")
+		Msg("Debut soumission KYC marchand")
 
-	// 2. Vérifier que le shop est actif
+	// 2. Shop actif
 	if !shop.IsActive {
 		logger.Warn().
 			Str("shop_id", shop.ID.String()).
-			Msg("❌ Shop inactif")
+			Msg("Shop inactif")
 		return nil, errors.New("shop is not active")
 	}
 
-	// 3. Vérifier que le KYC n'est pas déjà vérifié
+	// 3. Pas deja verifie
 	if shop.IsVerified() {
 		logger.Warn().
 			Str("shop_id", shop.ID.String()).
 			Str("current_status", string(shop.KYCStatus)).
-			Msg("❌ KYC déjà vérifié")
+			Msg("KYC deja verifie")
 		return nil, entity.ErrShopKYCAlreadyVerified
 	}
 
-	// 4. Valider les documents soumis (AVANT la transaction)
+	// 4. Validation metier documents (AVANT TX)
 	if err := uc.validateDocuments(req.Documents); err != nil {
 		logger.Warn().
 			Str("shop_id", shop.ID.String()).
 			Err(err).
-			Msg("❌ Validation documents échouée")
+			Msg("Validation documents echouee")
 		return nil, err
 	}
 
 	// ============================================================
-	// 🛡️ 4.5 VÉRIFIER L'EXISTENCE PHYSIQUE DES FICHIERS
+	// 4.5 Existence + path + magic number + coherence metadata
 	// ============================================================
-	for i, docInput := range req.Documents {
-		// Nettoyer le chemin pour éviter les path traversal
-		cleanPath := filepath.Clean(docInput.FilePath)
+	allowedTypes := []utils.FileType{
+		utils.FileTypeJPEG,
+		utils.FileTypePNG,
+		utils.FileTypePDF,
+	}
+	const maxContentBytes int64 = 5 * 1024 * 1024
 
-		// 🛡️ Normalisation cross-platform (Windows utilise \, Linux utilise /)
+	for i, docInput := range req.Documents {
+		cleanPath := filepath.Clean(docInput.FilePath)
 		cleanPath = strings.ReplaceAll(cleanPath, "\\", "/")
 
-		// Vérifier que le chemin commence par /uploads/ ou uploads/ (anti-accès système)
 		if !strings.HasPrefix(cleanPath, "/uploads/") && !strings.HasPrefix(cleanPath, "uploads/") {
-
 			logger.Error().
 				Str("file_path", docInput.FilePath).
 				Int("document_index", i+1).
-				Msg("❌ Chemin non autorisé (doit être dans /uploads/)")
+				Msg("Chemin non autorise (doit etre dans /uploads/)")
 			return nil, fmt.Errorf("document %d: file path must be in /uploads/ directory", i+1)
 		}
 
-		// Vérifier que le fichier existe physiquement sur disque
-		if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
+		fileInfo, err := os.Stat(cleanPath)
+		if os.IsNotExist(err) {
 			logger.Error().
 				Str("file_path", cleanPath).
 				Int("document_index", i+1).
-				Msg("❌ Fichier introuvable sur disque")
+				Msg("Fichier introuvable sur disque")
 			return nil, fmt.Errorf("document %d: file not found at %s", i+1, cleanPath)
 		}
+		if err != nil {
+			return nil, fmt.Errorf("document %d: stat file: %w", i+1, err)
+		}
+		if fileInfo.IsDir() {
+			logger.Error().
+				Str("file_path", cleanPath).
+				Int("document_index", i+1).
+				Msg("Le chemin pointe vers un dossier, pas un fichier")
+			return nil, fmt.Errorf("document %d: path is a directory, not a file", i+1)
+		}
 
-		// Vérifier que c'est bien un fichier (pas un dossier)
-		if fileInfo, err := os.Stat(cleanPath); err == nil {
-			if fileInfo.IsDir() {
-				logger.Error().
-					Str("file_path", cleanPath).
-					Int("document_index", i+1).
-					Msg("❌ Le chemin pointe vers un dossier, pas un fichier")
-				return nil, fmt.Errorf("document %d: path is a directory, not a file", i+1)
+		f, err := os.Open(cleanPath)
+		if err != nil {
+			return nil, fmt.Errorf("document %d: cannot open file: %w", i+1, err)
+		}
+
+		contentResult, err := utils.ValidateFileContent(f, maxContentBytes, allowedTypes)
+		_ = f.Close()
+		if err != nil {
+			return nil, fmt.Errorf("document %d: content validation error: %w", i+1, err)
+		}
+		if contentResult == nil || !contentResult.Valid {
+			msg := "invalid file content"
+			if contentResult != nil && contentResult.ErrorMessage != "" {
+				msg = contentResult.ErrorMessage
 			}
+			logger.Warn().
+				Int("document_index", i+1).
+				Str("file_path", cleanPath).
+				Str("reason", msg).
+				Msg("Contenu fichier rejete (magic number)")
+			return nil, fmt.Errorf("document %d: content validation failed: %s", i+1, msg)
+		}
+
+		if err := utils.ValidateFileMetadata(docInput.FileName, docInput.MimeType, contentResult.FileType); err != nil {
+			logger.Warn().
+				Err(err).
+				Int("document_index", i+1).
+				Str("file_name", docInput.FileName).
+				Str("mime_type", docInput.MimeType).
+				Str("detected", string(contentResult.FileType)).
+				Msg("Metadata incoherente avec le contenu")
+			return nil, fmt.Errorf("document %d: %w", i+1, err)
 		}
 	}
 
 	// ============================================================
-	// 🛡️ DÉBUT TRANSACTION ATOMIQUE
+	// TRANSACTION ATOMIQUE
 	// ============================================================
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Impossible de démarrer la transaction")
+		logger.Error().Err(err).Msg("Impossible de demarrer la transaction")
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
-	// Rollback automatique si erreur non gérée ou panic
 	defer tx.Rollback()
 
-	// Créer les repositories attachés à la transaction
 	txShopRepo := uc.shopRepo.WithTX(tx)
 	txKYCRepo := uc.kycRepo.WithTX(tx)
 
-	// 5.1 Supprimer les anciens documents (si re-soumission)
+	// 5.1 Supprimer anciens documents (re-soumission)
 	if shop.KYCSubmissionsCount > 0 {
 		logger.Info().
 			Str("shop_id", shop.ID.String()).
 			Int("previous_submissions", shop.KYCSubmissionsCount).
-			Msg("🗑️ Suppression des anciens documents KYC")
+			Msg("Suppression des anciens documents KYC")
 
 		if err := txKYCRepo.DeleteByShopID(ctx, shop.ID); err != nil {
-			logger.Error().Err(err).Msg("❌ Erreur suppression anciens documents")
+			logger.Error().Err(err).Msg("Erreur suppression anciens documents")
 			return nil, fmt.Errorf("delete old documents: %w", err)
 		}
 	}
 
-	// 5.2 Créer les nouveaux documents
+	// 5.2 Creer les nouveaux documents
 	for i, docInput := range req.Documents {
 		doc, err := entity.NewShopKYCDocument(
 			shop.ID,
@@ -224,7 +254,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 				Err(err).
 				Int("document_index", i+1).
 				Str("document_type", docInput.DocumentType).
-				Msg("❌ Erreur création document")
+				Msg("Erreur creation document")
 			return nil, fmt.Errorf("create document %d: %w", i+1, err)
 		}
 
@@ -233,53 +263,49 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 				Err(err).
 				Str("document_id", doc.ID.String()).
 				Str("document_type", docInput.DocumentType).
-				Msg("❌ Erreur sauvegarde document")
+				Msg("Erreur sauvegarde document")
 			return nil, fmt.Errorf("save document %d: %w", i+1, err)
 		}
 
 		logger.Debug().
 			Str("document_id", doc.ID.String()).
 			Str("document_type", docInput.DocumentType).
-			Msg("✅ Document KYC créé (dans transaction)")
+			Msg("Document KYC cree (dans transaction)")
 	}
 
-	// 5.3 Mettre à jour le statut KYC du shop
+	// 5.3 Statut KYC pending
 	if err := txShopRepo.UpdateKYCStatus(
 		ctx,
 		shop.ID,
 		entity.ShopKYCStatusPending,
-		"", // Pas d'admin, c'est le marchand qui soumet
+		"",
 		nil,
 	); err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur mise à jour statut KYC")
+		logger.Error().Err(err).Msg("Erreur mise a jour statut KYC")
 		return nil, fmt.Errorf("update kyc status: %w", err)
 	}
 
-	// 5.4 Récupérer le shop mis à jour (dans la transaction)
+	// 5.4 Shop a jour
 	updatedShop, err := txShopRepo.FindByID(ctx, shop.ID)
 	if err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur récupération shop mis à jour")
+		logger.Error().Err(err).Msg("Erreur recuperation shop mis a jour")
 		return nil, fmt.Errorf("find updated shop: %w", err)
 	}
 
-	// ============================================================
-	// 🛡️ COMMIT TRANSACTION (tout a réussi)
-	// ============================================================
 	if err := tx.Commit(); err != nil {
-		logger.Error().Err(err).Msg("❌ Erreur commit transaction")
+		logger.Error().Err(err).Msg("Erreur commit transaction")
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
 	logger.Info().
 		Str("shop_id", shop.ID.String()).
-		Msg("✅ Transaction KYC commitée avec succès")
+		Msg("Transaction KYC committee avec succes")
 
-	// 6. Compter les documents créés (après commit, hors transaction)
 	documentsCount, err := uc.kycRepo.CountByShopID(ctx, shop.ID)
 	if err != nil {
 		logger.Warn().
 			Err(err).
-			Msg("⚠️ Erreur comptage documents (non bloquant)")
+			Msg("Erreur comptage documents (non bloquant)")
 		documentsCount = len(req.Documents)
 	}
 
@@ -288,7 +314,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		Str("kyc_status", string(updatedShop.KYCStatus)).
 		Int("documents_count", documentsCount).
 		Int("submissions_count", updatedShop.KYCSubmissionsCount).
-		Msg("✅ Soumission KYC réussie (transactionnelle)")
+		Msg("Soumission KYC reussie (transactionnelle)")
 
 	return &SubmitMerchantKYCResponse{
 		ShopID:              updatedShop.ID.String(),
@@ -297,7 +323,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		KYCSubmittedAt:      *updatedShop.KYCSubmittedAt,
 		KYCSubmissionsCount: updatedShop.KYCSubmissionsCount,
 		DocumentsCount:      documentsCount,
-		Message:             "Documents KYC soumis avec succès. En attente de vérification par un administrateur.",
+		Message:             "Documents KYC soumis avec succes. En attente de verification par un administrateur.",
 	}, nil
 }
 
@@ -305,7 +331,6 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 // VALIDATION
 // ============================================================
 
-// validateDocuments valide les documents soumis
 func (uc *SubmitMerchantKYCUsecase) validateDocuments(docs []DocumentInput) error {
 	if len(docs) == 0 {
 		return errors.New("at least one document is required")
@@ -326,22 +351,18 @@ func (uc *SubmitMerchantKYCUsecase) validateDocuments(docs []DocumentInput) erro
 	}
 
 	for i, doc := range docs {
-		// Validation type
 		if !entity.IsValidShopKYCDocType(entity.ShopKYCDocumentType(doc.DocumentType)) {
 			return fmt.Errorf("document %d: invalid document type '%s'", i+1, doc.DocumentType)
 		}
 
-		// Validation chemin fichier
 		if doc.FilePath == "" {
 			return fmt.Errorf("document %d: file path is required", i+1)
 		}
 
-		// Validation nom fichier
 		if doc.FileName == "" {
 			return fmt.Errorf("document %d: file name is required", i+1)
 		}
 
-		// Validation taille
 		if doc.FileSizeBytes <= 0 {
 			return fmt.Errorf("document %d: file size must be positive", i+1)
 		}
@@ -349,12 +370,10 @@ func (uc *SubmitMerchantKYCUsecase) validateDocuments(docs []DocumentInput) erro
 			return fmt.Errorf("document %d: file size exceeds maximum (5 MB)", i+1)
 		}
 
-		// Validation MIME type
 		if !allowedMimeTypes[doc.MimeType] {
 			return fmt.Errorf("document %d: mime type '%s' not allowed (allowed: JPEG, PNG, PDF)", i+1, doc.MimeType)
 		}
 
-		// Tracking documents requis
 		if doc.DocumentType == "identity_card" || doc.DocumentType == "passport" {
 			hasIdentity = true
 		}
@@ -363,7 +382,6 @@ func (uc *SubmitMerchantKYCUsecase) validateDocuments(docs []DocumentInput) erro
 		}
 	}
 
-	// Vérifier documents requis
 	if !hasIdentity {
 		return errors.New("identity document required (identity_card or passport)")
 	}
