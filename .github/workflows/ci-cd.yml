@@ -8,14 +8,14 @@ on:
     branches: [ main ]
 
 env:
-  GO_VERSION: '1.25.5'
-  DOCKER_IMAGE: ghcr.io/golanafrica/goshop  # ← namespace du repo
+  # Aligné sur go.mod (module Goshop → go 1.25.0)
+  GO_VERSION: '1.25.0'
+  DOCKER_IMAGE: ghcr.io/golanafrica/goshop
 
 jobs:
   test:
-    name: Run Unit Tests (mocked only)
+    name: Run Unit Tests
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -29,15 +29,21 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run mocked unit tests only
+      # BLOQUANT — exclusions historiques documentées (flaky / DB-heavy)
+      - name: Run unit tests
         run: |
-          go test -v -coverprofile=coverage.out \
-            $(go list ./... | \
-              grep -v /tests$ | \
-              grep -v /tests/ | \
-              grep -v /usecase/order_usecase | \
-              grep -v /usecase/auth_usecase | \
-              grep -v /infrastructure/postgres) || true
+          set -euo pipefail
+          PACKAGES=$(go list ./... | \
+            grep -v '/tests$' | \
+            grep -v '/tests/' | \
+            grep -v '/usecase/order_usecase' | \
+            grep -v '/usecase/auth_usecase' | \
+            grep -v '/infrastructure/postgres' || true)
+          if [ -z "${PACKAGES}" ]; then
+            echo "No packages selected for unit tests"
+            exit 1
+          fi
+          go test -v -count=1 -coverprofile=coverage.out ${PACKAGES}
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -52,7 +58,6 @@ jobs:
   integration-test:
     name: Run Integration Tests
     runs-on: ubuntu-latest
-    
     services:
       postgres:
         image: postgres:16-alpine
@@ -67,7 +72,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-          
       redis:
         image: redis:7-alpine
         options: >-
@@ -87,24 +91,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-
-      - name: Install PostgreSQL client and Redis tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client redis-tools
-
-      - name: Wait for services
-        run: |
-          echo "⏳ Waiting for services..."
-          for i in {1..30}; do
-            if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null && \
-               redis-cli -h localhost -p 6379 ping 2>/dev/null | grep -q PONG; then
-              echo "✅ All services ready!"
-              break
-            fi
-            echo "Attempt $i/30..."
-            sleep 2
-          done
 
       - name: Create .env.test
         run: |
@@ -127,17 +113,18 @@ jobs:
 
       - name: Run integration tests
         run: |
-          if [ -d "tests" ]; then
-            cd tests
-            go test -v -tags=integration ./... || echo "⚠️ Some integration tests failed"
+          set -euo pipefail
+          if [ -d "tests/integration" ]; then
+            go test -v -count=1 -tags=integration ./tests/integration/...
+          elif [ -d "tests" ]; then
+            go test -v -count=1 -tags=integration ./tests/...
           else
-            echo "⚠️ No tests directory found"
+            echo "No integration test directory — skip"
           fi
 
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
-    
     services:
       postgres:
         image: postgres:16-alpine
@@ -152,7 +139,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-          
       redis:
         image: redis:7-alpine
         options: >-
@@ -173,22 +159,6 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client redis-tools
-
-      - name: Wait for services
-        run: |
-          for i in {1..30}; do
-            if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null && \
-               redis-cli -h localhost -p 6379 ping 2>/dev/null | grep -q PONG; then
-              echo "✅ Services ready"
-              break
-            fi
-            sleep 2
-          done
-
       - name: Create .env.test
         run: |
           cat > .env.test << 'EOF'
@@ -208,13 +178,19 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # Pas de -tags=e2e sauf si //go:build e2e dans les fichiers
       - name: Run E2E tests
-        run: go test -v ./tests/e2e/... || echo "⚠️ Some E2E tests failed"
+        run: |
+          set -euo pipefail
+          if [ -d "tests/e2e" ]; then
+            go test -v -count=1 ./tests/e2e/...
+          else
+            echo "No tests/e2e directory — skip"
+          fi
 
   build:
     name: Build & Generate Docs
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -224,20 +200,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-
-      - name: Verify project structure
-        run: |
-          echo "📁 Project root:"
-          ls -la
-          echo ""
-          echo "📂 cmd/api exists:"
-          test -d cmd/api && echo "✅ YES" || echo "❌ NO"
-          echo ""
-          echo "📄 cmd/api/main.go exists:"
-          test -f cmd/api/main.go && echo "✅ YES" || echo "❌ NO"
-          echo ""
-          echo "📂 docs directory:"
-          test -d docs && ls -la docs/ || echo "docs directory will be created"
 
       - name: Download dependencies
         run: |
@@ -247,98 +209,29 @@ jobs:
       - name: Install Swag
         run: |
           go install github.com/swaggo/swag/cmd/swag@latest
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-
-      - name: Verify Swag installation
-        run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
-          which swag
-          swag --version
-
-      - name: Create .env file
-        run: |
-          cat > .env << 'EOF'
-          APP_ENV=development
-          APP_PORT=8080
-          DB_HOST=localhost
-          DB_PORT=5432
-          DB_USER=postgres
-          DB_PASSWORD=root
-          DB_NAME=goshop
-          DB_SSLMODE=disable
-          REDIS_HOST=localhost
-          REDIS_PORT=6379
-          BCRYPT_COST=4
-          EOF
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Generate Swagger documentation
         run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
-          
-          echo "📚 Generating Swagger documentation..."
-          echo "Current directory: $(pwd)"
-          
+          set -euo pipefail
           swag init \
             --generalInfo ./cmd/api/main.go \
             --dir ./ \
             --output ./docs \
             --parseDependency \
-            --parseInternal \
-            --parseDepth 3 || {
-              echo "⚠️ Swagger generation failed"
-              exit 1
-            }
-          
-          echo ""
-          echo "✅ Checking generated files..."
-          ls -la docs/
-
-      - name: Verify documentation files
-        run: |
-          test -f docs/docs.go || (echo "❌ docs/docs.go missing" && exit 1)
-          test -f docs/swagger.json || (echo "❌ swagger.json missing" && exit 1)
-          test -f docs/swagger.yaml || (echo "❌ swagger.yaml missing" && exit 1)
-          echo "✅ All documentation files generated successfully!"
+            --parseInternal
+          test -f docs/docs.go
 
       - name: Build API binary
         env:
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: amd64
-        run: |
-          echo "🔨 Building GoShop API..."
-          go build \
-            -v \
-            -ldflags="-w -s" \
-            -o goshop-api \
-            ./cmd/api
-          
-          echo "✅ Build completed!"
-          ls -lh goshop-api
-          file goshop-api
-
-      - name: Test binary
-        run: |
-          test -f goshop-api || (echo "❌ Binary not found" && exit 1)
-          test -x goshop-api || (echo "❌ Binary not executable" && exit 1)
-          
-          timeout 3s ./goshop-api || true
-          
-          echo "✅ Binary is valid and executable!"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: goshop-build
-          path: |
-            goshop-api
-            docs/
-          retention-days: 7
+        run: go build -v -ldflags="-w -s" -o goshop-api ./cmd/api
 
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -352,29 +245,23 @@ jobs:
       - name: Download dependencies
         run: |
           go mod download
-          go mod tidy
           go mod verify
 
+      # Docker pin plus prévisible que securego/gosec@master
       - name: Run gosec security scanner
         run: |
-          echo "🔒 Running security scan..."
+          set -euo pipefail
           docker run --rm \
             -v "$PWD:/src" \
             -w /src \
-            securego/gosec:latest \
+            securego/gosec:2.22.1 \
             -fmt=json \
             -out=gosec-report.json \
             -exclude-dir=tests \
             -exclude=G104 \
-            ./... || true
-          
-          if [ -f gosec-report.json ]; then
-            echo "📊 Security scan completed"
-            cat gosec-report.json | head -30
-          fi
-        continue-on-error: true
+            ./...
 
-      - name: Upload security report
+      - name: Upload gosec report
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -382,10 +269,15 @@ jobs:
           path: gosec-report.json
           retention-days: 30
 
+      - name: Run govulncheck
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   lint:
     name: Code Quality
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -400,14 +292,14 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          args: --timeout=10m --issues-exit-code=0 --skip-dirs=tests
-        continue-on-error: true
+          args: --timeout=10m
 
   docker:
     name: Build, Scan & Push Docker Image
     runs-on: ubuntu-latest
-    needs: [build, security, lint]
-    
+    needs: [test, integration-test, e2e-test, build, security, lint]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -425,25 +317,28 @@ jobs:
           username: golanafrica
           password: ${{ secrets.CR_PAT }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=long,priority=100
+            type=sha,format=long
             type=ref,event=branch
-            type=ref,event=pr
 
-      - name: Build Docker image (load into local daemon)
+      # 1) Build local pour scan
+      - name: Build Docker image (load)
         uses: docker/build-push-action@v5
         with:
           context: .
           load: true
           tags: ${{ env.DOCKER_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Run Trivy vulnerability scanner (local image)
+      # 2) Trivy AVANT push
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
@@ -453,6 +348,7 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
+      # 3) Push seulement si Trivy OK
       - name: Push Docker image to GHCR
         uses: docker/build-push-action@v5
         with:
@@ -462,7 +358,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Run govulncheck
-          run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...    
