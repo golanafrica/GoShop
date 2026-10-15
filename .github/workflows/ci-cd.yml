@@ -30,7 +30,6 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          # Exclusions documentées — à réintégrer une par une
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
@@ -107,7 +106,6 @@ jobs:
           EOF
           cp .env.test tests/.env.test 2>/dev/null || true
           cp .env.test tests/integration/.env.test 2>/dev/null || true
-      # Migrations CI uniquement (helpers sharedDB). Idempotentes (IF NOT EXISTS / ON CONFLICT).
       - name: Apply migrations (ordered)
         env:
           PGPASSWORD: root
@@ -131,7 +129,6 @@ jobs:
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
-    # Transition: soft tant que fixtures KYC path / payment status / tenant headers pas alignés
     continue-on-error: true
     services:
       postgres:
@@ -182,7 +179,6 @@ jobs:
           mkdir -p tests/e2e
           cp .env.test tests/e2e/.env.test
           cp .env.test tests/.env.test 2>/dev/null || true
-      # Seeds 049/051 désormais idempotents → double-run CI + test_server OK
       - name: Apply migrations (ordered)
         env:
           PGPASSWORD: root
@@ -221,8 +217,12 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
+          set -euo pipefail
+          go version
+          go env GOVERSION GOROOT GOPATH
           test -f cmd/api/main.go
           go build -v -ldflags="-w -s" -o goshop-api ./cmd/api
+          ls -la goshop-api
       - name: Generate Swagger (best effort)
         continue-on-error: true
         run: |
@@ -278,7 +278,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      # latest = toolchain Go compatible 1.25 ; soft en transition
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
@@ -288,7 +287,6 @@ jobs:
   docker:
     name: Build, Scan & Push Docker Image
     runs-on: ubuntu-latest
-    # e2e soft : needs ne bloque plus le push si e2e rouge (job success avec continue-on-error)
     needs: [test, integration-test, e2e-test, build, security, lint]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:

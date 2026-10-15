@@ -3,6 +3,8 @@ package e2e
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,11 +51,10 @@ func TestWithdrawalFlowE2E(t *testing.T) {
 	var shopResp map[string]interface{}
 	testutils.ParseJSONBody(t, resp, &shopResp)
 
-	// ✅ Récupérer le slug exact depuis la réponse JSON
 	actualSlug := shopResp["slug"].(string)
-	t.Logf("✅ Boutique créée: %s (slug: %s)", shopResp["id"].(string), actualSlug)
+	shopID := shopResp["id"].(string)
+	t.Logf("✅ Boutique créée: %s (slug: %s)", shopID, actualSlug)
 
-	// Définir le header pour TOUTES les requêtes multi-tenant suivantes
 	client.SetDefaultHeader("X-Shop-Slug", actualSlug)
 
 	// =========================================================================
@@ -74,25 +75,42 @@ func TestWithdrawalFlowE2E(t *testing.T) {
 	t.Logf("✅ Retrait correctement bloqué : %v", errResp["message"])
 
 	// =========================================================================
-	// ÉTAPE 2 : Soumission du KYC par le marchand
+	// ÉTAPE 2 : Soumission KYC (paths serveur J3 + fichiers réels PDF)
 	// =========================================================================
 	t.Log("\n📋 ÉTAPE 2 : Soumission du KYC par le marchand")
 
-	// ✅ CORRECTION : Ajout du document d'identité obligatoire (identity_card ou passport)
+	dir := filepath.Join("uploads", "kyc", "merchant", shopID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir kyc: %v", err)
+	}
+
+	pdfMinimal := []byte("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+	idPath := filepath.Join(dir, "id_card.pdf")
+	regPath := filepath.Join(dir, "registry.pdf")
+	if err := os.WriteFile(idPath, pdfMinimal, 0o644); err != nil {
+		t.Fatalf("write id pdf: %v", err)
+	}
+	if err := os.WriteFile(regPath, pdfMinimal, 0o644); err != nil {
+		t.Fatalf("write registry pdf: %v", err)
+	}
+
+	idRel := filepath.ToSlash(filepath.Join("uploads", "kyc", "merchant", shopID, "id_card.pdf"))
+	regRel := filepath.ToSlash(filepath.Join("uploads", "kyc", "merchant", shopID, "registry.pdf"))
+
 	kycData := map[string]interface{}{
 		"documents": []map[string]interface{}{
 			{
-				"document_type":   "identity_card", // ✅ Document d'identité obligatoire
-				"file_path":       "/uploads/kyc/test_id.pdf",
+				"document_type":   "identity_card",
+				"file_path":       idRel,
 				"file_name":       "id_card.pdf",
-				"file_size_bytes": 102400,
+				"file_size_bytes": len(pdfMinimal),
 				"mime_type":       "application/pdf",
 			},
 			{
-				"document_type":   "business_registry", // ✅ Registre de commerce
-				"file_path":       "/uploads/kyc/test_registry.pdf",
+				"document_type":   "business_registry",
+				"file_path":       regRel,
 				"file_name":       "registry.pdf",
-				"file_size_bytes": 102400,
+				"file_size_bytes": len(pdfMinimal),
 				"mime_type":       "application/pdf",
 			},
 		},
@@ -115,7 +133,7 @@ func TestWithdrawalFlowE2E(t *testing.T) {
 	// =========================================================================
 	t.Log("\n📋 ÉTAPE 4 : Tentative de retrait avec montant invalide (Validation)")
 	invalidWithdrawData := map[string]interface{}{
-		"amount_cents":       0, // Montant invalide
+		"amount_cents":       0,
 		"payment_method":     "ORANGE_MONEY",
 		"destination_number": "70000000",
 	}
