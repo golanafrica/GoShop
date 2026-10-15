@@ -82,3 +82,5 @@ postman/collections/New*/
 *.csv
 platform_commissions.csv
 merchant_statement.csv
+
+goshop-api
