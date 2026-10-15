@@ -9,8 +9,7 @@ import (
 
 var registerOnce sync.Once
 
-// RegisterMetrics enregistre toutes les métriques (UNE SEULE FOIS)
-// 99 métriques au total
+// RegisterMetrics enregistre toutes les métriques (UNE SEULE FOIS).
 func RegisterMetrics() {
 	registerOnce.Do(func() {
 		// ========== Authentification (6) ==========
@@ -152,104 +151,104 @@ func RegisterMetrics() {
 		prometheus.MustRegister(HTTPRequestsTotal)
 		prometheus.MustRegister(HTTPRequestSizeBytes)
 		prometheus.MustRegister(HTTPResponseSizeBytes)
+
+		// ========== Commission Rates (6) ==========
+		prometheus.MustRegister(CommissionRateUpdateTotal)
+		prometheus.MustRegister(CommissionRateGetTotal)
+		prometheus.MustRegister(CommissionRateOperationDuration)
+		prometheus.MustRegister(CommissionRateConfigured)
+		prometheus.MustRegister(CommissionTriggerTotal)
+		prometheus.MustRegister(CommissionRateValueBps)
+
+		// ========== Collaborator (8) ==========
+		prometheus.MustRegister(CollaboratorInvitationTotal)
+		prometheus.MustRegister(CollaboratorListTotal)
+		prometheus.MustRegister(CollaboratorRoleUpdateTotal)
+		prometheus.MustRegister(CollaboratorRemovalTotal)
+		prometheus.MustRegister(CollaboratorInvitationAcceptTotal)
+		prometheus.MustRegister(CollaboratorInvitationPreviewTotal)
+		prometheus.MustRegister(CollaboratorOperationDuration)
+		prometheus.MustRegister(CollaboratorActiveCount)
+
+		// ========== COD Proofs & Commissions (11) ==========
+		prometheus.MustRegister(CODProofSubmitTotal)
+		prometheus.MustRegister(CODProofGetTotal)
+		prometheus.MustRegister(CODProofListTotal)
+		prometheus.MustRegister(CODCommissionCollectTotal)
+		prometheus.MustRegister(CODCommissionRetryTotal)
+		prometheus.MustRegister(CODCommissionStatsTotal)
+		prometheus.MustRegister(CODDueCommissionsTotal)
+		prometheus.MustRegister(CODProofOperationDuration)
+		prometheus.MustRegister(CODCommissionAmountCents)
+		prometheus.MustRegister(CODProofTenantErrors)
+		prometheus.MustRegister(CODProofPayloadErrors)
+
+		// ========== API Keys (6) ==========
+		prometheus.MustRegister(APIKeyCreateTotal)
+		prometheus.MustRegister(APIKeyListTotal)
+		prometheus.MustRegister(APIKeyRevokeTotal)
+		prometheus.MustRegister(APIKeyStatsTotal)
+		prometheus.MustRegister(APIKeyOperationDuration)
+		prometheus.MustRegister(APIKeyScopesCount)
+
+		// ========== Admin Shop (6) ==========
+		prometheus.MustRegister(AdminShopOperationTotal)
+		prometheus.MustRegister(AdminShopOperationDuration)
+		prometheus.MustRegister(AdminShopSuspendTotal)
+		prometheus.MustRegister(AdminShopActivateTotal)
+		prometheus.MustRegister(AdminShopListedCount)
+		prometheus.MustRegister(AdminShopHealthChecksTotal)
+
+		// ========== WebSocket (6) ==========
+		prometheus.MustRegister(WebSocketConnectionsTotal)
+		prometheus.MustRegister(WebSocketConnectionsActive)
+		prometheus.MustRegister(WebSocketConnectionDuration)
+		prometheus.MustRegister(WebSocketMessagesReceived)
+		prometheus.MustRegister(WebSocketUpgradeErrors)
+		prometheus.MustRegister(WebSocketUnexpectedCloses)
+
+		// ========== Health Checks (5) ==========
+		prometheus.MustRegister(HealthCheckTotal)
+		prometheus.MustRegister(HealthCheckDuration)
+		prometheus.MustRegister(HealthDependenciesStatus)
+		prometheus.MustRegister(HealthDatabasePingDuration)
+		prometheus.MustRegister(HealthRedisPingDuration)
+
+		// ========== Withdrawals (7) ==========
+		prometheus.MustRegister(WithdrawalCreateTotal)
+		prometheus.MustRegister(WithdrawalListTotal)
+		prometheus.MustRegister(WithdrawalGetTotal)
+		prometheus.MustRegister(WithdrawalOperationDuration)
+		prometheus.MustRegister(WithdrawalAmountCents)
+		prometheus.MustRegister(WithdrawalHeldCentsRejections)
+		prometheus.MustRegister(WithdrawalListedCount)
+
+		// ========== 2FA (6) ==========
+		prometheus.MustRegister(TwoFAOperationTotal)
+		prometheus.MustRegister(TwoFAOperationDuration)
+		prometheus.MustRegister(TwoFAVerificationAttempts)
+		prometheus.MustRegister(TwoFARecoveryCodesUsed)
+		prometheus.MustRegister(TwoFAInvalidCodes)
+		prometheus.MustRegister(TwoFAEnabledUsers)
+
+		// ========== Sync Order (3) ==========
+		prometheus.MustRegister(SyncOrderTotal)
+		prometheus.MustRegister(SyncOrderDuration)
+		prometheus.MustRegister(SyncOrderPaymentConfirmed)
+
+		// ========== File Handler (7) ==========
+		prometheus.MustRegister(FilePresignedURLGenerated)
+		prometheus.MustRegister(FileDownloadTotal)
+		prometheus.MustRegister(FileOperationDuration)
+		prometheus.MustRegister(FileDownloadSizeBytes)
+		prometheus.MustRegister(FileSecurityViolations)
+		prometheus.MustRegister(FileExpiredURLs)
+		prometheus.MustRegister(FileInvalidSignatures)
+
+		// ========== Alertes Financières (4) ==========
+		prometheus.MustRegister(WithdrawalCompensationPendingCount)
+		prometheus.MustRegister(WebhookProcessingErrorsTotal)
+		prometheus.MustRegister(DebtSweepExecutedTotal)
+		prometheus.MustRegister(ClawbackExecutedTotal)
 	})
-
-	// ========== Commission Rates (6) ==========
-	prometheus.MustRegister(CommissionRateUpdateTotal)
-	prometheus.MustRegister(CommissionRateGetTotal)
-	prometheus.MustRegister(CommissionRateOperationDuration)
-	prometheus.MustRegister(CommissionRateConfigured)
-	prometheus.MustRegister(CommissionTriggerTotal)
-	prometheus.MustRegister(CommissionRateValueBps)
-
-	// ========== Collaborator (8) ==========
-	prometheus.MustRegister(CollaboratorInvitationTotal)
-	prometheus.MustRegister(CollaboratorListTotal)
-	prometheus.MustRegister(CollaboratorRoleUpdateTotal)
-	prometheus.MustRegister(CollaboratorRemovalTotal)
-	prometheus.MustRegister(CollaboratorInvitationAcceptTotal)
-	prometheus.MustRegister(CollaboratorInvitationPreviewTotal)
-	prometheus.MustRegister(CollaboratorOperationDuration)
-	prometheus.MustRegister(CollaboratorActiveCount)
-
-	// ========== COD Proofs & Commissions (11) ==========
-	prometheus.MustRegister(CODProofSubmitTotal)
-	prometheus.MustRegister(CODProofGetTotal)
-	prometheus.MustRegister(CODProofListTotal)
-	prometheus.MustRegister(CODCommissionCollectTotal)
-	prometheus.MustRegister(CODCommissionRetryTotal)
-	prometheus.MustRegister(CODCommissionStatsTotal)
-	prometheus.MustRegister(CODDueCommissionsTotal)
-	prometheus.MustRegister(CODProofOperationDuration)
-	prometheus.MustRegister(CODCommissionAmountCents)
-	prometheus.MustRegister(CODProofTenantErrors)
-	prometheus.MustRegister(CODProofPayloadErrors)
-
-	// ========== API Keys (6) ==========
-	prometheus.MustRegister(APIKeyCreateTotal)
-	prometheus.MustRegister(APIKeyListTotal)
-	prometheus.MustRegister(APIKeyRevokeTotal)
-	prometheus.MustRegister(APIKeyStatsTotal)
-	prometheus.MustRegister(APIKeyOperationDuration)
-	prometheus.MustRegister(APIKeyScopesCount)
-
-	// ========== Admin Shop (6) ==========
-	prometheus.MustRegister(AdminShopOperationTotal)
-	prometheus.MustRegister(AdminShopOperationDuration)
-	prometheus.MustRegister(AdminShopSuspendTotal)
-	prometheus.MustRegister(AdminShopActivateTotal)
-	prometheus.MustRegister(AdminShopListedCount)
-	prometheus.MustRegister(AdminShopHealthChecksTotal)
-
-	// ========== WebSocket (6) ==========
-	prometheus.MustRegister(WebSocketConnectionsTotal)
-	prometheus.MustRegister(WebSocketConnectionsActive)
-	prometheus.MustRegister(WebSocketConnectionDuration)
-	prometheus.MustRegister(WebSocketMessagesReceived)
-	prometheus.MustRegister(WebSocketUpgradeErrors)
-	prometheus.MustRegister(WebSocketUnexpectedCloses)
-
-	// ========== Health Checks (5) ==========
-	prometheus.MustRegister(HealthCheckTotal)
-	prometheus.MustRegister(HealthCheckDuration)
-	prometheus.MustRegister(HealthDependenciesStatus)
-	prometheus.MustRegister(HealthDatabasePingDuration)
-	prometheus.MustRegister(HealthRedisPingDuration)
-
-	// ========== Withdrawals (7) ==========
-	prometheus.MustRegister(WithdrawalCreateTotal)
-	prometheus.MustRegister(WithdrawalListTotal)
-	prometheus.MustRegister(WithdrawalGetTotal)
-	prometheus.MustRegister(WithdrawalOperationDuration)
-	prometheus.MustRegister(WithdrawalAmountCents)
-	prometheus.MustRegister(WithdrawalHeldCentsRejections)
-	prometheus.MustRegister(WithdrawalListedCount)
-	// ========== 2FA (6) ==========
-	prometheus.MustRegister(TwoFAOperationTotal)
-	prometheus.MustRegister(TwoFAOperationDuration)
-	prometheus.MustRegister(TwoFAVerificationAttempts)
-	prometheus.MustRegister(TwoFARecoveryCodesUsed)
-	prometheus.MustRegister(TwoFAInvalidCodes)
-	prometheus.MustRegister(TwoFAEnabledUsers)
-
-	// ========== Sync Order (3) ==========
-	prometheus.MustRegister(SyncOrderTotal)
-	prometheus.MustRegister(SyncOrderDuration)
-	prometheus.MustRegister(SyncOrderPaymentConfirmed)
-
-	// ========== File Handler (7) ==========
-	prometheus.MustRegister(FilePresignedURLGenerated)
-	prometheus.MustRegister(FileDownloadTotal)
-	prometheus.MustRegister(FileOperationDuration)
-	prometheus.MustRegister(FileDownloadSizeBytes)
-	prometheus.MustRegister(FileSecurityViolations)
-	prometheus.MustRegister(FileExpiredURLs)
-	prometheus.MustRegister(FileInvalidSignatures)
-
-	// ========== Alertes Financières (4) ==========
-	prometheus.MustRegister(WithdrawalCompensationPendingCount)
-	prometheus.MustRegister(WebhookProcessingErrorsTotal)
-	prometheus.MustRegister(DebtSweepExecutedTotal)
-	prometheus.MustRegister(ClawbackExecutedTotal)
-
 }
