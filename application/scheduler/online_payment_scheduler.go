@@ -89,7 +89,9 @@ func (s *OnlinePaymentScheduler) RunCollection(ctx context.Context) error {
 		batch.Status = "failed"
 		errMsg := err.Error()
 		batch.ErrorMessage = &errMsg
-		s.batchRepo.UpdateBatch(ctx, batch)
+
+		// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'update dans ce chemin d'échec
+		_ = s.batchRepo.UpdateBatch(ctx, batch)
 		return fmt.Errorf("failed to fetch payments: %w", err)
 	}
 
@@ -149,7 +151,9 @@ func (s *OnlinePaymentScheduler) processPayment(
 		errMsg := fmt.Sprintf("failed to get rate: %v", err)
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -162,7 +166,9 @@ func (s *OnlinePaymentScheduler) processPayment(
 			Msg("Commission is zero, skipping")
 		item.Status = "skipped"
 		batch.SkippedProofs++
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -183,7 +189,9 @@ func (s *OnlinePaymentScheduler) processPayment(
 		errMsg := fmt.Sprintf("invalid shop UUID: %v", err)
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -266,7 +274,8 @@ func (s *OnlinePaymentScheduler) processPayment(
 			Bool("account_frozen", resp.IsNowNegative).
 			Msg("✅ Online payment commission collected")
 
-		s.batchRepo.CreateBatchItem(ctx, item)
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -274,7 +283,9 @@ func (s *OnlinePaymentScheduler) processPayment(
 	if skippedNoWallet {
 		item.Status = "skipped"
 		batch.SkippedProofs++
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -287,7 +298,8 @@ func (s *OnlinePaymentScheduler) processPayment(
 	batch.FailedCommissionCents += commissionCents
 
 	// Mettre à jour le statut comme failed
-	s.paymentRepo.UpdateCommissionStatus(
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'update dans ce chemin d'échec
+	_ = s.paymentRepo.UpdateCommissionStatus(
 		ctx,
 		payment.ID.String(),
 		entity.CommissionStatusFailed,
@@ -299,7 +311,8 @@ func (s *OnlinePaymentScheduler) processPayment(
 		Int("max_retries", s.maxRetries).
 		Msg("❌ Online payment commission collection failed")
 
-	s.batchRepo.CreateBatchItem(ctx, item)
+	// 🛡️ CORRECTION ERRCHECK
+	_ = s.batchRepo.CreateBatchItem(ctx, item)
 }
 
 // finalizeBatch finalise le batch

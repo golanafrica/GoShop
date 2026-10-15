@@ -112,7 +112,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	// ============================================================
 	// SÉCURITÉ : Vérifier l'état de l'escrow (orders / credit only)

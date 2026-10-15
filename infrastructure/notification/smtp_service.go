@@ -405,6 +405,7 @@ func (s *SMTPService) sendWithTLS(addr string, auth smtp.Auth, from, to string, 
 	// STARTTLS
 	tlsConfig := &tls.Config{
 		ServerName: host,
+		MinVersion: tls.VersionTLS12,
 	}
 	if err = client.StartTLS(tlsConfig); err != nil {
 		return fmt.Errorf("starttls: %w", err)

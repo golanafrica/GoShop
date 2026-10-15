@@ -72,8 +72,6 @@ func (s *CommissionScheduler) RunNightlyCollection(ctx context.Context) error {
 
 	// 2. Traiter les preuves par lots
 	for {
-		// Récupérer un lot de preuves en attente
-		//proofs, err := s.batchRepo.FindPendingProofsForCollection(ctx, s.batchSize)
 		// 🆕 Récupère les preuves dont le délai de la zone de livraison est écoulé
 		proofs, err := s.codRepo.FindProofsReadyForCollection(ctx, s.batchSize)
 		if err != nil {
@@ -81,7 +79,9 @@ func (s *CommissionScheduler) RunNightlyCollection(ctx context.Context) error {
 			batch.Status = "failed"
 			errMsg := err.Error()
 			batch.ErrorMessage = &errMsg
-			s.batchRepo.UpdateBatch(ctx, batch)
+
+			// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'update dans ce chemin d'échec
+			_ = s.batchRepo.UpdateBatch(ctx, batch)
 			return fmt.Errorf("failed to fetch proofs: %w", err)
 		}
 
@@ -170,7 +170,9 @@ func (s *CommissionScheduler) processProof(
 			Msg("Skipping proof - not ready for collection")
 		item.Status = "skipped"
 		batch.SkippedProofs++
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -183,7 +185,9 @@ func (s *CommissionScheduler) processProof(
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
 		batch.FailedCommissionCents += proof.CommissionCents
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -196,7 +200,9 @@ func (s *CommissionScheduler) processProof(
 		item.ErrorMessage = &errMsg
 		batch.FailedCollections++
 		batch.FailedCommissionCents += proof.CommissionCents
-		s.batchRepo.CreateBatchItem(ctx, item)
+
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -212,7 +218,6 @@ func (s *CommissionScheduler) processProof(
 			CollectedBy:  "scheduler-" + batch.ID[:8],
 		}
 
-		// ✅ APRÈS
 		resp, err := s.collectUC.Execute(shopCtx, req)
 		if err != nil {
 			lastErr = err
@@ -256,7 +261,8 @@ func (s *CommissionScheduler) processProof(
 			Bool("account_frozen", resp.AccountFrozen).
 			Msg("✅ Commission collected successfully")
 
-		s.batchRepo.CreateBatchItem(ctx, item)
+		// 🛡️ CORRECTION ERRCHECK
+		_ = s.batchRepo.CreateBatchItem(ctx, item)
 		return
 	}
 
@@ -273,7 +279,8 @@ func (s *CommissionScheduler) processProof(
 		Int("max_retries", s.maxRetries).
 		Msg("❌ Commission collection failed after all retries")
 
-	s.batchRepo.CreateBatchItem(ctx, item)
+	// 🛡️ CORRECTION ERRCHECK
+	_ = s.batchRepo.CreateBatchItem(ctx, item)
 }
 
 // isProofReadyForCollection vérifie si une preuve est prête

@@ -120,7 +120,7 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	// 4. 🛡️ SÉCURITÉ : Récupérer le wallet avec verrouillage (FOR UPDATE)
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)

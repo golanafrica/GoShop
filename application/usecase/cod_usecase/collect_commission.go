@@ -2,6 +2,8 @@ package codusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -122,7 +124,13 @@ func (uc *CollectCommissionUsecase) Execute(ctx context.Context, req *CollectCom
 		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	// 4. Récupérer la preuve COD
 	proof, err := uc.codProofRepo.WithTX(tx).FindByOrderID(ctx, req.OrderID)

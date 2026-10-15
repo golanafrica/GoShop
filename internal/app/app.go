@@ -1330,6 +1330,7 @@ func (a *App) setupRouter() {
 		}
 
 		// En développement/test, on tolère le fallback (avec un warning clair)
+		//nolint:gosec // Faux positif : cette clé n'est utilisée qu'en développement/test (fail-fast en prod)
 		fileSecretKey = "dev-secret-key-change-in-production-32chars"
 		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY - DO NOT USE IN PRODUCTION)")
 	} else {
@@ -1363,7 +1364,7 @@ func (a *App) setupRouter() {
 		Post("/logout", middl.ErrorHandler(userHandler.Logout))
 
 	r.Get("/help", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Goshop API est en ligne !"))
+		_, _ = w.Write([]byte("Goshop API est en ligne !"))
 	})
 
 	r.Get("/api/public/products", middl.ErrorHandler(publicProductHandler.GetPublicProducts))

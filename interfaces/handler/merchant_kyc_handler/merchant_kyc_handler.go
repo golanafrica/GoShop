@@ -124,7 +124,7 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 		return utils.NewAppError("FILE_TOO_LARGE", "file exceeds maximum size (5 MB)", http.StatusBadRequest)
 	}
 
-	// Lire en memoire (plafond 5 Mo) pour magic number puis ecrire
+	// Lire en mémoire (plafond 5 Mo) pour magic number puis écrire
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil {
 		return utils.NewAppError("READ_FAILED", "failed to read upload", http.StatusBadRequest)
@@ -138,7 +138,7 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 		utils.FileTypePNG,
 		utils.FileTypePDF,
 	}
-	// bytes.NewReader implemente io.ReadSeeker
+	// bytes.NewReader implémente io.ReadSeeker
 	contentResult, err := utils.ValidateFileContent(
 		newBytesReadSeeker(data),
 		maxUploadBytes,
@@ -157,12 +157,13 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 
 	originalName := filepath.Base(header.Filename)
 	if originalName == "" || originalName == "." {
-		originalName = "document." + string(contentResult.FileType)
-	}
-	if err := utils.ValidateFileMetadata(originalName, contentResult.MimeType, contentResult.FileType); err != nil {
-		// Si le nom client a une mauvaise extension, on force le nom serveur plus bas
-		logger.Warn().Err(err).Str("original", originalName).Msg("Client filename extension mismatch; using server name")
 		originalName = "document." + extForFileType(contentResult.FileType)
+	}
+
+	// Valider les métadonnées. En cas d'erreur, on loggue mais on continue,
+	// car le nom de fichier serveur sera généré de manière sécurisée de toute façon.
+	if err := utils.ValidateFileMetadata(originalName, contentResult.MimeType, contentResult.FileType); err != nil {
+		logger.Warn().Err(err).Str("original", originalName).Msg("Client filename extension mismatch; using server-generated name")
 	}
 
 	serverPath := merchantkycusecase.GenerateMerchantKYCFilePath(
@@ -176,7 +177,8 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 		return utils.NewAppError("STORAGE_ERROR", "failed to prepare storage", http.StatusInternalServerError)
 	}
 
-	if err := os.WriteFile(serverPath, data, 0644); err != nil {
+	// 🛡️ 0600 : Lecture/écriture uniquement pour le propriétaire (sécurité renforcée)
+	if err := os.WriteFile(serverPath, data, 0600); err != nil {
 		logger.Error().Err(err).Str("path", serverPath).Msg("write upload failed")
 		return utils.NewAppError("STORAGE_ERROR", "failed to store file", http.StatusInternalServerError)
 	}

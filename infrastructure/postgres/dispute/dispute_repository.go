@@ -176,13 +176,13 @@ func (r *DisputeRepositoryPostgres) List(ctx context.Context, filters repository
 	if filters.Status != "" {
 		query += fmt.Sprintf(" AND status = $%d", argPos)
 		args = append(args, filters.Status)
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	if filters.InitiatorRole != "" {
 		query += fmt.Sprintf(" AND initiator_role = $%d", argPos)
 		args = append(args, filters.InitiatorRole)
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -217,13 +217,13 @@ func (r *DisputeRepositoryPostgres) Count(ctx context.Context, filters repositor
 	if filters.Status != "" {
 		query += fmt.Sprintf(" AND status = $%d", argPos)
 		args = append(args, filters.Status)
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	if filters.InitiatorRole != "" {
 		query += fmt.Sprintf(" AND initiator_role = $%d", argPos)
 		args = append(args, filters.InitiatorRole)
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	var count int
@@ -341,7 +341,7 @@ func (r *DisputeRepositoryPostgres) FindAll(ctx context.Context, status string, 
 	if status != "" {
 		countQuery += fmt.Sprintf(" AND status = $%d", argPos)
 		countArgs = append(countArgs, status)
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	var count int

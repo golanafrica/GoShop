@@ -26,7 +26,9 @@ func (e *AppError) Error() string {
 func WriteAppError(w http.ResponseWriter, appErr *AppError) {
 	w.Header().Set("Content-type", "application/json")
 	w.WriteHeader(appErr.Status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'encodage JSON
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":    appErr.Code,
 		"message": appErr.Message,
 		"status":  appErr.Status,

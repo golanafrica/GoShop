@@ -3,7 +3,9 @@ package paymentusecase
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -179,7 +181,13 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	tontinePaymentRepoTx := uc.tontinePaymentRepo.WithTX(tx)
 

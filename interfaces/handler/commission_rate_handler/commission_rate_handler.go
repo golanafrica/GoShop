@@ -142,7 +142,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 			Msg("✅ Commission rate created")
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"message": "Commission rate created",
 			"rate":    rate,
@@ -187,7 +187,7 @@ func (h *CommissionRateHandler) UpdateRate(w http.ResponseWriter, r *http.Reques
 		Msg("✅ Commission rate updated")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Commission rate updated",
 		"rate":    existing,
@@ -242,7 +242,7 @@ func (h *CommissionRateHandler) GetRates(w http.ResponseWriter, r *http.Request)
 		Msg("✅ Commission rates fetched successfully")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"count":   len(rates),
 		"rates":   rates,
@@ -291,7 +291,7 @@ func (h *CommissionRateHandler) TriggerOnlineCollection(w http.ResponseWriter, r
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Online payment collection triggered in background",
 	})
@@ -338,7 +338,7 @@ func (h *CommissionRateHandler) TriggerTontineCollection(w http.ResponseWriter, 
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Tontine collection triggered in background",
 	})

@@ -77,13 +77,13 @@ func (cr *CustomerRepoInfrastructurePostgres) CountAllCustomers(ctx context.Cont
 	if filter.Name != nil {
 		conditions = append(conditions, fmt.Sprintf("(first_name ILIKE $%d OR last_name ILIKE $%d)", argPos, argPos))
 		args = append(args, "%"+*filter.Name+"%")
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	if filter.Email != nil {
 		conditions = append(conditions, fmt.Sprintf("email ILIKE $%d", argPos))
 		args = append(args, "%"+*filter.Email+"%")
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	query := baseQuery
@@ -121,13 +121,13 @@ func (cr *CustomerRepoInfrastructurePostgres) FindAllCustomersWithPagination(
 	if filter.Name != nil {
 		conditions = append(conditions, fmt.Sprintf("(first_name ILIKE $%d OR last_name ILIKE $%d)", argPos, argPos))
 		args = append(args, "%"+*filter.Name+"%")
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	if filter.Email != nil {
 		conditions = append(conditions, fmt.Sprintf("email ILIKE $%d", argPos))
 		args = append(args, "%"+*filter.Email+"%")
-		argPos++
+		argPos++ //nolint:ineffassign
 	}
 
 	whereClause := ""

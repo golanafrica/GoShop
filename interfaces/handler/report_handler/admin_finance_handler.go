@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	reportusecase "Goshop/application/usecase/platform_revenue_report" // ✅ Chemin corrigé vers le bon dossier
+	reportusecase "Goshop/application/usecase/platform_revenue_report"
 	"Goshop/interfaces/utils"
 )
 
@@ -89,7 +89,6 @@ func (h *AdminFinanceHandler) ExportCommissionsCSV(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Note : Assure-toi que la fonction ExportPlatformCommissionsCSV est bien dans le même package 'reportusecase'
 	csvData, err := reportusecase.ExportPlatformCommissionsCSV(resp.Transactions)
 	if err != nil {
 		utils.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate CSV"})
@@ -98,5 +97,7 @@ func (h *AdminFinanceHandler) ExportCommissionsCSV(w http.ResponseWriter, r *htt
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="commissions_plateforme.csv"`)
-	w.Write(csvData)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement les deux valeurs de retour (int, error)
+	_, _ = w.Write(csvData)
 }

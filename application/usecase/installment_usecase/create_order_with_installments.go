@@ -2,6 +2,8 @@ package installmentusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -45,7 +47,13 @@ func (uc *CreateInstallmentOrderUsecase) Execute(ctx context.Context, shopID, cu
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	// 1. Initialiser la commande
 	order := &entity.Order{

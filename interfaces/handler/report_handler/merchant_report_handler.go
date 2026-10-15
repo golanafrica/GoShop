@@ -84,5 +84,7 @@ func (h *MerchantReportHandler) ExportStatementCSV(w http.ResponseWriter, r *htt
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="releve_marchand.csv"`)
-	w.Write(csvData)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement les deux valeurs de retour (int, error)
+	_, _ = w.Write(csvData)
 }

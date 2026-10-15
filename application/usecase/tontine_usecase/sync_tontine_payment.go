@@ -2,6 +2,8 @@ package tontineusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	paymentusecase "Goshop/application/usecase/payment_usecase"
@@ -63,7 +65,13 @@ func (uc *SyncTontinePaymentUsecase) Execute(ctx context.Context, req *SyncPayme
 	if err != nil {
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	paymentRepoTx := uc.paymentRepo.WithTX(tx)
 

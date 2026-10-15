@@ -482,7 +482,7 @@ func (r *PlatformCollaboratorRepositoryInfrastructure) scanCollaborators(rows *s
 		}
 
 		if len(permJSON) > 0 {
-			json.Unmarshal(permJSON, &collab.Permissions)
+			_ = json.Unmarshal(permJSON, &collab.Permissions) // L'erreur est intentionnellement ignorée ici
 		}
 
 		if acceptedAt.Valid {

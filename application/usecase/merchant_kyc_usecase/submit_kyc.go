@@ -2,6 +2,7 @@ package merchantkycusecase
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -201,7 +202,13 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		logger.Error().Err(err).Msg("Impossible de démarrer la transaction")
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback() // Rollback automatique en cas de panic ou d'erreur non gérée
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	txShopRepo := uc.shopRepo.WithTX(tx)
 	txKYCRepo := uc.kycRepo.WithTX(tx)

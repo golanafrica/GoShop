@@ -54,7 +54,9 @@ func (h *HealthHandler) Live(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(res)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'encodage JSON
+	_ = json.NewEncoder(w).Encode(res)
 }
 
 // @Summary Readiness Probe (Sonde de disponibilité)
@@ -142,7 +144,9 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
-	json.NewEncoder(w).Encode(resp)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'encodage JSON
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // @Summary Vérification de santé simple
@@ -168,5 +172,7 @@ func (h *HealthHandler) SimpleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'encodage JSON
+	_ = json.NewEncoder(w).Encode(resp)
 }

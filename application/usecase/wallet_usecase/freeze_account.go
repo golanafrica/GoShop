@@ -114,7 +114,7 @@ func (uc *FreezeAccountUsecase) Execute(ctx context.Context, req *FreezeAccountR
 		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	// 4. Vérifier qu'il n'y a pas déjà un gel actif
 	existingFreeze, err := uc.freezeRepo.WithTX(tx).FindActiveByShopID(ctx, req.ShopID)
@@ -309,7 +309,7 @@ func (uc *UnfreezeAccountUsecase) Execute(ctx context.Context, req *UnfreezeAcco
 		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	// 4. Récupérer le gel actif
 	freeze, err := uc.freezeRepo.WithTX(tx).FindActiveByShopID(ctx, req.ShopID)

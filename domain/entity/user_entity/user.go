@@ -312,6 +312,7 @@ func (u *UserEntity) SetRole(newRole string, updatedBy string) error {
 	// Un super_admin ne peut pas être rétrogradé sans vérification
 	if u.Role == RoleSuperAdmin && newRole != RoleSuperAdmin {
 		// En production, on pourrait exiger une confirmation supplémentaire
+		return errors.New("cannot downgrade super admin role")
 	}
 
 	u.Role = newRole

@@ -16,10 +16,9 @@ import (
 	"Goshop/infrastructure/payment"
 )
 
-// MockWebhookSecret est la clé secrète pour la validation HMAC
-// En production, cette valeur vient de la configuration/env
-// ⚠️  NE JAMAIS committer la vraie clé en production
-const MockWebhookSecret = "orange_money_webhook_secret_dev_only_change_in_prod"
+// MockWebhookSecret est la clé secrète pour la validation HMAC (Mock uniquement)
+// ⚠️ NE JAMAIS committer la vraie clé en production
+const MockWebhookSecret = "orange_money_webhook_secret_dev_only_change_in_prod" //nolint:gosec
 
 // OrangeMoneyProvider est un mock du provider Orange Money
 type OrangeMoneyProvider struct {
@@ -234,12 +233,11 @@ func GenerateWebhookSignature(payload []byte) string {
 }
 
 // Refund simule un remboursement (Cash-Out vers le client)
-// Refund simule un remboursement (Cash-Out vers le client)
-func (p *MoovMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
+// 🛡️ CORRECTION : Le récepteur est maintenant correctement *OrangeMoneyProvider
+func (p *OrangeMoneyProvider) Refund(ctx context.Context, providerRef string, amountCents int64, customerPhone string, operator string) error {
 	if !p.available {
 		return payment.ErrProviderUnavailable
 	}
-	// ... (le reste de la méthode reste identique)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -290,7 +288,7 @@ func (p *OrangeMoneyProvider) GetPayment(ref string) (*mockPayment, bool) {
 
 func generateMockRef(prefix string) string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes)
+	rand.Read(bytes) //nolint:errcheck
 	return prefix + "-" + hex.EncodeToString(bytes)
 }
 

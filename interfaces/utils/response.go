@@ -8,7 +8,9 @@ import (
 func WriteJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+
+	// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement l'erreur d'encodage JSON
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func WriteError(w http.ResponseWriter, status int, message string) {

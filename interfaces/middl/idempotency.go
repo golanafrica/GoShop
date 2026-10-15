@@ -179,7 +179,9 @@ func IdempotencyMiddleware(config IdempotencyConfig) func(http.Handler) http.Han
 					w.WriteHeader(existingKey.ResponseStatus)
 
 					responseBody, _ := json.Marshal(existingKey.ResponseBody)
-					w.Write(responseBody)
+
+					// 🛡️ CORRECTION ERRCHECK : Ignorer explicitement les deux valeurs de retour (int, error)
+					_, _ = w.Write(responseBody)
 					return
 				}
 			}

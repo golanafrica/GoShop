@@ -44,6 +44,7 @@ import (
 // Context keys pour API Key
 type contextKeyAPIKey string
 
+//nolint:gosec // Faux positif : ce sont des clés de contexte, pas des identifiants réels
 const (
 	APIKeyContextKey       contextKeyAPIKey = "api_key"
 	APIKeyIDContextKey     contextKeyAPIKey = "api_key_id"

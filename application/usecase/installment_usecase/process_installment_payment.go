@@ -2,6 +2,8 @@ package installmentusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"Goshop/domain/entity"
@@ -48,7 +50,13 @@ func (uc *ProcessInstallmentPaymentUsecase) Execute(ctx context.Context, req Pro
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			log.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	installments, err := uc.installmentRepo.GetByOrderID(ctx, req.OrderID)
 	if err != nil {
@@ -135,7 +143,8 @@ func (uc *ProcessInstallmentPaymentUsecase) notifyMerchantAllPaid(ctx context.Co
 		delayDays = order.InstallmentReleaseDelayDays
 	}
 
-	releaseDate := "N/A"
+	// 🛡️ Correction ineffassign : déclaration simple, assignation conditionnelle
+	var releaseDate string
 	if order.DeliveredAt != nil {
 		releaseDate = order.DeliveredAt.AddDate(0, 0, delayDays).Format("02/01/2006")
 	} else {

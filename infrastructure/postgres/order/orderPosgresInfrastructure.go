@@ -85,19 +85,16 @@ func (or *OrderPostgresInfra) CountAll(ctx context.Context, filter orderdto.Orde
 
 	baseQuery := `SELECT COUNT(DISTINCT o.id) FROM orders o WHERE o.shop_id = $1`
 	args := []interface{}{shopID}
-	argPos := 2
 	conditions := []string{}
 
 	if filter.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("o.status = $%d", argPos))
+		conditions = append(conditions, fmt.Sprintf("o.status = $%d", len(args)+1))
 		args = append(args, *filter.Status)
-		argPos++
 	}
 
 	if filter.CustomerID != nil {
-		conditions = append(conditions, fmt.Sprintf("o.customer_id = $%d", argPos))
+		conditions = append(conditions, fmt.Sprintf("o.customer_id = $%d", len(args)+1))
 		args = append(args, *filter.CustomerID)
-		argPos++
 	}
 
 	query := baseQuery
@@ -141,19 +138,16 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 	`
 
 	args := []interface{}{shopID}
-	argPos := 2
 	conditions := []string{}
 
 	if filter.Status != nil {
-		conditions = append(conditions, fmt.Sprintf("o.status = $%d", argPos))
+		conditions = append(conditions, fmt.Sprintf("o.status = $%d", len(args)+1))
 		args = append(args, *filter.Status)
-		argPos++
 	}
 
 	if filter.CustomerID != nil {
-		conditions = append(conditions, fmt.Sprintf("o.customer_id = $%d", argPos))
+		conditions = append(conditions, fmt.Sprintf("o.customer_id = $%d", len(args)+1))
 		args = append(args, *filter.CustomerID)
-		argPos++
 	}
 
 	whereClause := ""
@@ -161,7 +155,7 @@ func (or *OrderPostgresInfra) FindAllWithPagination(ctx context.Context, limit, 
 		whereClause = " AND " + strings.Join(conditions, " AND ")
 	}
 
-	query := baseQuery + whereClause + " ORDER BY o.created_at DESC LIMIT $" + strconv.Itoa(argPos) + " OFFSET $" + strconv.Itoa(argPos+1)
+	query := baseQuery + whereClause + " ORDER BY o.created_at DESC LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2)
 	args = append(args, limit, offset)
 
 	rows, err := or.queryContext(ctx, query, args...)
@@ -369,7 +363,6 @@ func (or *OrderPostgresInfra) FindByID(ctx context.Context, id string) (*entity.
 }
 
 // FindAll retourne toutes les commandes du shop courant
-// FindAll retourne toutes les commandes du shop courant
 func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, error) {
 	shopID, err := or.getShopID(ctx)
 	if err != nil {
@@ -430,7 +423,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			deliveryNotes       sql.NullString
 			amountReceivedCents sql.NullInt64
 			reservedUntil       sql.NullTime
-			deliveryZoneID      sql.NullString // 🆕 DOIT ÊTRE ICI
+			deliveryZoneID      sql.NullString
 
 			itemID        sql.NullString
 			productID     sql.NullString
@@ -455,7 +448,7 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 			&deliveryNotes,
 			&amountReceivedCents,
 			&reservedUntil,
-			&deliveryZoneID, // 🆕 DOIT ÊTRE ICI (16ème position, juste avant itemID)
+			&deliveryZoneID,
 			&itemID,
 			&productID,
 			&quantity,
@@ -504,7 +497,6 @@ func (or *OrderPostgresInfra) FindAll(ctx context.Context) ([]*entity.Order, err
 				order.ReservedUntil = &reservedUntil.Time
 			}
 
-			// 🆕 C'EST ICI QUE LA MAGIE OPÈRE
 			if deliveryZoneID.Valid {
 				order.DeliveryZoneID = &deliveryZoneID.String
 			}

@@ -2,6 +2,8 @@ package withdrawalusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -81,7 +83,13 @@ func (uc *ProcessPayoutWebhookUsecase) Execute(
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+
+	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+		}
+	}()
 
 	withdrawalRepoTx := uc.withdrawalRepo.WithTX(tx)
 	walletRepoTx := uc.walletRepo.WithTX(tx)

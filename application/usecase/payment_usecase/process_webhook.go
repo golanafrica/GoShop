@@ -2,6 +2,7 @@ package paymentusecase
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,7 +283,13 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 						processErr = fmt.Errorf("failed to begin tx: %w", txErr)
 						return processErr
 					}
-					defer tx.Rollback()
+
+					// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
+					defer func() {
+						if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+							logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+						}
+					}()
 
 					if err := uc.escrowRepo.WithTX(tx).Create(ctx, escrow); err != nil {
 						processErr = fmt.Errorf("failed to create escrow: %w", err)
@@ -490,7 +497,7 @@ func markSuccessProviderRef(p *entity.Payment, event *payment.WebhookEvent) stri
 	return event.ProviderRef
 }
 
-// 🛡️ P0 Fix : Retourne maintenant une erreur pour permettre la propagation en cas d'échec.
+// 🛡️ P0 Fix : Gère correctement l'erreur retournée par MarkAccepted()
 func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) error {
 	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
 		return nil
@@ -509,7 +516,14 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 		return nil // Already confirmed or in another state, nothing to do (idempotent)
 	}
 
-	order.MarkAccepted()
+	// 🛡️ CORRECTION : Vérification de l'erreur retournée par MarkAccepted()
+	if err := order.MarkAccepted(); err != nil {
+		if logger != nil {
+			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to mark order as accepted")
+		}
+		return fmt.Errorf("failed to mark order accepted: %w", err)
+	}
+
 	if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
 		if logger != nil {
 			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")

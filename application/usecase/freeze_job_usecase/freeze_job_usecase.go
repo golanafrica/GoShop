@@ -49,16 +49,16 @@ func (uc *FreezeJobUsecase) GetConfig(ctx context.Context) (*FreezeJobConfig, er
 	cfg := &FreezeJobConfig{Enabled: false, Policy: "alert_only", MaxPerRun: 500, BatchSize: 100}
 
 	if val, _ := uc.settingsRepo.Get(ctx, "wallet.freeze_job.enabled"); val != nil {
-		json.Unmarshal(val, &cfg.Enabled)
+		_ = json.Unmarshal(val, &cfg.Enabled) // L'erreur est intentionnellement ignorée (valeur par défaut conservée)
 	}
 	if val, _ := uc.settingsRepo.Get(ctx, "wallet.freeze_job.policy"); val != nil {
-		json.Unmarshal(val, &cfg.Policy)
+		_ = json.Unmarshal(val, &cfg.Policy)
 	}
 	if val, _ := uc.settingsRepo.Get(ctx, "wallet.freeze_job.max_per_run"); val != nil {
-		json.Unmarshal(val, &cfg.MaxPerRun)
+		_ = json.Unmarshal(val, &cfg.MaxPerRun)
 	}
 	if val, _ := uc.settingsRepo.Get(ctx, "wallet.freeze_job.batch_size"); val != nil {
-		json.Unmarshal(val, &cfg.BatchSize)
+		_ = json.Unmarshal(val, &cfg.BatchSize)
 	}
 	return cfg, nil
 }
