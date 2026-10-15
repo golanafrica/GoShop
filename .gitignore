@@ -4,14 +4,16 @@
 *.exe
 *.test
 *.out
-api
-bin/
+# Binaire à la racine seulement — NE PAS ignorer cmd/api/
+/api
+/bin/
 _build/
 *.backup
 *.bak
 *.old
 cover
 coverage
+goshop-api
 
 # ==========================================
 # FICHIERS D'ENVIRONNEMENT (CRITIQUE)
@@ -82,5 +84,3 @@ postman/collections/New*/
 *.csv
 platform_commissions.csv
 merchant_statement.csv
-
-goshop-api
