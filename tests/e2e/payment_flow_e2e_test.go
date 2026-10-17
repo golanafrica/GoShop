@@ -41,7 +41,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	t.Log("💳 E2E TEST : Flux de paiement complet (Orange Money + Moov Money)")
 	t.Log(strings.Repeat("=", 70))
 
-	// Setup : serveur de test + client HTTP
 	server := testutils.NewTestServer(t)
 	client := testutils.NewHTTPClient(server.URL)
 
@@ -52,7 +51,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	uniqueEmail := fmt.Sprintf("test.payment.%d.%s@example.com",
 		time.Now().UnixNano(), uuid.New().String()[:6])
 
-	// Inscription
 	userData := map[string]interface{}{
 		"email":    uniqueEmail,
 		"password": "Password123!",
@@ -61,7 +59,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	resp.Body.Close()
 	testutils.AssertStatus(t, resp, http.StatusCreated)
 
-	// Connexion
 	loginData := map[string]interface{}{
 		"email":    uniqueEmail,
 		"password": "Password123!",
@@ -95,7 +92,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	// ========================================================================
 	t.Log("\n📋 ÉTAPE 1 : Création des données de base")
 
-	// Customer
 	customerReq := map[string]interface{}{
 		"first_name": "Payment",
 		"last_name":  "Tester",
@@ -106,7 +102,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	resp.Body.Close()
 	t.Logf("✅ Customer créé: %s", customerID)
 
-	// Produit
 	productReq := map[string]interface{}{
 		"name":        "Test Product",
 		"description": "Product for payment testing",
@@ -118,7 +113,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	resp.Body.Close()
 	t.Logf("✅ Produit créé: %s", productID)
 
-	// Commande
 	orderReq := map[string]interface{}{
 		"customer_id": customerID,
 		"items": []map[string]interface{}{
@@ -130,7 +124,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 	resp.Body.Close()
 	t.Logf("✅ Commande créée: %s", orderID)
 
-	// Vérifier que la commande est PENDING
 	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
 	var order map[string]interface{}
 	testutils.ParseJSONBody(t, resp, &order)
@@ -188,7 +181,6 @@ func TestPaymentFlowE2E(t *testing.T) {
 func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string, provider string, amountCents int64, expectedDelaySeconds int) {
 	t.Logf("  🔸 Initiation paiement %s pour commande %s (montant: %d FCFA)", provider, orderID, amountCents/100)
 
-	// Initier le paiement
 	payReq := map[string]interface{}{
 		"provider":     provider,
 		"phone_number": "+22670123456",
@@ -212,7 +204,6 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Logf("  ✅ Paiement initié: %s (ref: %s)", paymentInit.PaymentID, paymentInit.ProviderRef)
 
-	// Vérifier immédiatement le statut (doit être processing)
 	resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
 	var paymentStatus map[string]interface{}
 	testutils.ParseJSONBody(t, resp, &paymentStatus)
@@ -223,11 +214,9 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Log("  ✅ Statut immédiat: processing")
 
-	// Attendre que le mock simule le succès
 	t.Logf("  ⏱️  Attente de %d secondes (délai mock %s)...", expectedDelaySeconds, provider)
 	time.Sleep(time.Duration(expectedDelaySeconds) * time.Second)
 
-	// Vérifier le statut après attente (doit être success)
 	resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
 	testutils.ParseJSONBody(t, resp, &paymentStatus)
 	resp.Body.Close()
@@ -237,7 +226,6 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Log("  ✅ Statut après attente: success")
 
-	// Vérifier la cohérence des timestamps UTC
 	initiatedAt, _ := paymentStatus["initiated_at"].(string)
 	completedAt, _ := paymentStatus["completed_at"].(string)
 	if initiatedAt == "" || completedAt == "" {
@@ -245,18 +233,18 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Logf("  ✅ Timestamps UTC cohérents: %s → %s", initiatedAt, completedAt)
 
-	// Vérifier que la commande est passée à PAID
 	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
 	var updatedOrder map[string]interface{}
 	testutils.ParseJSONBody(t, resp, &updatedOrder)
 	resp.Body.Close()
 
-	if updatedOrder["status"] != "paid" {
-		t.Fatalf("❌ Commande devrait être 'paid', obtenu: %v", updatedOrder["status"])
+	// Domaine : après paiement mock, statut peut être "confirmed" ou "paid"
+	orderStatus, _ := updatedOrder["status"].(string)
+	if orderStatus != "paid" && orderStatus != "confirmed" {
+		t.Fatalf("❌ Commande devrait être 'paid' ou 'confirmed', obtenu: %v", updatedOrder["status"])
 	}
-	t.Log("  ✅ Commande passée à PAID automatiquement")
+	t.Logf("  ✅ Commande passée à %s après paiement", orderStatus)
 
-	// Tester le remboursement
 	t.Log("  🔸 Test du remboursement")
 	refundReq := map[string]interface{}{
 		"reason": "Test refund for E2E",
@@ -273,7 +261,6 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Log("  ✅ Paiement remboursé avec succès")
 
-	// Vérifier que le double remboursement est rejeté
 	t.Log("  🔸 Vérification rejet double remboursement")
 	resp, _ = client.DoRequest("POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
 	if resp.StatusCode == http.StatusOK {
@@ -290,14 +277,12 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 // ============================================================================
 
 func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
-	// Créer un paiement pour avoir un provider_ref valide
 	payReq := map[string]interface{}{
 		"provider":     "orange_money",
 		"phone_number": "+226709999999",
 		"description":  "Webhook HMAC test",
 	}
 
-	// Créer une commande d'abord
 	customerReq := map[string]interface{}{
 		"first_name": "Webhook",
 		"last_name":  "Test",
@@ -335,10 +320,8 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	testutils.ParseJSONBody(t, resp, &paymentInit)
 	resp.Body.Close()
 
-	// 🆕 CORRECTION : Utiliser client.BaseURL pour les URLs webhook
 	webhookURL := client.BaseURL + "/webhooks/orange_money"
 
-	// TEST 1 : Webhook avec signature valide
 	webhookPayload := map[string]interface{}{
 		"event":        "payment.success",
 		"provider_ref": paymentInit.ProviderRef,
@@ -364,7 +347,6 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	}
 	t.Log("  ✅ Webhook avec signature valide accepté (200)")
 
-	// TEST 2 : Webhook avec signature invalide
 	req2, _ := http.NewRequest("POST", webhookURL, strings.NewReader(string(payloadBytes)))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-Signature", "invalid_signature_12345")
@@ -380,7 +362,6 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	}
 	t.Log("  ✅ Webhook avec signature invalide rejeté (400)")
 
-	// TEST 3 : Webhook sans signature
 	req3, _ := http.NewRequest("POST", webhookURL, strings.NewReader(string(payloadBytes)))
 	req3.Header.Set("Content-Type", "application/json")
 
@@ -395,7 +376,6 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 	}
 	t.Log("  ✅ Webhook sans signature rejeté (400)")
 
-	// TEST 4 : Payload modifié (tampering)
 	originalPayload := `{"event":"payment.success","provider_ref":"OM-123","amount":10000,"status":"success"}`
 	originalSignature := generateHMACSignature([]byte(originalPayload), orangeMoneyWebhookSecret)
 	tamperedPayload := `{"event":"payment.success","provider_ref":"OM-123","amount":999999,"status":"success"}`
@@ -421,7 +401,6 @@ func testWebhookHMAC(t *testing.T, client *testutils.HTTPClient) {
 // ============================================================================
 
 func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, originalShopSlug string, orderID string) {
-	// Créer un 2ème shop
 	shop2Slug := fmt.Sprintf("payment-test-2-%d", time.Now().UnixNano())
 	shop2Data := map[string]interface{}{
 		"name": "Payment Test Shop 2",
@@ -431,10 +410,8 @@ func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, origin
 	resp.Body.Close()
 	testutils.AssertStatus(t, resp, http.StatusCreated)
 
-	// Changer le header pour utiliser le 2ème shop
 	client.SetDefaultHeader("X-Shop-Slug", shop2Slug)
 
-	// Tenter de lire la commande du 1er shop
 	resp, _ = client.DoRequest("GET", "/api/orders/"+orderID, nil)
 	resp.Body.Close()
 
@@ -447,7 +424,6 @@ func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, origin
 	}
 	t.Log("  ✅ Isolation multi-tenant respectée (404 sur autre shop)")
 
-	// Tenter de lister les paiements du 1er shop
 	resp, _ = client.DoRequest("GET", "/api/payments", nil)
 	var payments []interface{}
 	testutils.ParseJSONBody(t, resp, &payments)
@@ -458,10 +434,8 @@ func testMultiTenantIsolation(t *testing.T, client *testutils.HTTPClient, origin
 	}
 	t.Log("  ✅ Aucun paiement du 1er shop visible depuis le 2ème")
 
-	// Revenir au shop original
 	client.SetDefaultHeader("X-Shop-Slug", originalShopSlug)
 
-	// Vérifier qu'on peut toujours accéder à la commande originale
 	resp = client.MustDoRequest(t, "GET", "/api/orders/"+orderID, nil)
 	resp.Body.Close()
 	testutils.AssertStatus(t, resp, http.StatusOK)

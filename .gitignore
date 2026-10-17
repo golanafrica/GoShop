@@ -67,6 +67,11 @@ tests/loadtest/archive.tar
 !tests/loadtest/results/.gitkeep
 
 # ==========================================
+# ARTEFACTS E2E (KYC JPEG, uploads locaux)
+# ==========================================
+tests/e2e/uploads/
+
+# ==========================================
 # FICHIERS DE TEST LOCAUX & SCRIPTS AD-HOC
 # ==========================================
 deposit.json
