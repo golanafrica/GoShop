@@ -329,7 +329,7 @@ jobs:
         with:
           version: latest
           args: --timeout=10m
-        continue-on-error: true
+        
 
   docker:
     name: Build, Scan & Push Docker Image
@@ -364,7 +364,7 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
-          exit-code: '0'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
