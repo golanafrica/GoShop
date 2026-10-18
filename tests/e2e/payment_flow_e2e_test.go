@@ -179,6 +179,7 @@ func TestPaymentFlowE2E(t *testing.T) {
 // ============================================================================
 
 func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string, provider string, amountCents int64, expectedDelaySeconds int) {
+	t.Helper()
 	t.Logf("  🔸 Initiation paiement %s pour commande %s (montant: %d FCFA)", provider, orderID, amountCents/100)
 
 	payReq := map[string]interface{}{
@@ -214,15 +215,28 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	}
 	t.Log("  ✅ Statut immédiat: processing")
 
-	t.Logf("  ⏱️  Attente de %d secondes (délai mock %s)...", expectedDelaySeconds, provider)
-	time.Sleep(time.Duration(expectedDelaySeconds) * time.Second)
+	// Poll jusqu'à success (tolérant CI) — ne pas se fier à un Sleep unique
+	timeout := time.Duration(expectedDelaySeconds+8) * time.Second
+	deadline := time.Now().Add(timeout)
+	t.Logf("  ⏱️  Poll statut mock %s (max %s)...", provider, timeout)
 
-	resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
-	testutils.ParseJSONBody(t, resp, &paymentStatus)
-	resp.Body.Close()
+	var status string
+	for {
+		resp = client.MustDoRequest(t, "GET", "/api/payments/"+paymentInit.PaymentID, nil)
+		testutils.ParseJSONBody(t, resp, &paymentStatus)
+		resp.Body.Close()
 
-	if paymentStatus["status"] != "success" {
-		t.Fatalf("❌ Statut après attente devrait être 'success', obtenu: %v", paymentStatus["status"])
+		status, _ = paymentStatus["status"].(string)
+		if status == "success" {
+			break
+		}
+		if status == "failed" || status == "cancelled" {
+			t.Fatalf("❌ Paiement terminé en %q (attendu success). detail=%v", status, paymentStatus)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("❌ Timeout: statut encore %q après %s (attendu success)", status, timeout)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 	t.Log("  ✅ Statut après attente: success")
 
@@ -238,7 +252,6 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	testutils.ParseJSONBody(t, resp, &updatedOrder)
 	resp.Body.Close()
 
-	// Domaine : après paiement mock, statut peut être "confirmed" ou "paid"
 	orderStatus, _ := updatedOrder["status"].(string)
 	if orderStatus != "paid" && orderStatus != "confirmed" {
 		t.Fatalf("❌ Commande devrait être 'paid' ou 'confirmed', obtenu: %v", updatedOrder["status"])
