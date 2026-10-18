@@ -30,6 +30,7 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
+          # Exclusions documentées — à réintégrer une par une
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
@@ -103,6 +104,15 @@ jobs:
           REDIS_HOST=localhost
           REDIS_PORT=6379
           BCRYPT_COST=4
+          JWT_SECRET=ci-test-jwt-secret-min-32-chars-xx
+          JWT_EXPIRATION=15m
+          REFRESH_SECRET=ci-test-refresh-secret-min-32-chars
+          REFRESH_EXPIRATION=168h
+          ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+          YENGA_PAY_WEBHOOK_SECRET=test-webhook-secret-e2e
+          YENGA_PAY_ENV=test
+          ALLOW_X_SHOP_SLUG=true
+          ENABLE_FORCE_RELEASE=true
           EOF
           cp .env.test tests/.env.test 2>/dev/null || true
           cp .env.test tests/integration/.env.test 2>/dev/null || true
@@ -129,6 +139,7 @@ jobs:
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
+    # Garde soft tant que la suite n'est pas 100% stable en CI ; retire ensuite pour bloquer le pipeline.
     continue-on-error: true
     services:
       postgres:
@@ -175,6 +186,15 @@ jobs:
           REDIS_HOST=localhost
           REDIS_PORT=6379
           BCRYPT_COST=4
+          JWT_SECRET=ci-test-jwt-secret-min-32-chars-xx
+          JWT_EXPIRATION=15m
+          REFRESH_SECRET=ci-test-refresh-secret-min-32-chars
+          REFRESH_EXPIRATION=168h
+          ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+          YENGA_PAY_WEBHOOK_SECRET=test-webhook-secret-e2e
+          YENGA_PAY_ENV=test
+          ALLOW_X_SHOP_SLUG=true
+          ENABLE_FORCE_RELEASE=true
           EOF
           mkdir -p tests/e2e
           cp .env.test tests/e2e/.env.test
