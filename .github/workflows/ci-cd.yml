@@ -8,7 +8,6 @@ on:
     branches: [ main ]
 
 env:
-  # Aligné Dockerfile + correctifs CVE stdlib (Trivy)
   GO_VERSION: '1.26.9'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
@@ -31,7 +30,6 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          # Exclusions documentées — à réintégrer une par une
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
@@ -92,8 +90,17 @@ jobs:
       - name: Install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Write .env.test
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          YENGA_PAY_API_KEY: ${{ secrets.YENGA_PAY_API_KEY }}
+          YENGA_PAY_ORGANIZATION_ID: ${{ secrets.YENGA_PAY_ORGANIZATION_ID }}
+          YENGA_PAY_PROJECT_ID: ${{ secrets.YENGA_PAY_PROJECT_ID }}
+          YENGA_PAY_WEBHOOK_SECRET: ${{ secrets.YENGA_PAY_WEBHOOK_SECRET }}
+          YENGA_PAY_ENV: ${{ secrets.YENGA_PAY_ENV }}
         run: |
-          cat > .env.test << 'EOF'
+          set -euo pipefail
+          # EOF sans quotes → expansion des secrets
+          cat > .env.test << EOF
           APP_ENV=test
           APP_PORT=8081
           DB_HOST=localhost
@@ -109,12 +116,16 @@ jobs:
           JWT_EXPIRATION=15m
           REFRESH_SECRET=ci-test-refresh-secret-min-32-chars
           REFRESH_EXPIRATION=168h
-          ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
-          YENGA_PAY_WEBHOOK_SECRET=test-webhook-secret-e2e
-          YENGA_PAY_ENV=test
+          ENCRYPTION_KEY=${ENCRYPTION_KEY}
+          YENGA_PAY_API_KEY=${YENGA_PAY_API_KEY}
+          YENGA_PAY_ORGANIZATION_ID=${YENGA_PAY_ORGANIZATION_ID}
+          YENGA_PAY_PROJECT_ID=${YENGA_PAY_PROJECT_ID}
+          YENGA_PAY_WEBHOOK_SECRET=${YENGA_PAY_WEBHOOK_SECRET}
+          YENGA_PAY_ENV=${YENGA_PAY_ENV:-test}
           ALLOW_X_SHOP_SLUG=true
           ENABLE_FORCE_RELEASE=true
           EOF
+          mkdir -p tests/integration
           cp .env.test tests/.env.test 2>/dev/null || true
           cp .env.test tests/integration/.env.test 2>/dev/null || true
       - name: Apply migrations (ordered)
@@ -140,7 +151,6 @@ jobs:
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
-    # Soft tant que la suite n'est pas 100% stable en CI
     continue-on-error: true
     services:
       postgres:
@@ -174,8 +184,20 @@ jobs:
       - name: Install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Write .env.test
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          YENGA_PAY_API_KEY: ${{ secrets.YENGA_PAY_API_KEY }}
+          YENGA_PAY_ORGANIZATION_ID: ${{ secrets.YENGA_PAY_ORGANIZATION_ID }}
+          YENGA_PAY_PROJECT_ID: ${{ secrets.YENGA_PAY_PROJECT_ID }}
+          YENGA_PAY_WEBHOOK_SECRET: ${{ secrets.YENGA_PAY_WEBHOOK_SECRET }}
+          YENGA_PAY_ENV: ${{ secrets.YENGA_PAY_ENV }}
         run: |
-          cat > .env.test << 'EOF'
+          set -euo pipefail
+          if [ -z "${YENGA_PAY_API_KEY:-}" ]; then
+            echo "::error::YENGA_PAY_API_KEY secret is empty"
+            exit 1
+          fi
+          cat > .env.test << EOF
           APP_ENV=test
           APP_PORT=8081
           DB_HOST=localhost
@@ -191,15 +213,19 @@ jobs:
           JWT_EXPIRATION=15m
           REFRESH_SECRET=ci-test-refresh-secret-min-32-chars
           REFRESH_EXPIRATION=168h
-          ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
-          YENGA_PAY_WEBHOOK_SECRET=test-webhook-secret-e2e
-          YENGA_PAY_ENV=test
+          ENCRYPTION_KEY=${ENCRYPTION_KEY}
+          YENGA_PAY_API_KEY=${YENGA_PAY_API_KEY}
+          YENGA_PAY_ORGANIZATION_ID=${YENGA_PAY_ORGANIZATION_ID}
+          YENGA_PAY_PROJECT_ID=${YENGA_PAY_PROJECT_ID}
+          YENGA_PAY_WEBHOOK_SECRET=${YENGA_PAY_WEBHOOK_SECRET}
+          YENGA_PAY_ENV=${YENGA_PAY_ENV:-test}
           ALLOW_X_SHOP_SLUG=true
           ENABLE_FORCE_RELEASE=true
           EOF
-          mkdir -p tests/e2e
+          mkdir -p tests/e2e tests/integration
           cp .env.test tests/e2e/.env.test
           cp .env.test tests/.env.test 2>/dev/null || true
+          cp .env.test tests/integration/.env.test 2>/dev/null || true
       - name: Apply migrations (ordered)
         env:
           PGPASSWORD: root
@@ -334,8 +360,6 @@ jobs:
           tags: ${{ env.DOCKER_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      # exit-code 0 = transition si l'image 1.26.9 n'élimine pas encore toutes les HIGH
-      # Remettre exit-code: '1' dès que le rapport Trivy est propre
       - uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
