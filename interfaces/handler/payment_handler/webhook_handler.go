@@ -128,17 +128,26 @@ func (h *WebhookHandler) HandleWebhook(w http.ResponseWriter, r *http.Request) e
 			return utils.NewAppError("WEBHOOK_VALIDATION_FAILED", err.Error(), http.StatusBadRequest)
 		}
 
-		if errors.Is(err, paymentusecase.ErrWebhookProcessing) {
-			logger.Warn().Err(err).Msg("Webhook processing failed (returning 200)")
-		} else if errors.Is(err, paymentusecase.ErrWebhookAlreadyProcessed) {
+		// 🛡️ CORRECTION CRITIQUE : C'est le SEUL cas où on retourne 200 OK pour une "erreur"
+		// Cela dit au fournisseur : "J'ai déjà traité cet événement, arrête de me l'envoyer."
+		if errors.Is(err, paymentusecase.ErrWebhookAlreadyProcessed) {
 			logger.Info().Msg("Webhook already processed (idempotent, returning 200)")
 			metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "duplicate").Inc()
-		} else {
-			logger.Error().Err(err).Msg("Webhook processing error (returning 200)")
+			response := paymentdto.WebhookResponse{
+				Status:  "received",
+				Message: "webhook already processed",
+			}
+			utils.WriteJSON(w, http.StatusOK, response)
+			return nil
 		}
-	} else {
-		metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "success").Inc()
+
+		// 🛡️ CORRECTION CRITIQUE : Pour toute autre erreur de traitement, on retourne 500.
+		// Cela force le fournisseur (Yenga, Orange, etc.) à réessayer l'envoi du webhook plus tard.
+		logger.Error().Err(err).Msg("Webhook processing failed (returning 500 to trigger provider retry)")
+		return utils.NewAppError("WEBHOOK_PROCESSING_FAILED", err.Error(), http.StatusInternalServerError)
 	}
+
+	metrics.WebhookProcessedTotal.WithLabelValues(providerCode, "success").Inc()
 
 	response := paymentdto.WebhookResponse{
 		Status:  "received",
@@ -206,7 +215,7 @@ func (h *WebhookHandler) handlePayoutWebhook(
 	err = h.processPayoutUC.Execute(ctx, providerRef, eventType, merged)
 	if err != nil {
 		logger.Error().Err(err).Str("provider_ref", providerRef).Msg("Failed to process payout webhook")
-		return err
+		return err // Cette erreur sera catchée par HandleWebhook et retournera un 500
 	}
 
 	logger.Info().
