@@ -3,7 +3,7 @@
 # ==================================================================
 # CVE stdlib (net/http, http2, crypto/tls) : correctifs dès Go 1.26.9 / 1.27.2
 # Tag sans digest : Dependabot pourra ré-épingler le SHA ensuite.
-FROM golang:1.26.9-alpine AS builder
+FROM golang:1.27.2-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
