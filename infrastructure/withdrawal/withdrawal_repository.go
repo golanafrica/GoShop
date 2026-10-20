@@ -231,3 +231,43 @@ func (r *WithdrawalRepositoryPostgres) scanFromRows(rows *sql.Rows) (*entity.Wit
 	}
 	return w, nil
 }
+
+// FindStuckPendingWithdrawals trouve les retraits 'pending' avec un débit wallet vieux de X minutes
+func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if minAgeMinutes <= 0 {
+		minAgeMinutes = 15
+	}
+
+	// Utilisation de EXISTS pour éviter les doublons en cas de multiples tentatives de débit (rare mais possible)
+	query := `
+		SELECT ` + withdrawalSelectCols + `
+		FROM withdrawals w
+		WHERE w.status = 'pending'
+		  AND EXISTS (
+		      SELECT 1 FROM wallet_transactions wt 
+		      WHERE wt.reference_id = w.id::text 
+		        AND wt.transaction_type = 'payout'
+		        AND wt.created_at < NOW() - ($1 * INTERVAL '1 minute')
+		  )
+		ORDER BY w.created_at ASC
+		LIMIT $2
+	`
+	rows, err := r.queryContext(ctx, query, minAgeMinutes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stuck pending withdrawals: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*entity.Withdrawal
+	for rows.Next() {
+		w, err := r.scanFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}

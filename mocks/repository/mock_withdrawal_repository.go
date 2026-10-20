@@ -132,6 +132,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindCompensationPending(ctx, lim
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompensationPending", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindCompensationPending), ctx, limit, maxAttempts)
 }
 
+// FindStuckPendingWithdrawals mocks base method.
+func (m *MockWithdrawalRepository) FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindStuckPendingWithdrawals", ctx, limit, minAgeMinutes)
+	ret0, _ := ret[0].([]*entity.Withdrawal)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindStuckPendingWithdrawals indicates an expected call of FindStuckPendingWithdrawals.
+func (mr *MockWithdrawalRepositoryMockRecorder) FindStuckPendingWithdrawals(ctx, limit, minAgeMinutes any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindStuckPendingWithdrawals", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindStuckPendingWithdrawals), ctx, limit, minAgeMinutes)
+}
+
 // Update mocks base method.
 func (m *MockWithdrawalRepository) Update(ctx context.Context, withdrawal *entity.Withdrawal) error {
 	m.ctrl.T.Helper()

@@ -95,14 +95,16 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
 	}
 
-	// P1-C: audit INSERT processed=false ; skip only if already processed=true
+	// 🛡️ CORRECTION CRITIQUE P1-1 : L'écriture Inbox est OBLIGATOIRE avant tout traitement.
 	if err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, ""); err != nil {
 		if errors.Is(err, ErrWebhookAlreadyProcessed) {
 			logger.Info().Msg("Webhook already processed (idempotent)")
 			return ErrWebhookAlreadyProcessed
 		}
-		logger.Error().Err(err).Msg("Failed to record webhook audit")
-		// continue: métier prioritaire si audit KO
+		// Si l'audit ne peut pas être sauvegardé, nous ABORTONS le traitement métier.
+		// Cela force le handler à renvoyer un 500, ce qui incitera le fournisseur à réessayer.
+		logger.Error().Err(err).Msg("Failed to record webhook audit, aborting processing to allow provider retry")
+		return fmt.Errorf("%w: failed to persist webhook inbox", ErrWebhookProcessing)
 	}
 
 	var processErr error
@@ -182,7 +184,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
 
-			// 🛡️ CORRECTION CRITIQUE : Assigner processErr avant le return pour que le defer marque l'échec
 			if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
 				processErr = fmt.Errorf("failed to ensure order confirmed on retry: %w", err)
 				return processErr
@@ -277,7 +278,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					UpdatedAt:           now,
 				}
 
-				// 🛡️ ATOMICITÉ : Transaction pour lier la création d'escrow et la mise à jour du paiement
 				if uc.txManager != nil {
 					tx, txErr := uc.txManager.BeginTx(ctx)
 					if txErr != nil {
@@ -285,7 +285,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 						return processErr
 					}
 
-					// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
 					defer func() {
 						if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 							logger.Error().Err(err).Msg("unexpected error during transaction rollback")
@@ -312,7 +311,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 						return processErr
 					}
 				} else {
-					// Fallback si txManager n'est pas injecté (évite le panic)
 					if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
 						processErr = fmt.Errorf("failed to create escrow: %w", err)
 						return processErr
@@ -336,13 +334,11 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					Str("escrow_id", escrow.ID).
 					Msg("Funds locked in Escrow atomically (Phase 2 settlement)")
 
-				// 🛡️ P0 : Confirmer la commande. Si cela échoue, on propage l'erreur pour que le webhook reste processed=false et soit rejoué.
 				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
 					processErr = fmt.Errorf("failed to ensure order confirmed: %w", err)
 					return processErr
 				}
 
-				// Tout est réussi, on retourne nil directement pour éviter le double update en fin de fonction
 				return nil
 			}
 		}
@@ -375,10 +371,12 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		return nil, "", err
 	}
 
+	// 1. Essayer de matcher par la référence fournisseur directe (le plus fiable)
 	if p, label, _ := tryRef(event.ProviderRef, "provider_ref"); p != nil {
 		return p, label, nil
 	}
 
+	// 2. Essayer de matcher par les identifiants de transaction dans les métadonnées
 	intentKeys := []string{
 		"payment_intent_id", "paymentIntentId", "paymentIntentID",
 		"payment_intent", "intent_id", "intentId",
@@ -403,6 +401,7 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 	}
 
+	// 3. Essayer de matcher si la référence est l'ID du paiement lui-même
 	if ref := metaString(event.Metadata, "reference"); ref != "" {
 		if pid, err := uuid.Parse(ref); err == nil {
 			p, err := uc.paymentRepo.FindByID(ctx, pid)
@@ -415,6 +414,7 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 	}
 
+	// 4. Fallback ultime : par order_id (seulement si aucun identifiant de paiement spécifique n'est fourni)
 	orderIDStr := metaString(event.Metadata, "order_id")
 	if orderIDStr == "" {
 		if ref := metaString(event.Metadata, "reference"); strings.HasPrefix(ref, "ORDER-") {
@@ -440,6 +440,7 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
 }
 
+// 🛡️ CORRECTION CRITIQUE P1-2 : Refus strict de deviner en cas d'ambiguïté
 func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error) {
 	if len(payments) == 0 {
 		return nil, fmt.Errorf("no payments found for order")
@@ -448,19 +449,11 @@ func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error
 		return payments[0], nil
 	}
 
-	for _, p := range payments {
-		if p != nil && !p.IsTerminal() {
-			return p, nil
-		}
-	}
-
-	for _, p := range payments {
-		if p != nil && p.Status == entity.PaymentStatusSuccess {
-			return p, nil
-		}
-	}
-
-	return nil, fmt.Errorf("ambiguous payment state for order: multiple terminal payments exist, manual reconciliation required")
+	// Si nous en sommes arrivés ici, c'est que le webhook ne contient PAS d'identifiant
+	// spécifique (payment_intent_id, transId, etc.) et que nous dépendons uniquement de l'order_id.
+	// Choisir arbitrairement parmi plusieurs paiements (surtout s'il y a plusieurs 'pending'
+	// ou 'success') est un risque financier inacceptable (application à la mauvaise tentative).
+	return nil, fmt.Errorf("ambiguous payment state: %d payments exist for this order, and webhook lacks specific payment identifier. Manual reconciliation required", len(payments))
 }
 
 func persistYengaIDs(p *entity.Payment, event *payment.WebhookEvent) {
