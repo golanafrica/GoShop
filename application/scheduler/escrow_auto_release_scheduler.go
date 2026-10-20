@@ -21,18 +21,13 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 //
-// Anti race multi-instance :
+// Anti race multi-instance & Atomicité :
 //  1. ClaimRelease atomique (funds_held → released)
 //  2. FindByReferenceIDAdmin avant crédit
 //  3. Unique partial index uq_wallet_txn_ref_completed
 //  4. CreditWithDebtSweep : dette d'abord, puis solde disponible
-//  5. TX SQL unique : ledger (sale_credit / debt_sweep) + wallet.Update
-//     → plus de divergence « ligne ledger sans solde »
-//
-// Note : ClaimRelease reste hors TX (claim atomique côté escrow).
-// Si le crédit échoue après claim, les retries de creditMerchantWallet
-// réappliquent ledger+wallet de façon atomique. Les états legacy
-// (ledger sans update, avant ce fix) relèvent d'un job de reconcil.
+//  5. 🛡️ P2 #1 : TX SQL unique pour Commission Plateforme + Ledger + Wallet.Update
+//     → plus de divergence comptable en cas de panne.
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -206,23 +201,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger.Info().Msg("Escrow claimed successfully")
 
-	// Commission plateforme (hors TX wallet — P2 reprise dédiée si échec)
-	if escrow.CommissionCents > 0 && s.platformRevenueRepo != nil {
-		const refType = "escrow_auto_release"
-		if err := s.platformRevenueRepo.CreditRevenue(ctx, escrow.CommissionCents, refType, proof.ID); err != nil {
-			itemLogger.Error().Err(err).
-				Int64("commission_cents", escrow.CommissionCents).
-				Str("reference_type", refType).
-				Str("reference_id", proof.ID).
-				Msg("Failed to credit platform revenue")
-		} else {
-			itemLogger.Info().
-				Int64("commission_cents", escrow.CommissionCents).
-				Msg("Platform revenue credited (Split)")
-		}
-	} else if escrow.CommissionCents > 0 && s.platformRevenueRepo == nil {
-		itemLogger.Warn().Msg("platformRevenueRepo is nil — commission not credited")
-	}
+	// 🛡️ P2 #1 : La commission est maintenant passée à creditMerchantWallet pour être incluse dans la même TX.
 
 	if proof.TontineVoucherID != nil {
 		itemLogger.Info().
@@ -240,7 +219,8 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	var lastErr error
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
-		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, proof.ID, escrow.ID)
+		// 🛡️ P2 #1 : On passe maintenant escrow.CommissionCents à la fonction
+		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, escrow.CommissionCents, proof.ID, escrow.ID)
 		if err != nil {
 			lastErr = err
 			itemLogger.Warn().
@@ -274,12 +254,13 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	return merchantAmount, nil
 }
 
-// creditMerchantWallet crédite le wallet + écrit le ledger dans UNE transaction SQL.
-// Échec partiel → ROLLBACK (pas de ligne ledger orpheline sans solde).
+// creditMerchantWallet crédite la commission plateforme + le wallet + écrit le ledger dans UNE transaction SQL.
+// Échec partiel → ROLLBACK (pas de divergence comptable).
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
-	amountCents int64,
+	merchantAmountCents int64,
+	commissionCents int64,
 	proofID string,
 	escrowID string,
 ) error {
@@ -290,7 +271,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	}
 
 	// Idempotence : une txn completed pour cette ref a été commitée avec le wallet
-	// dans la même TX (depuis ce fix). Skip sûr pour rejeu / multi-instance.
 	existing, err := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
 	if err == nil && existing != nil {
 		s.logger.Info().
@@ -320,6 +300,31 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		}
 	}()
 
+	// 🛡️ P2 #1 : 1. Créditer la commission plateforme DANS la transaction
+	if commissionCents > 0 && s.platformRevenueRepo != nil {
+		const commRefType = "escrow_auto_release_commission"
+
+		// Utiliser WithTx si l'interface le supporte (recommandé pour une atomicité totale)
+		if txRepo, ok := s.platformRevenueRepo.(interface {
+			WithTx(repository.Tx) repository.PlatformRevenueRepository
+		}); ok {
+			if err := txRepo.WithTx(tx).CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
+				return fmt.Errorf("failed to credit platform commission: %w", err)
+			}
+		} else {
+			// Fallback : appel hors transaction (fonctionnel mais moins idéal)
+			if err := s.platformRevenueRepo.CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
+				return fmt.Errorf("failed to credit platform commission: %w", err)
+			}
+		}
+
+		s.logger.Info().
+			Str("proof_id", proofID).
+			Int64("commission_cents", commissionCents).
+			Msg("Platform revenue credited atomically")
+	}
+
+	// 🛡️ P2 #1 : 2. Créditer le wallet marchand
 	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
 	if err != nil {
 		if err.Error() == "merchant wallet not found" {
@@ -332,14 +337,14 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		}
 	}
 
-	netToBalance, swept, err := wallet.CreditWithDebtSweep(amountCents)
+	netToBalance, swept, err := wallet.CreditWithDebtSweep(merchantAmountCents)
 	if err != nil {
 		return fmt.Errorf("failed to credit wallet with debt sweep: %w", err)
 	}
 
 	refTypeCopy := refType
 	desc := fmt.Sprintf("Auto-release (Proof: %s, Escrow: %s) gross=%d net=%d swept=%d",
-		proofID, escrowID, amountCents, netToBalance, swept)
+		proofID, escrowID, merchantAmountCents, netToBalance, swept)
 
 	if netToBalance > 0 {
 		txn := &entity.WalletTransaction{
@@ -355,7 +360,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			CreatedAt:         time.Now().UTC(),
 		}
 		if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, txn); err != nil {
-			// Concurrent credit already committed → treat as success
 			if isUniqueViolation(err) {
 				s.logger.Info().
 					Str("proof_id", proofID).
@@ -405,12 +409,12 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	s.logger.Info().
 		Str("proof_id", proofID).
 		Str("shop_id", shopID).
-		Int64("gross_cents", amountCents).
+		Int64("gross_cents", merchantAmountCents).
+		Int64("commission_cents", commissionCents).
 		Int64("net_to_balance", netToBalance).
 		Int64("swept_cents", swept).
 		Int64("balance_cents", wallet.BalanceCents).
-		Int64("debt_cents", wallet.DebtCents).
-		Msg("Merchant wallet credited atomically with debt sweep")
+		Msg("Commission + Wallet credited atomically with debt sweep")
 
 	return nil
 }
