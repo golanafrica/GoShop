@@ -33,7 +33,7 @@ type CreditUpdater interface {
 type ProcessWebhookUsecase struct {
 	paymentRepo        repository.PaymentRepository
 	registry           PaymentRegistry
-	txManager          repository.TxManager // 🆕 AJOUT : Pour l'atomicité des opérations financières
+	txManager          repository.TxManager
 	db                 repository.DBExecutor
 	shopRepo           repository.ShopRepository
 	shopSettingsRepo   ShopPaymentSettingsRepository
@@ -47,7 +47,7 @@ type ProcessWebhookUsecase struct {
 func NewProcessWebhookUsecase(
 	paymentRepo repository.PaymentRepository,
 	registry PaymentRegistry,
-	txManager repository.TxManager, // 🆕 AJOUT
+	txManager repository.TxManager,
 	db repository.DBExecutor,
 	shopRepo repository.ShopRepository,
 	shopSettingsRepo ShopPaymentSettingsRepository,
@@ -59,7 +59,7 @@ func NewProcessWebhookUsecase(
 	return &ProcessWebhookUsecase{
 		paymentRepo:      paymentRepo,
 		registry:         registry,
-		txManager:        txManager, // 🆕 AJOUT
+		txManager:        txManager,
 		db:               db,
 		shopRepo:         shopRepo,
 		shopSettingsRepo: shopSettingsRepo,
@@ -182,9 +182,10 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
 
-			// 🛡️ P0 : Propager l'erreur si la confirmation de commande échoue, pour permettre un replay sûr.
+			// 🛡️ CORRECTION CRITIQUE : Assigner processErr avant le return pour que le defer marque l'échec
 			if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
-				return fmt.Errorf("failed to ensure order confirmed on retry: %w", err)
+				processErr = fmt.Errorf("failed to ensure order confirmed on retry: %w", err)
+				return processErr
 			}
 			return nil
 		}
@@ -336,7 +337,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					Msg("Funds locked in Escrow atomically (Phase 2 settlement)")
 
 				// 🛡️ P0 : Confirmer la commande. Si cela échoue, on propage l'erreur pour que le webhook reste processed=false et soit rejoué.
-				// Au prochain replay, escrow_created=true, donc on sautera la création d'escrow et on réessaiera uniquement ensureOrderConfirmed.
 				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
 					processErr = fmt.Errorf("failed to ensure order confirmed: %w", err)
 					return processErr
@@ -425,7 +425,6 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		if orderUUID, err := uuid.Parse(orderIDStr); err == nil {
 			payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
 			if searchErr == nil && len(payments) > 0 {
-				// 🛡️ P0 : Plus de fallback aveugle sur payments[0]. On exige une identification sans ambiguïté.
 				chosen, err := pickBestPaymentForOrder(payments)
 				if err != nil {
 					return nil, "", err
@@ -441,7 +440,6 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
 }
 
-// pickBestPaymentForOrder: 🛡️ P0 Fix - avoid blind payments[0] fallback.
 func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error) {
 	if len(payments) == 0 {
 		return nil, fmt.Errorf("no payments found for order")
@@ -450,22 +448,18 @@ func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error
 		return payments[0], nil
 	}
 
-	// 1. Prefer non-terminal (still open, e.g., pending/processing)
 	for _, p := range payments {
 		if p != nil && !p.IsTerminal() {
 			return p, nil
 		}
 	}
 
-	// 2. Prefer SUCCESS already waiting for escrow (edge case where webhook is retried)
 	for _, p := range payments {
 		if p != nil && p.Status == entity.PaymentStatusSuccess {
 			return p, nil
 		}
 	}
 
-	// 3. If multiple terminal payments exist (e.g., multiple failed attempts), we CANNOT safely guess.
-	// Return an error to force manual reconciliation or rely on strict provider_ref matching earlier.
 	return nil, fmt.Errorf("ambiguous payment state for order: multiple terminal payments exist, manual reconciliation required")
 }
 
@@ -497,7 +491,6 @@ func markSuccessProviderRef(p *entity.Payment, event *payment.WebhookEvent) stri
 	return event.ProviderRef
 }
 
-// 🛡️ P0 Fix : Gère correctement l'erreur retournée par MarkAccepted()
 func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, paymentEntity *entity.Payment, logger *zerolog.Logger) error {
 	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
 		return nil
@@ -513,10 +506,9 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	}
 
 	if order.Status != string(entity.OrderStatusPending) {
-		return nil // Already confirmed or in another state, nothing to do (idempotent)
+		return nil
 	}
 
-	// 🛡️ CORRECTION : Vérification de l'erreur retournée par MarkAccepted()
 	if err := order.MarkAccepted(); err != nil {
 		if logger != nil {
 			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to mark order as accepted")
@@ -537,8 +529,6 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
-// recordWebhook: INSERT audit. processed starts false when signature is valid.
-// ON CONFLICT: if already processed=true → ErrWebhookAlreadyProcessed; if false → allow retry.
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -562,7 +552,6 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		"raw": string(payload),
 	})
 
-	// P1-C: never mark processed=true at insert time
 	processed := false
 
 	query := `
@@ -595,7 +584,6 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		if scanErr := uc.db.QueryRowContext(ctx, q, provider, externalID).Scan(&already); scanErr == nil && already {
 			return ErrWebhookAlreadyProcessed
 		}
-		// processed=false → retry path, not an error
 		zerolog.Ctx(ctx).Info().
 			Str("provider", string(provider)).
 			Str("external_id", externalID).
@@ -627,7 +615,6 @@ func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
 	}
-	// Keep processed=false so provider can retry
 	_, err := uc.db.ExecContext(ctx, `
 		UPDATE payment_webhooks
 		SET processed = false,
