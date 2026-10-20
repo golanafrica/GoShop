@@ -116,6 +116,21 @@ func (mr *MockTontineVoucherRepositoryMockRecorder) FindByCustomerID(ctx, custom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByCustomerID", reflect.TypeOf((*MockTontineVoucherRepository)(nil).FindByCustomerID), ctx, customerID)
 }
 
+// FindByGroupAndCycle mocks base method.
+func (m *MockTontineVoucherRepository) FindByGroupAndCycle(ctx context.Context, groupID string, cycleNumber int) ([]*entity.TontineVoucher, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByGroupAndCycle", ctx, groupID, cycleNumber)
+	ret0, _ := ret[0].([]*entity.TontineVoucher)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByGroupAndCycle indicates an expected call of FindByGroupAndCycle.
+func (mr *MockTontineVoucherRepositoryMockRecorder) FindByGroupAndCycle(ctx, groupID, cycleNumber any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByGroupAndCycle", reflect.TypeOf((*MockTontineVoucherRepository)(nil).FindByGroupAndCycle), ctx, groupID, cycleNumber)
+}
+
 // FindByGroupID mocks base method.
 func (m *MockTontineVoucherRepository) FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error) {
 	m.ctrl.T.Helper()
