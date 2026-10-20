@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,6 +26,14 @@ import (
 //  2. FindByReferenceIDAdmin avant crédit
 //  3. Unique partial index uq_wallet_txn_ref_completed
 //  4. CreditWithDebtSweep : dette d'abord, puis solde disponible
+//  5. TX SQL unique : ledger (sale_credit / debt_sweep) + wallet.Update
+//     → plus de divergence « ligne ledger sans solde »
+//
+// Note : ClaimRelease reste hors TX (claim atomique côté escrow).
+// Si le crédit échoue après claim, les retries de creditMerchantWallet
+// réappliquent ledger+wallet de façon atomique. Les états legacy
+// (ledger sans update, avant ce fix) relèvent d'un job de reconcil.
+// ============================================================
 
 type EscrowAutoReleaseScheduler struct {
 	deliveryProofRepo   repository.DeliveryProofRepository
@@ -36,6 +46,7 @@ type EscrowAutoReleaseScheduler struct {
 	walletTxnRepo       repository.WalletTransactionRepository
 	platformRevenueRepo repository.PlatformRevenueRepository
 	creditWalletUC      *walletusecase.CreditWalletUsecase
+	txManager           repository.TxManager
 	batchSize           int
 	maxRetries          int
 	logger              zerolog.Logger
@@ -52,6 +63,7 @@ func NewEscrowAutoReleaseScheduler(
 	walletTxnRepo repository.WalletTransactionRepository,
 	platformRevenueRepo repository.PlatformRevenueRepository,
 	creditWalletUC *walletusecase.CreditWalletUsecase,
+	txManager repository.TxManager,
 	logger zerolog.Logger,
 ) *EscrowAutoReleaseScheduler {
 	return &EscrowAutoReleaseScheduler{
@@ -65,6 +77,7 @@ func NewEscrowAutoReleaseScheduler(
 		walletTxnRepo:       walletTxnRepo,
 		platformRevenueRepo: platformRevenueRepo,
 		creditWalletUC:      creditWalletUC,
+		txManager:           txManager,
 		batchSize:           100,
 		maxRetries:          3,
 		logger:              logger.With().Str("component", "escrow_auto_release_scheduler").Logger(),
@@ -193,6 +206,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger.Info().Msg("Escrow claimed successfully")
 
+	// Commission plateforme (hors TX wallet — P2 reprise dédiée si échec)
 	if escrow.CommissionCents > 0 && s.platformRevenueRepo != nil {
 		const refType = "escrow_auto_release"
 		if err := s.platformRevenueRepo.CreditRevenue(ctx, escrow.CommissionCents, refType, proof.ID); err != nil {
@@ -260,7 +274,8 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	return merchantAmount, nil
 }
 
-// creditMerchantWallet : CreditWithDebtSweep + ledger sale_credit (net) + debt_sweep.
+// creditMerchantWallet crédite le wallet + écrit le ledger dans UNE transaction SQL.
+// Échec partiel → ROLLBACK (pas de ligne ledger orpheline sans solde).
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -270,6 +285,12 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 ) error {
 	const refType = "escrow_auto_release"
 
+	if s.txManager == nil {
+		return fmt.Errorf("txManager is required for atomic escrow wallet credit (proof=%s)", proofID)
+	}
+
+	// Idempotence : une txn completed pour cette ref a été commitée avec le wallet
+	// dans la même TX (depuis ce fix). Skip sûr pour rejeu / multi-instance.
 	existing, err := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
 	if err == nil && existing != nil {
 		s.logger.Info().
@@ -289,11 +310,21 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	}
 	shopCtx := tenant.WithTenant(ctx, shop)
 
-	wallet, err := s.walletRepo.FindByShopID(shopCtx, shopID)
+	tx, txErr := s.txManager.BeginTx(ctx)
+	if txErr != nil {
+		return fmt.Errorf("failed to begin tx: %w", txErr)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			s.logger.Error().Err(rbErr).Str("proof_id", proofID).Msg("unexpected error during transaction rollback")
+		}
+	}()
+
+	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
 	if err != nil {
 		if err.Error() == "merchant wallet not found" {
 			wallet = entity.NewMerchantWallet(shopID)
-			if err := s.walletRepo.Create(shopCtx, wallet); err != nil {
+			if err := s.walletRepo.WithTX(tx).Create(shopCtx, wallet); err != nil {
 				return fmt.Errorf("failed to create merchant wallet: %w", err)
 			}
 		} else {
@@ -310,7 +341,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	desc := fmt.Sprintf("Auto-release (Proof: %s, Escrow: %s) gross=%d net=%d swept=%d",
 		proofID, escrowID, amountCents, netToBalance, swept)
 
-	// 1) sale_credit net (skip si 0 — full sweep)
 	if netToBalance > 0 {
 		txn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
@@ -324,7 +354,8 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			Status:            entity.WalletTxCompleted,
 			CreatedAt:         time.Now().UTC(),
 		}
-		if err := s.walletTxnRepo.Create(shopCtx, txn); err != nil {
+		if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, txn); err != nil {
+			// Concurrent credit already committed → treat as success
 			if isUniqueViolation(err) {
 				s.logger.Info().
 					Str("proof_id", proofID).
@@ -334,17 +365,12 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			return fmt.Errorf("failed to create wallet transaction: %w", err)
 		}
 	} else {
-		// Full debt sweep : marqueur d'idempotence via debt_sweep ref escrow_auto_release
-		// On crée quand même une ligne sale_credit? Non (amount 0 interdit).
-		// Filet : si concurrent retry, FindByReferenceIDAdmin ne voit rien —
-		// on s'appuie sur ClaimRelease déjà consommé + unique debt_sweep optionnel.
 		s.logger.Info().
 			Str("proof_id", proofID).
 			Int64("swept", swept).
 			Msg("Full debt sweep — no sale_credit line (net=0)")
 	}
 
-	// 2) debt_sweep audit
 	if swept > 0 {
 		sweepRefType := "debt_sweep"
 		sweepDesc := fmt.Sprintf("Debt sweep on auto-release proof=%s escrow=%s", proofID, escrowID)
@@ -361,16 +387,19 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			Status:            entity.WalletTxCompleted,
 			CreatedAt:         time.Now().UTC(),
 		}
-		if err := s.walletTxnRepo.Create(shopCtx, sweepTxn); err != nil {
+		if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, sweepTxn); err != nil {
 			if !isUniqueViolation(err) {
-				s.logger.Warn().Err(err).Str("proof_id", proofID).Msg("Failed to create debt_sweep audit transaction")
+				return fmt.Errorf("failed to create debt_sweep transaction: %w", err)
 			}
 		}
 	}
 
-	// 3) Persister wallet (après ledger)
-	if err := s.walletRepo.Update(shopCtx, wallet); err != nil {
-		return fmt.Errorf("failed to update wallet: %w", err)
+	if err := s.walletRepo.WithTX(tx).Update(shopCtx, wallet); err != nil {
+		return fmt.Errorf("failed to update wallet balance: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit tx: %w", err)
 	}
 
 	s.logger.Info().
@@ -381,7 +410,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		Int64("swept_cents", swept).
 		Int64("balance_cents", wallet.BalanceCents).
 		Int64("debt_cents", wallet.DebtCents).
-		Msg("Merchant wallet credited with debt sweep")
+		Msg("Merchant wallet credited atomically with debt sweep")
 
 	return nil
 }
