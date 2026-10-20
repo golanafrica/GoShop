@@ -497,14 +497,14 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
-	mockTxManager := mockrepo.NewMockTxManager(ctrl) // 🆕 AJOUTÉ
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 	mockDB := createMockDBExecutor(ctrl)
 	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
 	mockProvider := mockusecase.NewMockProvider(ctrl)
 	mockTontineUC := (*paymentusecase.ProcessTontineWebhookUsecase)(nil)
 
 	uc := paymentusecase.NewProcessWebhookUsecase(
-		mockPaymentRepo, mockRegistry, mockTxManager, mockDB, mockShopRepo, // 🆕 mockTxManager ajouté
+		mockPaymentRepo, mockRegistry, mockTxManager, mockDB, mockShopRepo,
 		nil, mockTontineUC, nil, nil, nil,
 	)
 
@@ -512,18 +512,16 @@ func TestProcessWebhookUsecase_RecordWebhookError(t *testing.T) {
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
 	event := createTestWebhookEvent("TXN-123", entity.PaymentStatusSuccess)
 	mockProvider.EXPECT().ValidateWebhook(gomock.Any(), gomock.Any(), gomock.Any()).Return(event, nil)
-	mockDB.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("database error")).AnyTimes()
 
-	shopID := uuid.New()
-	paymentEntity, _ := entity.NewPayment(shopID, uuid.New(), entity.ProviderYengaPay, 50000)
-	paymentEntity.MarkProcessing()
-
-	testShop := &entity.Shop{ID: shopID, Name: "Test Shop", Slug: "test-shop"}
-
-	mockPaymentRepo.EXPECT().FindByProviderRef(gomock.Any(), entity.ProviderYengaPay, "TXN-123").Return(paymentEntity, nil)
-	mockShopRepo.EXPECT().FindByID(gomock.Any(), shopID).Return(testShop, nil)
-	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
+	// 🛡️ CORRECTION : On simule l'échec de l'écriture Inbox avec le BON NOMBRE d'arguments (10)
+	mockDB.EXPECT().ExecContext(
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+		gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(),
+	).Return(nil, errors.New("database error")).AnyTimes()
 
 	err := uc.Execute(ctx, entity.ProviderYengaPay, []byte("payload"), "signature")
-	assert.NoError(t, err)
+
+	// 🛡️ On s'attend MAINTENANT à une erreur, car l'Inbox est obligatoire
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to persist webhook inbox")
 }
