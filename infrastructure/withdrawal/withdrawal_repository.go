@@ -114,6 +114,8 @@ func (r *WithdrawalRepositoryPostgres) FindByShopID(ctx context.Context, shopID 
 }
 
 // FindCompensationPending file d'attente du job retry (FIFO).
+// 🛡️ CORRECTION CRITIQUE P1 : Filtre STRICTEMENT sur 'compensation_pending'.
+// Ne doit JAMAIS inclure 'reconciliation_required' pour éviter un reverse automatique non désiré.
 func (r *WithdrawalRepositoryPostgres) FindCompensationPending(
 	ctx context.Context,
 	limit int,
@@ -232,7 +234,8 @@ func (r *WithdrawalRepositoryPostgres) scanFromRows(rows *sql.Rows) (*entity.Wit
 	return w, nil
 }
 
-// FindStuckPendingWithdrawals trouve les retraits 'pending' avec un débit wallet vieux de X minutes
+// FindStuckPendingWithdrawals trouve les retraits 'pending' ou 'processing' avec un débit wallet vieux de X minutes
+// 🛡️ AMÉLIORATION : Vérifie aussi 'processing' au cas où le crash surviendrait après l'envoi au prestataire mais avant la réponse.
 func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error) {
 	if limit <= 0 {
 		limit = 50
@@ -241,11 +244,10 @@ func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.C
 		minAgeMinutes = 15
 	}
 
-	// Utilisation de EXISTS pour éviter les doublons en cas de multiples tentatives de débit (rare mais possible)
 	query := `
 		SELECT ` + withdrawalSelectCols + `
 		FROM withdrawals w
-		WHERE w.status = 'pending'
+		WHERE w.status IN ('pending', 'processing')
 		  AND EXISTS (
 		      SELECT 1 FROM wallet_transactions wt 
 		      WHERE wt.reference_id = w.id::text 
