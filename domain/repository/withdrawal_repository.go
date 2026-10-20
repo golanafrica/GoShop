@@ -23,6 +23,8 @@ type WithdrawalRepository interface {
 	// maxAttempts > 0 exclut les rows deja au plafond ; 0 = pas de filtre attempts.
 	FindCompensationPending(ctx context.Context, limit int, maxAttempts int) ([]*entity.Withdrawal, error)
 
+	FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error)
+
 	// WithTX retourne le repository attache a une transaction
 	WithTX(tx Tx) WithdrawalRepository
 }

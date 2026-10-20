@@ -1099,6 +1099,16 @@ func (a *App) setupRouter() {
 	)
 	a.Logger.Info().Msg("✅ P0-A Compensation pending scheduler initialized")
 
+	// ============================================================
+	// 🆕 P1 : WITHDRAWAL RECONCILIATION SCHEDULER
+	// ============================================================
+	withdrawalReconcilSched := appscheduler.NewWithdrawalReconciliationScheduler(
+		withdrawalRepo,
+		notifService,
+		a.Logger.Logger,
+	)
+	a.Logger.Info().Msg("✅ P1 Withdrawal reconciliation scheduler initialized")
+
 	// -- Handlers (existants)
 	refreshHandler := refreshhandler.NewRefreshHandler(refreshUsecase)
 
@@ -1704,6 +1714,12 @@ func (a *App) setupRouter() {
 		compensationPendingSchedule = "*/5 * * * *"
 	}
 
+	// 🆕 Ajout du schedule pour la réconciliation des retraits (toutes les 10 min)
+	withdrawalReconcilSchedule := os.Getenv("WITHDRAWAL_RECONCILIATION_SCHEDULE")
+	if withdrawalReconcilSchedule == "" {
+		withdrawalReconcilSchedule = "*/10 * * * *"
+	}
+
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
 		onlinePaymentSched,
@@ -1712,6 +1728,7 @@ func (a *App) setupRouter() {
 		installmentAutoReleaseSched,
 		walletGraceExpirySched,
 		compensationPendingSched,
+		withdrawalReconcilSched, // 🛡️ AJOUT : Le scheduler
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
@@ -1720,6 +1737,7 @@ func (a *App) setupRouter() {
 		installmentSchedule,
 		walletGraceExpirySchedule,
 		compensationPendingSchedule,
+		withdrawalReconcilSchedule, // 🛡️ AJOUT : Le schedule
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1733,9 +1751,9 @@ func (a *App) setupRouter() {
 			Str("installment_schedule", installmentSchedule).
 			Str("wallet_grace_expiry_schedule", walletGraceExpirySchedule).
 			Str("compensation_pending_schedule", compensationPendingSchedule).
+			Str("withdrawal_reconcil_schedule", withdrawalReconcilSchedule). // 🛡️ AJOUT : Le log
 			Msg("All schedulers started successfully")
 	}
-
 	a.Router = r
 
 	duration := time.Since(startTime)
