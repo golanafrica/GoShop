@@ -48,31 +48,33 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 		log.Warn().
 			Str("withdrawal_id", w.ID.String()).
 			Str("shop_id", w.ShopID.String()).
-			Msg("CRITICAL: Withdrawal is pending but wallet was debited >15 min ago. Flagging for manual reconciliation.")
+			Msg("CRITICAL: Withdrawal is stuck. Flagging for manual reconciliation (NO AUTO REVERSE).")
 
-		// 🛡️ Action sûre : Passer en compensation_pending pour alerter l'admin
-		// et empêcher l'utilisateur de relancer un retrait pendant que l'admin vérifie le dashboard.
-		reason := "Stuck in pending after wallet debit. Requires manual provider verification."
-		w.MarkCompensationPending(reason)
-
-		if err := s.withdrawalRepo.Update(ctx, w); err != nil {
-			log.Error().Err(err).Str("withdrawal_id", w.ID.String()).Msg("Failed to update stuck withdrawal")
+		// 🛡️ CORRECTION CRITIQUE P1 : Utiliser le nouveau statut qui NE déclenche PAS de reverse automatique
+		reason := "Stuck in pending/processing after wallet debit. Provider status unknown. Manual verification required."
+		if err := w.MarkReconciliationRequired(reason); err != nil {
+			log.Error().Err(err).Str("withdrawal_id", w.ID.String()).Msg("Failed to mark withdrawal as reconciliation_required")
 			continue
 		}
 
-		// Alerte Admin
+		if err := s.withdrawalRepo.Update(ctx, w); err != nil {
+			log.Error().Err(err).Str("withdrawal_id", w.ID.String()).Msg("Failed to update withdrawal status to reconciliation_required")
+			continue
+		}
+
+		// Alerte Admin pour vérification manuelle du dashboard prestataire
 		if s.notifService != nil {
 			req := &service.NotificationRequest{
-				Type:   "admin_withdrawal_stuck",
+				Type:   "admin_withdrawal_reconciliation_required",
 				ShopID: w.ShopID.String(),
 				Data: map[string]interface{}{
 					"withdrawal_id": w.ID.String(),
 					"amount_cents":  w.AmountCents,
-					"message":       "Withdrawal debited but stuck in pending. Check provider dashboard.",
+					"message":       "Withdrawal stuck. Check provider dashboard before taking any manual action.",
 				},
 			}
 			if sendErr := s.notifService.SendNotification(ctx, req); sendErr != nil {
-				log.Error().Err(sendErr).Msg("Failed to send admin withdrawal stuck alert")
+				log.Error().Err(sendErr).Msg("Failed to send admin reconciliation alert")
 			}
 		}
 	}

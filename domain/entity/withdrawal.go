@@ -2,6 +2,7 @@ package entity
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,12 +12,13 @@ import (
 type WithdrawalStatus string
 
 const (
-	WithdrawalStatusPending             WithdrawalStatus = "pending"
-	WithdrawalStatusProcessing          WithdrawalStatus = "processing"
-	WithdrawalStatusSuccess             WithdrawalStatus = "success"
-	WithdrawalStatusFailed              WithdrawalStatus = "failed"
-	WithdrawalStatusCancelled           WithdrawalStatus = "cancelled"
-	WithdrawalStatusCompensationPending WithdrawalStatus = "compensation_pending" // 🆕 NOUVEAU : Pour les échecs de reverse nécessitant une réconciliation
+	WithdrawalStatusPending                WithdrawalStatus = "pending"
+	WithdrawalStatusProcessing             WithdrawalStatus = "processing"
+	WithdrawalStatusSuccess                WithdrawalStatus = "success"
+	WithdrawalStatusFailed                 WithdrawalStatus = "failed"
+	WithdrawalStatusCancelled              WithdrawalStatus = "cancelled"
+	WithdrawalStatusCompensationPending    WithdrawalStatus = "compensation_pending"
+	WithdrawalStatusReconciliationRequired WithdrawalStatus = "reconciliation_required" // 🛡️ AJOUT : Résultat fournisseur inconnu, NE PAS REMBOURSER AUTOMATIQUEMENT
 )
 
 // WithdrawalPaymentMethod représente la méthode de paiement du retrait
@@ -116,8 +118,6 @@ func (w *Withdrawal) MarkSuccess(feesCents, netAmountCents int64, operatorTxID s
 }
 
 // MarkFailed marque le retrait comme echoue.
-// Autorise pending, processing ET compensation_pending
-// (fin de retry job apres reverse reussi).
 func (w *Withdrawal) MarkFailed(errorMsg string) error {
 	if w.Status != WithdrawalStatusPending &&
 		w.Status != WithdrawalStatusProcessing &&
@@ -133,7 +133,6 @@ func (w *Withdrawal) MarkFailed(errorMsg string) error {
 }
 
 // RecordCompensationAttempt enregistre une tentative de reverse echouee
-// sans changer le status (reste compensation_pending).
 func (w *Withdrawal) RecordCompensationAttempt(errMsg string) {
 	now := time.Now().UTC()
 	w.CompensationAttempts++
@@ -144,7 +143,7 @@ func (w *Withdrawal) RecordCompensationAttempt(errMsg string) {
 	}
 }
 
-// MarkCompensationPending marque le retrait comme en attente de compensation (nouveau)
+// MarkCompensationPending marque le retrait comme en attente de compensation (échec confirmé)
 func (w *Withdrawal) MarkCompensationPending(reason string) {
 	now := time.Now().UTC()
 	w.Status = WithdrawalStatusCompensationPending
@@ -152,4 +151,16 @@ func (w *Withdrawal) MarkCompensationPending(reason string) {
 	w.CompensationAttempts++
 	w.LastCompensationAt = &now
 	w.UpdatedAt = now
+}
+
+// 🛡️ NOUVEAU : MarkReconciliationRequired marque le retrait comme nécessitant une vérification manuelle.
+// Cela NE déclenche PAS de reverse automatique du wallet.
+func (w *Withdrawal) MarkReconciliationRequired(reason string) error {
+	if w.Status != WithdrawalStatusPending && w.Status != WithdrawalStatusProcessing {
+		return fmt.Errorf("cannot mark as reconciliation_required: current status is %s", w.Status)
+	}
+	w.Status = WithdrawalStatusReconciliationRequired
+	w.FailureReason = &reason
+	w.UpdatedAt = time.Now().UTC()
+	return nil
 }
