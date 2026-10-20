@@ -1042,7 +1042,6 @@ func (a *App) setupRouter() {
 	)
 
 	a.Logger.Info().Msg("✅ v3.3.0 Tontine scheduler initialized")
-
 	// ============ 🆕 v4.7.0 : ESCROW AUTO-RELEASE SCHEDULER ============
 	escrowAutoReleaseSched := appscheduler.NewEscrowAutoReleaseScheduler(
 		deliveryProofRepo,
@@ -1055,11 +1054,11 @@ func (a *App) setupRouter() {
 		walletTxnRepo,
 		platformRevenueRepo,
 		creditWalletUC,
+		txmanagerRepo, // 🛡️ CORRECTION : Utiliser le nom exact de la variable déclarée plus haut
 		a.Logger.Logger,
 	)
 
-	a.Logger.Info().Msg("✅ v4.7.0 Escrow auto-release scheduler initialized")
-
+	a.Logger.Info().Msg("✅ v4.7.0 Escrow auto-release scheduler initialized with atomic transactions")
 	// ============ 🆕 v5.1.0 : INSTALLMENT AUTO-RELEASE SCHEDULER ============
 	installmentAutoReleaseSched := appscheduler.NewInstallmentAutoReleaseScheduler(
 		postgresOrderRepo,
