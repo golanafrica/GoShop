@@ -37,4 +37,7 @@ type PlatformRevenueRepository interface {
 
 	// CountTransactions compte les lignes pour la même fenêtre.
 	CountTransactions(ctx context.Context, from, to time.Time) (int, error)
+
+	// 🛡️ AJOUT P2 #1 : Permet d'attacher le repository à une transaction existante
+	WithTx(tx Tx) PlatformRevenueRepository
 }

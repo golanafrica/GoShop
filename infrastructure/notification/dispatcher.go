@@ -2,6 +2,7 @@ package notification
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"Goshop/domain/entity"
@@ -19,7 +20,8 @@ type NotificationDispatcher struct {
 	wsHub           *wsinfra.Hub
 	emailProvider   NotificationProvider
 	telegramService *TelegramService
-	notifRepo       repository.NotificationRepository // 🆕 AJOUTÉ : Pour la persistance
+	notifRepo       repository.NotificationRepository
+	failedNotifRepo repository.FailedNotificationRepository // 🆕 AJOUTÉ : Pour la file de retry
 	customerRepo    repository.CustomerRepositoryInterface
 	shopRepo        repository.ShopRepository
 	userRepo        userrepository.UserRepository
@@ -31,7 +33,8 @@ func NewNotificationDispatcher(
 	wsHub *wsinfra.Hub,
 	emailProvider NotificationProvider,
 	telegramService *TelegramService,
-	notifRepo repository.NotificationRepository, // 🆕 AJOUTÉ
+	notifRepo repository.NotificationRepository,
+	failedNotifRepo repository.FailedNotificationRepository, // 🆕 AJOUTÉ
 	customerRepo repository.CustomerRepositoryInterface,
 	shopRepo repository.ShopRepository,
 	userRepo userrepository.UserRepository,
@@ -41,7 +44,8 @@ func NewNotificationDispatcher(
 		wsHub:           wsHub,
 		emailProvider:   emailProvider,
 		telegramService: telegramService,
-		notifRepo:       notifRepo, // 🆕 AJOUTÉ
+		notifRepo:       notifRepo,
+		failedNotifRepo: failedNotifRepo, // 🆕 AJOUTÉ
 		customerRepo:    customerRepo,
 		shopRepo:        shopRepo,
 		userRepo:        userRepo,
@@ -50,7 +54,45 @@ func NewNotificationDispatcher(
 }
 
 // ============================================================
-// NOUVEAU HELPER : Sauvegarde + Envoi
+// NOUVEAU HELPER : Sauvegarde pour Retry
+// ============================================================
+
+func (d *NotificationDispatcher) saveToRetryQueue(ctx context.Context, notifType service.NotificationType, shopID, recipientEmail string, data map[string]interface{}, errMsg string) {
+	if d.failedNotifRepo == nil {
+		return
+	}
+
+	req := &service.NotificationRequest{
+		Type:           notifType,
+		RecipientEmail: recipientEmail,
+		ShopID:         shopID,
+		Data:           data,
+	}
+
+	payloadBytes, err := json.Marshal(req)
+	if err != nil {
+		d.logger.Error().Err(err).Msg("Failed to marshal notification request for retry queue")
+		return
+	}
+
+	failedNotif := &entity.FailedNotification{
+		NotificationType: string(notifType),
+		ShopID:           &shopID,
+		Payload:          payloadBytes,
+		ErrorMessage:     &errMsg,
+		RetryCount:       0,
+		MaxRetries:       3,
+	}
+
+	if err := d.failedNotifRepo.SaveFailedNotification(ctx, failedNotif); err != nil {
+		d.logger.Error().Err(err).Msg("Failed to save notification to retry queue")
+	} else {
+		d.logger.Warn().Str("type", string(notifType)).Str("email", recipientEmail).Msg("Notification saved to retry queue")
+	}
+}
+
+// ============================================================
+// NOUVEAU HELPER : Sauvegarde + Envoi WS
 // ============================================================
 
 // saveAndNotify sauvegarde la notification en base de données puis l'envoie via WebSocket
@@ -77,7 +119,7 @@ func (d *NotificationDispatcher) saveAndNotify(userID, notifType, title, message
 }
 
 // ============================================================
-// MÉTHODES D'ENVOI ASYNCHRONES (Canaux)
+// MÉTHODES D'ENVOI ASYNCHRONES (Canaux avec Retry)
 // ============================================================
 
 // sendWebSocketNotification envoie une notification via WebSocket de manière asynchrone
@@ -103,8 +145,8 @@ func (d *NotificationDispatcher) sendWebSocketNotification(_ context.Context, us
 	}()
 }
 
-// sendEmailNotification envoie une notification par email de manière asynchrone
-func (d *NotificationDispatcher) sendEmailNotification(_ context.Context, userEmail, title, message string, data map[string]interface{}) {
+// sendEmailNotification envoie une notification par email de manière asynchrone avec retry en cas d'échec
+func (d *NotificationDispatcher) sendEmailNotification(_ context.Context, notifType service.NotificationType, shopID, userEmail, title, message string, data map[string]interface{}) {
 	if d.emailProvider == nil || userEmail == "" {
 		return
 	}
@@ -113,14 +155,15 @@ func (d *NotificationDispatcher) sendEmailNotification(_ context.Context, userEm
 		bgCtx := context.Background()
 		if err := d.emailProvider.SendClientNotification(bgCtx, userEmail, title, message, data); err != nil {
 			d.logger.Error().Err(err).Str("email", userEmail).Msg("Failed to send email notification")
+			d.saveToRetryQueue(bgCtx, notifType, shopID, userEmail, data, err.Error()) // 🆕 SAUVEGARDE POUR RETRY
 		} else {
 			d.logger.Info().Str("email", userEmail).Msg("Email notification sent successfully")
 		}
 	}()
 }
 
-// sendTelegramNotification envoie une notification via Telegram de manière asynchrone
-func (d *NotificationDispatcher) sendTelegramNotification(_ context.Context, chatID, title, message string, data map[string]interface{}) {
+// sendTelegramNotification envoie une notification via Telegram de manière asynchrone avec retry en cas d'échec
+func (d *NotificationDispatcher) sendTelegramNotification(_ context.Context, notifType service.NotificationType, shopID, chatID, title, message string, data map[string]interface{}) {
 	if d.telegramService == nil || chatID == "" {
 		return
 	}
@@ -137,6 +180,7 @@ func (d *NotificationDispatcher) sendTelegramNotification(_ context.Context, cha
 		bgCtx := context.Background()
 		if err := d.telegramService.SendMessage(bgCtx, chatID, telegramMsg); err != nil {
 			d.logger.Error().Err(err).Str("chat_id", chatID).Msg("Failed to send Telegram notification")
+			d.saveToRetryQueue(bgCtx, notifType, shopID, chatID, data, err.Error()) // 🆕 SAUVEGARDE POUR RETRY
 		} else {
 			d.logger.Info().Str("chat_id", chatID).Msg("Telegram notification sent successfully")
 		}
@@ -219,22 +263,23 @@ func (d *NotificationDispatcher) NotifyOrderStatusChange(ctx context.Context, or
 		"order_id": order.ID,
 		"status":   order.Status,
 	}
+	shopIDStr := shopID.String()
 
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	userEmail := d.getUserEmail(ctx, customerID)
 
 	if userID != "" {
 		eventType := "client_order_" + string(order.Status)
-		d.saveAndNotify(userID, eventType, title, message, data) // 🆕 Sauvegarde + WS
-		d.sendEmailNotification(ctx, userEmail, title, message, data)
-		d.sendTelegramNotification(ctx, d.telegramService.adminChatID, title, message, data) // Alerte admin
+		d.saveAndNotify(userID, eventType, title, message, data)
+		d.sendEmailNotification(ctx, service.NotificationType(eventType), shopIDStr, userEmail, title, message, data)
+		d.sendTelegramNotification(ctx, service.NotificationType("admin_"+eventType), shopIDStr, d.telegramService.adminChatID, title, message, data)
 	}
 
 	shop, err := d.shopRepo.FindByID(ctx, shopID)
 	if err == nil && shop != nil {
 		eventType := "merchant_order_" + string(order.Status)
-		d.saveAndNotify(shop.OwnerID, eventType, title, message, data) // 🆕 Sauvegarde + WS
-		d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
+		d.saveAndNotify(shop.OwnerID, eventType, title, message, data)
+		d.sendEmailNotification(ctx, service.NotificationType(eventType), shopIDStr, d.getShopEmail(ctx, shop.ID), title, message, data)
 	}
 
 	return nil
@@ -244,9 +289,10 @@ func (d *NotificationDispatcher) NotifyMerchantOrderReceived(ctx context.Context
 	title := "Nouvelle commande reçue"
 	message := fmt.Sprintf("Vous avez une nouvelle commande en attente (#%s).", order.ID)
 	data := map[string]interface{}{"order_id": order.ID}
+	shopIDStr := shop.ID.String()
 
-	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantOrderReceived), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
+	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantOrderReceived), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationMerchantOrderReceived, shopIDStr, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
@@ -254,12 +300,13 @@ func (d *NotificationDispatcher) NotifyClientOrderConfirmed(ctx context.Context,
 	title := "Commande confirmée"
 	message := "Votre commande a été acceptée par le marchand."
 	data := map[string]interface{}{"order_id": order.ID}
+	shopIDStr := order.ShopID
 
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
 	if userID != "" {
-		d.saveAndNotify(userID, string(service.NotificationClientOrderConfirmed), title, message, data) // 🆕
+		d.saveAndNotify(userID, string(service.NotificationClientOrderConfirmed), title, message, data)
 	}
-	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationClientOrderConfirmed, shopIDStr, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
@@ -267,12 +314,13 @@ func (d *NotificationDispatcher) NotifyClientOrderRejected(ctx context.Context, 
 	title := "Commande refusée"
 	message := fmt.Sprintf("Votre commande a été refusée. Raison : %s", reason)
 	data := map[string]interface{}{"order_id": order.ID, "reason": reason}
+	shopIDStr := order.ShopID
 
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
 	if userID != "" {
-		d.saveAndNotify(userID, string(service.NotificationClientOrderRejected), title, message, data) // 🆕
+		d.saveAndNotify(userID, string(service.NotificationClientOrderRejected), title, message, data)
 	}
-	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationClientOrderRejected, shopIDStr, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
@@ -280,12 +328,13 @@ func (d *NotificationDispatcher) NotifyClientOrderExpired(ctx context.Context, o
 	title := "Commande expirée"
 	message := "Le délai de paiement de votre commande a expiré."
 	data := map[string]interface{}{"order_id": order.ID}
+	shopIDStr := order.ShopID
 
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
 	if userID != "" {
-		d.saveAndNotify(userID, string(service.NotificationClientOrderExpired), title, message, data) // 🆕
+		d.saveAndNotify(userID, string(service.NotificationClientOrderExpired), title, message, data)
 	}
-	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationClientOrderExpired, shopIDStr, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
@@ -293,9 +342,10 @@ func (d *NotificationDispatcher) NotifyMerchantDeliveryReady(ctx context.Context
 	title := "Commande prête à être livrée"
 	message := fmt.Sprintf("La commande #%s est prête pour la livraison.", order.ID)
 	data := map[string]interface{}{"order_id": order.ID}
+	shopIDStr := shop.ID.String()
 
-	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantDeliveryReady), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
+	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantDeliveryReady), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationMerchantDeliveryReady, shopIDStr, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
@@ -303,12 +353,13 @@ func (d *NotificationDispatcher) NotifyClientOrderDelivered(ctx context.Context,
 	title := "Commande livrée"
 	message := fmt.Sprintf("Votre commande a été livrée avec succès. Montant reçu : %d FCFA", amountReceived/100)
 	data := map[string]interface{}{"order_id": order.ID, "amount": amountReceived}
+	shopIDStr := order.ShopID
 
 	userID := d.getUserIDFromCustomerID(ctx, order.CustomerID)
 	if userID != "" {
-		d.saveAndNotify(userID, string(service.NotificationClientOrderDelivered), title, message, data) // 🆕
+		d.saveAndNotify(userID, string(service.NotificationClientOrderDelivered), title, message, data)
 	}
-	d.sendEmailNotification(ctx, d.getUserEmail(ctx, order.CustomerID), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationClientOrderDelivered, shopIDStr, d.getUserEmail(ctx, order.CustomerID), title, message, data)
 	return nil
 }
 
@@ -316,9 +367,10 @@ func (d *NotificationDispatcher) NotifyMerchantCommissionPaid(ctx context.Contex
 	title := "Commission prélevée"
 	message := fmt.Sprintf("Une commission de %d FCFA a été prélevée sur la commande #%s.", commissionCents/100, order.ID)
 	data := map[string]interface{}{"order_id": order.ID, "commission": commissionCents}
+	shopIDStr := shop.ID.String()
 
-	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantCommissionPaid), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getShopEmail(ctx, shop.ID), title, message, data)
+	d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantCommissionPaid), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationMerchantCommissionPaid, shopIDStr, d.getShopEmail(ctx, shop.ID), title, message, data)
 	return nil
 }
 
@@ -329,9 +381,9 @@ func (d *NotificationDispatcher) NotifyClientDisputeResolved(ctx context.Context
 
 	userID := d.getUserIDFromCustomerID(ctx, customerID)
 	if userID != "" {
-		d.saveAndNotify(userID, string(service.NotificationClientDisputeResolved), title, message, data) // 🆕
+		d.saveAndNotify(userID, string(service.NotificationClientDisputeResolved), title, message, data)
 	}
-	d.sendEmailNotification(ctx, d.getUserEmail(ctx, customerID), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationClientDisputeResolved, "", d.getUserEmail(ctx, customerID), title, message, data)
 	return nil
 }
 
@@ -348,8 +400,8 @@ func (d *NotificationDispatcher) NotifyMerchantDisputeResolved(ctx context.Conte
 
 	shop, err := d.shopRepo.FindByID(ctx, shopUUID)
 	if err == nil && shop != nil {
-		d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantDisputeResolved), title, message, data) // 🆕
-		d.sendEmailNotification(ctx, d.getShopEmail(ctx, shopUUID), title, message, data)
+		d.saveAndNotify(shop.OwnerID, string(service.NotificationMerchantDisputeResolved), title, message, data)
+		d.sendEmailNotification(ctx, service.NotificationMerchantDisputeResolved, shopID, d.getShopEmail(ctx, shopUUID), title, message, data)
 	} else {
 		d.logger.Warn().Err(err).Str("shop_id", shopID).Msg("Cannot send notification: shop not found")
 	}
@@ -360,11 +412,12 @@ func (d *NotificationDispatcher) SendNotification(ctx context.Context, req *serv
 	title := string(req.Type)
 	message := "Notification"
 
-	// Pour SendNotification générique, on essaie de sauvegarder si on a un userID (ici on utilise RecipientPhone comme fallback userID pour l'exemple, à adapter selon ton usage)
 	if req.RecipientPhone != "" {
 		d.saveAndNotify(req.RecipientPhone, string(req.Type), title, message, req.Data)
 	}
-	d.sendEmailNotification(ctx, req.RecipientEmail, title, message, req.Data)
+	if req.RecipientEmail != "" {
+		d.sendEmailNotification(ctx, req.Type, req.ShopID, req.RecipientEmail, title, message, req.Data)
+	}
 	return nil
 }
 
@@ -377,8 +430,8 @@ func (d *NotificationDispatcher) NotifyTontineCyclePaid(ctx context.Context, use
 	message := fmt.Sprintf("Le membre %s a réglé sa cotisation de %s FCFA pour le groupe '%s'.", payerName, amount, groupName)
 	data := map[string]interface{}{"group_name": groupName, "amount": amount, "payer_name": payerName}
 
-	d.saveAndNotify(userID, string(service.NotificationTontineCyclePaid), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationTontineCyclePaid), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationTontineCyclePaid, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }
 
@@ -387,8 +440,8 @@ func (d *NotificationDispatcher) NotifyTontineTurnSoon(ctx context.Context, user
 	message := fmt.Sprintf("Préparez-vous, votre tour de recevoir le bien du groupe '%s' est prévu le %s.", groupName, turnDate)
 	data := map[string]interface{}{"group_name": groupName, "turn_date": turnDate}
 
-	d.saveAndNotify(userID, string(service.NotificationTontineTurnSoon), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationTontineTurnSoon), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationTontineTurnSoon, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }
 
@@ -397,8 +450,8 @@ func (d *NotificationDispatcher) NotifyTontineVoucherReady(ctx context.Context, 
 	message := fmt.Sprintf("Félicitations ! Votre tour est arrivé pour le groupe '%s'. Votre voucher (code: %s) d'un montant de %s FCFA est prêt.", groupName, voucherCode, amountStr)
 	data := map[string]interface{}{"group_name": groupName, "voucher_code": voucherCode, "amount": amountStr}
 
-	d.saveAndNotify(userID, string(service.NotificationTontineVoucherReady), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationTontineVoucherReady), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationTontineVoucherReady, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }
 
@@ -407,8 +460,8 @@ func (d *NotificationDispatcher) NotifyTontineMerchantCycleCompleted(ctx context
 	message := fmt.Sprintf("Le cycle du groupe '%s' est terminé. Le montant de %s FCFA a été crédité sur votre wallet. Voucher généré : %s.", groupName, amountStr, voucherCode)
 	data := map[string]interface{}{"group_name": groupName, "amount": amountStr, "voucher_code": voucherCode}
 
-	d.saveAndNotify(ownerUserID, string(service.NotificationTontineMerchantCycleCompleted), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(ownerUserID), title, message, data)
+	d.saveAndNotify(ownerUserID, string(service.NotificationTontineMerchantCycleCompleted), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationTontineMerchantCycleCompleted, "", d.getUserEmailByID(ownerUserID), title, message, data)
 	return nil
 }
 
@@ -421,8 +474,8 @@ func (d *NotificationDispatcher) NotifyCreditInstallmentDue(ctx context.Context,
 	message := fmt.Sprintf("Votre échéance de %s FCFA arrive dans %d jour(s). Pensez à effectuer votre paiement pour éviter les pénalités.", amount, daysLeft)
 	data := map[string]interface{}{"contract_id": contractID, "amount": amount, "days_left": daysLeft}
 
-	d.saveAndNotify(userID, string(service.NotificationCreditInstallmentDue), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationCreditInstallmentDue), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationCreditInstallmentDue, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }
 
@@ -431,8 +484,8 @@ func (d *NotificationDispatcher) NotifyCreditInstallmentPaid(ctx context.Context
 	message := fmt.Sprintf("Merci ! Votre paiement de %s FCFA a été enregistré avec succès.", amount)
 	data := map[string]interface{}{"contract_id": contractID, "amount": amount}
 
-	d.saveAndNotify(userID, string(service.NotificationCreditInstallmentPaid), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationCreditInstallmentPaid), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationCreditInstallmentPaid, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }
 
@@ -441,7 +494,7 @@ func (d *NotificationDispatcher) NotifyCreditOverdue(ctx context.Context, userID
 	message := fmt.Sprintf("Votre échéance de %s FCFA est en retard de %d jour(s). Veuillez régulariser votre situation dès que possible.", amount, daysOverdue)
 	data := map[string]interface{}{"contract_id": contractID, "amount": amount, "days_overdue": daysOverdue}
 
-	d.saveAndNotify(userID, string(service.NotificationCreditOverdue), title, message, data) // 🆕
-	d.sendEmailNotification(ctx, d.getUserEmailByID(userID), title, message, data)
+	d.saveAndNotify(userID, string(service.NotificationCreditOverdue), title, message, data)
+	d.sendEmailNotification(ctx, service.NotificationCreditOverdue, "", d.getUserEmailByID(userID), title, message, data)
 	return nil
 }

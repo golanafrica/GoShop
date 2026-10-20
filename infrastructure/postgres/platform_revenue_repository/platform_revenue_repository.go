@@ -13,14 +13,19 @@ import (
 
 type PlatformRevenueRepositoryPostgres struct {
 	db *sql.DB
+	tx repository.Tx // 🛡️ AJOUT : Pour supporter les transactions externes
 }
 
 func NewPlatformRevenueRepositoryPostgres(db *sql.DB) repository.PlatformRevenueRepository {
 	return &PlatformRevenueRepositoryPostgres{db: db}
 }
 
+// 🛡️ AJOUT P2 #1 : Méthode pour attacher le repository à une transaction existante
+func (r *PlatformRevenueRepositoryPostgres) WithTx(tx repository.Tx) repository.PlatformRevenueRepository {
+	return &PlatformRevenueRepositoryPostgres{db: r.db, tx: tx}
+}
+
 // CreditRevenue crédite le solde plateforme + ligne d'audit, atomiquement.
-// Une seule commande SQL par Exec/QueryRow (exigence driver pq).
 func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 	ctx context.Context,
 	amountCents int64,
@@ -40,26 +45,33 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 		return fmt.Errorf("referenceID must be a valid UUID: %w", err)
 	}
 
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	// 🛡️ Déterminer quelle transaction utiliser
+	var execTx repository.Tx
+	var isExternalTx bool
 
-	// 1) Lock compte global (ou seed)
+	if r.tx != nil {
+		execTx = r.tx
+		isExternalTx = true
+	} else {
+		var err error
+		execTx, err = r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin tx: %w", err)
+		}
+		isExternalTx = false
+		defer func() { _ = execTx.Rollback() }()
+	}
+
+	// --- LOGIQUE D'ÉCRITURE (utilise execTx dans tous les cas) ---
 	var accountID string
-	err = tx.QueryRowContext(ctx, `
-		SELECT id::text
-		FROM platform_revenue_accounts
-		ORDER BY updated_at ASC
-		LIMIT 1
-		FOR UPDATE
+	err := execTx.QueryRowContext(ctx, `
+		SELECT id::text FROM platform_revenue_accounts ORDER BY updated_at ASC LIMIT 1 FOR UPDATE
 	`).Scan(&accountID)
+
 	if err == sql.ErrNoRows {
-		err = tx.QueryRowContext(ctx, `
+		err = execTx.QueryRowContext(ctx, `
 			INSERT INTO platform_revenue_accounts (balance_cents, total_collected_cents, updated_at)
-			VALUES (0, 0, NOW())
-			RETURNING id::text
+			VALUES (0, 0, NOW()) RETURNING id::text
 		`).Scan(&accountID)
 		if err != nil {
 			return fmt.Errorf("seed platform_revenue_accounts: %w", err)
@@ -68,38 +80,35 @@ func (r *PlatformRevenueRepositoryPostgres) CreditRevenue(
 		return fmt.Errorf("lock platform_revenue_accounts: %w", err)
 	}
 
-	// 2) Audit — UN statement
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO platform_revenue_transactions (
-			transaction_type, amount_cents, reference_type, reference_id, description, created_at
-		) VALUES (
-			'commission_collected', $1, $2, $3::uuid,
-			'Commission collected from escrow auto-release', NOW()
-		)
+	_, err = execTx.ExecContext(ctx, `
+		INSERT INTO platform_revenue_transactions (transaction_type, amount_cents, reference_type, reference_id, description, created_at)
+		VALUES ('commission_collected', $1, $2, $3::uuid, 'Commission collected from escrow auto-release', NOW())
 	`, amountCents, referenceType, referenceID)
 	if err != nil {
 		return fmt.Errorf("insert platform_revenue_transactions: %w", err)
 	}
 
-	// 3) Solde — UN statement, colonne = total_collected_cents (pas total_commission_cents)
-	res, err := tx.ExecContext(ctx, `
+	res, err := execTx.ExecContext(ctx, `
 		UPDATE platform_revenue_accounts
-		SET balance_cents = balance_cents + $1,
-		    total_collected_cents = total_collected_cents + $1,
-		    updated_at = NOW()
+		SET balance_cents = balance_cents + $1, total_collected_cents = total_collected_cents + $1, updated_at = NOW()
 		WHERE id = $2::uuid
 	`, amountCents, accountID)
 	if err != nil {
 		return fmt.Errorf("update platform_revenue_accounts: %w", err)
 	}
+
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("platform_revenue_accounts update matched 0 rows (id=%s)", accountID)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit platform revenue: %w", err)
+	// 🛡️ Ne commiter que si c'est une transaction interne (standalone)
+	if !isExternalTx {
+		if err := execTx.Commit(); err != nil {
+			return fmt.Errorf("commit platform revenue: %w", err)
+		}
 	}
+
 	return nil
 }
 

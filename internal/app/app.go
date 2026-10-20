@@ -16,6 +16,7 @@ import (
 	redis "Goshop/infrastructure/redis"
 
 	freezejobusecase "Goshop/application/usecase/freeze_job_usecase"
+	failednotification "Goshop/infrastructure/postgres/failed_notification" // 🛡️ AJOUTÉ POUR LE RETRY DES NOTIFICATIONS
 	platformsettings "Goshop/infrastructure/postgres/platform_settings"
 	freezejobhandler "Goshop/interfaces/handler/freeze_job_handler"
 
@@ -466,6 +467,9 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ v5.4.0 Notification repository initialized")
 
 	// ============ 🆕 v5.4.0 : NOTIFICATION DISPATCHER ============
+	// 🛡️ P2 #2 : Initialisation du repository pour la file de retry des notifications
+	failedNotifRepo := failednotification.NewFailedNotificationRepositoryPostgres(a.DB)
+
 	var notifService service.NotificationService
 	if wsHub != nil || emailService != nil || telegramService != nil {
 		notifService = notification.NewNotificationDispatcher(
@@ -473,12 +477,13 @@ func (a *App) setupRouter() {
 			emailNotifProvider,
 			telegramService,
 			notifRepo,
+			failedNotifRepo, // 🛡️ AJOUTÉ : Injection du repository de retry
 			postgresCustomerRepo,
 			shopRepo,
 			postgresUserRepo,
 			a.Logger.Logger,
 		)
-		a.Logger.Info().Msg("✅ v5.4.0 Notification Dispatcher initialized (DB + WebSocket + Email + Telegram)")
+		a.Logger.Info().Msg("✅ v5.4.0 Notification Dispatcher initialized (DB + WebSocket + Email + Telegram + Retry Queue)")
 	} else {
 		notifService = notification.NewNoopNotificationService(a.Logger.Logger)
 		a.Logger.Warn().Msg("⚠️ v5.4.0 Notification Dispatcher using Noop")
