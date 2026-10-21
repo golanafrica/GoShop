@@ -1719,11 +1719,24 @@ func (a *App) setupRouter() {
 		compensationPendingSchedule = "*/5 * * * *"
 	}
 
-	// 🆕 Ajout du schedule pour la réconciliation des retraits (toutes les 10 min)
 	withdrawalReconcilSchedule := os.Getenv("WITHDRAWAL_RECONCILIATION_SCHEDULE")
 	if withdrawalReconcilSchedule == "" {
 		withdrawalReconcilSchedule = "*/10 * * * *"
 	}
+
+	// 🆕 PR 6 : Schedule pour le retry des notifications (toutes les 15 min)
+	notifRetrySchedule := os.Getenv("NOTIFICATION_RETRY_SCHEDULE")
+	if notifRetrySchedule == "" {
+		notifRetrySchedule = "*/15 * * * *"
+	}
+
+	// 🆕 PR 6 : Initialisation du scheduler de retry des notifications
+	// Note : failedNotifRepo et notifService sont DÉJÀ déclarés plus haut dans ce fichier !
+	notificationRetrySched := appscheduler.NewNotificationRetryScheduler(
+		failedNotifRepo, // Utilise la variable déjà existante
+		notifService,    // Utilise la variable déjà existante
+		a.Logger.Logger,
+	)
 
 	a.Scheduler = infscheduler.NewCronScheduler(
 		commissionSched,
@@ -1733,7 +1746,8 @@ func (a *App) setupRouter() {
 		installmentAutoReleaseSched,
 		walletGraceExpirySched,
 		compensationPendingSched,
-		withdrawalReconcilSched, // 🛡️ AJOUT : Le scheduler
+		withdrawalReconcilSched,
+		notificationRetrySched, // 🆕 PR 6 : AJOUT
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
@@ -1742,7 +1756,8 @@ func (a *App) setupRouter() {
 		installmentSchedule,
 		walletGraceExpirySchedule,
 		compensationPendingSchedule,
-		withdrawalReconcilSchedule, // 🛡️ AJOUT : Le schedule
+		withdrawalReconcilSchedule,
+		notifRetrySchedule, // 🆕 PR 6 : AJOUT
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1756,15 +1771,17 @@ func (a *App) setupRouter() {
 			Str("installment_schedule", installmentSchedule).
 			Str("wallet_grace_expiry_schedule", walletGraceExpirySchedule).
 			Str("compensation_pending_schedule", compensationPendingSchedule).
-			Str("withdrawal_reconcil_schedule", withdrawalReconcilSchedule). // 🛡️ AJOUT : Le log
+			Str("withdrawal_reconcil_schedule", withdrawalReconcilSchedule).
+			Str("notification_retry_schedule", notifRetrySchedule). // 🆕 PR 6 : AJOUT LOG
 			Msg("All schedulers started successfully")
 	}
+
 	a.Router = r
 
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API)")
+		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API + PR6 Notification Retry)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
