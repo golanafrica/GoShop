@@ -11,13 +11,14 @@ import (
 type PaymentStatus string
 
 const (
-	PaymentStatusPending    PaymentStatus = "pending"
-	PaymentStatusProcessing PaymentStatus = "processing"
-	PaymentStatusSuccess    PaymentStatus = "success"
-	PaymentStatusFailed     PaymentStatus = "failed"
-	PaymentStatusRefunded   PaymentStatus = "refunded"
-	PaymentStatusCancelled  PaymentStatus = "cancelled"
-	PaymentStatusExpired    PaymentStatus = "expired"
+	PaymentStatusPending           PaymentStatus = "pending"
+	PaymentStatusProcessing        PaymentStatus = "processing"
+	PaymentStatusSuccess           PaymentStatus = "success"
+	PaymentStatusFailed            PaymentStatus = "failed"
+	PaymentStatusPartiallyRefunded PaymentStatus = "partially_refunded" // 🆕 PR 5 AUDIT
+	PaymentStatusRefunded          PaymentStatus = "refunded"
+	PaymentStatusCancelled         PaymentStatus = "cancelled"
+	PaymentStatusExpired           PaymentStatus = "expired"
 )
 
 // PaymentProvider représente le fournisseur de paiement
@@ -77,6 +78,9 @@ type Payment struct {
 	// 🆕 CORRECTION DOUBLE PRÉLÈVEMENT : Frais prélevés par le PSP (YengaPay)
 	ProviderFeesCents int64 `json:"provider_fees_cents" db:"provider_fees_cents"`
 
+	// 🆕 PR 5 AUDIT : Suivi des remboursements partiels
+	RefundedAmountCents int64 `json:"refunded_amount_cents" db:"refunded_amount_cents"`
+
 	// Commission
 	CommissionRateBps     int        `json:"commission_rate_bps" db:"commission_rate_bps"`
 	CommissionCents       int64      `json:"commission_cents" db:"commission_cents"`
@@ -87,14 +91,14 @@ type Payment struct {
 // IsValidStatusTransition vérifie si une transition de statut est valide
 func (p *Payment) IsValidStatusTransition(newStatus PaymentStatus) bool {
 	transitions := map[PaymentStatus][]PaymentStatus{
-		// 🆕 AJOUT CRITIQUE : PaymentStatusSuccess autorisé depuis Pending pour gérer le flux ONE_STEP (ex: Orange Money sandbox avec OTP immédiat)
-		PaymentStatusPending:    {PaymentStatusProcessing, PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
-		PaymentStatusProcessing: {PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
-		PaymentStatusSuccess:    {PaymentStatusRefunded},
-		PaymentStatusFailed:     {},
-		PaymentStatusRefunded:   {},
-		PaymentStatusCancelled:  {},
-		PaymentStatusExpired:    {},
+		PaymentStatusPending:           {PaymentStatusProcessing, PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
+		PaymentStatusProcessing:        {PaymentStatusSuccess, PaymentStatusFailed, PaymentStatusCancelled, PaymentStatusExpired},
+		PaymentStatusSuccess:           {PaymentStatusPartiallyRefunded, PaymentStatusRefunded}, // 🆕 PR 5
+		PaymentStatusPartiallyRefunded: {PaymentStatusPartiallyRefunded, PaymentStatusRefunded}, // 🆕 PR 5
+		PaymentStatusFailed:            {},
+		PaymentStatusRefunded:          {},
+		PaymentStatusCancelled:         {},
+		PaymentStatusExpired:           {},
 	}
 
 	allowed, exists := transitions[p.Status]
@@ -120,17 +124,18 @@ func NewPayment(shopID, orderID uuid.UUID, provider PaymentProvider, amountCents
 	expiresAt := now.Add(30 * time.Minute)
 
 	return &Payment{
-		ID:          uuid.New(),
-		ShopID:      shopID,
-		OrderID:     orderID,
-		Provider:    provider,
-		AmountCents: amountCents,
-		Currency:    CurrencyXOF,
-		Status:      PaymentStatusPending,
-		Metadata:    make(map[string]interface{}),
-		ExpiresAt:   &expiresAt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                  uuid.New(),
+		ShopID:              shopID,
+		OrderID:             orderID,
+		Provider:            provider,
+		AmountCents:         amountCents,
+		Currency:            CurrencyXOF,
+		Status:              PaymentStatusPending,
+		RefundedAmountCents: 0,
+		Metadata:            make(map[string]interface{}),
+		ExpiresAt:           &expiresAt,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}, nil
 }
 
@@ -185,13 +190,26 @@ func (p *Payment) MarkFailed(reason string) error {
 	return nil
 }
 
-// MarkRefunded marque le paiement comme remboursé
+// MarkPartiallyRefunded marque le paiement comme partiellement remboursé
+func (p *Payment) MarkPartiallyRefunded(amountCents int64) error {
+	if !p.IsValidStatusTransition(PaymentStatusPartiallyRefunded) {
+		return errors.New("invalid status transition for partial refund from " + string(p.Status))
+	}
+	now := time.Now().UTC()
+	p.Status = PaymentStatusPartiallyRefunded
+	p.RefundedAmountCents += amountCents
+	p.UpdatedAt = now
+	return nil
+}
+
+// MarkRefunded marque le paiement comme totalement remboursé
 func (p *Payment) MarkRefunded() error {
-	if !p.IsValidStatusTransition(PaymentStatusRefunded) {
-		return errors.New("invalid status transition from " + string(p.Status))
+	if p.Status != PaymentStatusSuccess && p.Status != PaymentStatusPartiallyRefunded {
+		return errors.New("invalid status transition to refunded from " + string(p.Status))
 	}
 	now := time.Now().UTC()
 	p.Status = PaymentStatusRefunded
+	p.RefundedAmountCents = p.AmountCents // Garantir que le total est marqué comme remboursé
 	p.CompletedAt = &now
 	p.UpdatedAt = now
 	return nil
@@ -226,7 +244,7 @@ func (p *Payment) IsTerminal() bool {
 		PaymentStatusCancelled, PaymentStatusExpired:
 		return true
 	default:
-		return false
+		return false // partially_refunded n'est PAS terminal car on peut rembourser le reste
 	}
 }
 

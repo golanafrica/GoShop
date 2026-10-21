@@ -872,3 +872,73 @@ func TestInitiatePaymentUsecase_DatabaseFailure(t *testing.T) {
 	assert.Nil(t, response)
 	assert.Contains(t, err.Error(), "update payment")
 }
+
+// ============================================================
+// TESTS : InitiatePaymentUsecase - ONE_STEP Escrow Failure (PR 4 Audit)
+// ============================================================
+
+func TestInitiatePaymentUsecase_OneStepEscrowCreationFails(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
+	mockProvider := mockusecase.NewMockProvider(ctrl)
+
+	uc := paymentusecase.NewInitiatePaymentUsecase(
+		mockPaymentRepo,
+		mockOrderRepo,
+		mockRegistry,
+		nil, // shopPaymentRepo
+		mockEscrowRepo,
+	)
+
+	ctx := createTestContextForPayment()
+	orderID := uuid.New().String()
+	orderUUID, _ := uuid.Parse(orderID)
+
+	testOrder := createTestOrderWithItems(orderID, 50000)
+
+	mockOrderRepo.EXPECT().
+		FindByID(gomock.Any(), orderID).
+		Return(testOrder, nil)
+
+	mockPaymentRepo.EXPECT().
+		FindByOrderID(gomock.Any(), orderUUID).
+		Return([]*entity.Payment{}, nil)
+
+	mockPaymentRepo.EXPECT().
+		Create(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	mockRegistry.EXPECT().
+		GetAvailable(gomock.Any(), entity.ProviderYengaPay).
+		Return(mockProvider, nil)
+
+	// 🛡️ Le provider retourne un succès immédiat (ONE_STEP)
+	mockProvider.EXPECT().
+		InitiatePayment(gomock.Any(), gomock.Any()).
+		Return(&payment.PaymentResponse{
+			ProviderRef: "YENGA-REF-ONE-STEP",
+			Status:      entity.PaymentStatusSuccess,
+		}, nil)
+
+	// 🛡️ La création de l'escrow ÉCHOUÉ
+	mockEscrowRepo.EXPECT().
+		Create(gomock.Any(), gomock.Any()).
+		Return(errors.New("database connection lost"))
+
+	// 🛡️ Le paiement doit être marqué comme ÉCHOUÉ de notre côté
+	mockPaymentRepo.EXPECT().
+		Update(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	req := createValidInitiateRequest(orderID)
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "critical: failed to create escrow for successful payment")
+}

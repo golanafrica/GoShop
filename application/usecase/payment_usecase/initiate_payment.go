@@ -170,19 +170,11 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		}
 	}
 
-	// 12. Mettre à jour le statut selon la réponse du provider
+	// 12. Traitement du succès immédiat (ONE_STEP)
 	if providerResp.Status == entity.PaymentStatusSuccess {
-		// ONE_STEP : succès immédiat (OTP fourni dès /pay)
-		// La transition Pending -> Success est autorisée dans payment.go
-		if err := newPayment.MarkSuccess(providerResp.ProviderRef); err != nil {
-			return nil, fmt.Errorf("mark payment as success: %w", err)
-		}
+		// 🛡️ CORRECTION CRITIQUE PR 4 : Calculer les montants et créer l'escrow AVANT de marquer le paiement comme succès.
 
-		// --- Escrow + confirmation commande ---
-		// 🆕 CORRECTION : Calcul DYNAMIQUE des frais opérateur (2.5% par défaut)
 		providerFeesCents := (totalCents * 250) / 10000
-
-		// 🆕 CORRECTION CRITIQUE : Assigner les frais à l'entité Payment pour qu'ils soient sauvegardés en base
 		newPayment.ProviderFeesCents = providerFeesCents
 
 		commissionRate := 250 // 2.5% par défaut
@@ -198,6 +190,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		grossAmountCents := totalCents - providerFeesCents
 		netAmountCents := grossAmountCents - commissionCents
 
+		// Créer l'escrow si le montant net est > 0
 		if netAmountCents > 0 && uc.escrowRepo != nil {
 			orderIDStr := req.OrderID
 			now := time.Now().UTC()
@@ -214,24 +207,42 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 				UpdatedAt:           now,
 			}
 
+			// 🛡️ Si la création de l'escrow échoue, on NE DOIT PAS confirmer la commande ni marquer le paiement comme succès.
 			if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
-				logger.Error().Err(err).Msg("Failed to create escrow on immediate success")
-			} else {
-				if newPayment.Metadata == nil {
-					newPayment.Metadata = make(map[string]interface{})
-				}
-				newPayment.Metadata["escrow_created"] = true
+				logger.Error().Err(err).Msg("Critical: Failed to create escrow on immediate success")
 
-				logger.Info().
-					Str("escrow_id", escrow.ID).
-					Int64("gross_amount", grossAmountCents).
-					Int64("provider_fees", providerFeesCents).
-					Int64("commission", commissionCents).
-					Int64("net_amount", netAmountCents).
-					Msg("✅ Escrow created for ONE_STEP success (Dynamic fees)")
+				// Marquer le paiement comme échoué de notre côté pour éviter l'incohérence financière
+				if markErr := newPayment.MarkFailed("escrow_creation_failed"); markErr != nil {
+					logger.Error().Err(markErr).Msg("Failed to mark payment as failed after escrow error")
+				}
+				if updateErr := uc.paymentRepo.Update(ctx, newPayment); updateErr != nil {
+					logger.Error().Err(updateErr).Msg("Failed to update payment after escrow error")
+				}
+
+				return nil, fmt.Errorf("critical: failed to create escrow for successful payment: %w", err)
 			}
+
+			if newPayment.Metadata == nil {
+				newPayment.Metadata = make(map[string]interface{})
+			}
+			newPayment.Metadata["escrow_created"] = true
+			newPayment.Metadata["escrow_id"] = escrow.ID
+
+			logger.Info().
+				Str("escrow_id", escrow.ID).
+				Int64("gross_amount", grossAmountCents).
+				Int64("provider_fees", providerFeesCents).
+				Int64("commission", commissionCents).
+				Int64("net_amount", netAmountCents).
+				Msg("✅ Escrow created for ONE_STEP success (Dynamic fees)")
 		}
 
+		// 13. Seulement si l'escrow est créé (ou si netAmountCents == 0), on marque le succès
+		if err := newPayment.MarkSuccess(providerResp.ProviderRef); err != nil {
+			return nil, fmt.Errorf("mark payment as success: %w", err)
+		}
+
+		// 14. Confirmer la commande
 		if uc.orderRepo != nil {
 			orderToUpdate, err := uc.orderRepo.FindByID(ctx, req.OrderID)
 			if err == nil && orderToUpdate != nil && orderToUpdate.Status == string(entity.OrderStatusPending) {
@@ -242,6 +253,8 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 				if err := uc.orderRepo.UpdateOrder(ctx, orderToUpdate); err != nil {
 					logger.Error().Err(err).Msg("Failed to update order status to confirmed")
+					// Note: Even if order update fails, payment is successful and escrow is created.
+					// A reconciliation job or webhook can fix the order status later.
 				} else {
 					logger.Info().
 						Str("order_id", req.OrderID).
@@ -256,7 +269,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		}
 	}
 
-	// 13. Persister
+	// 15. Persister
 	if err := uc.paymentRepo.Update(ctx, newPayment); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
 	}
@@ -268,7 +281,7 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 		Int64("amount_cents", totalCents).
 		Msg("Payment initiated successfully with GLOBAL GoShop provider")
 
-	// 14. Construire la réponse
+	// 16. Construire la réponse
 	var expiresAt int64
 	if newPayment.ExpiresAt != nil {
 		expiresAt = newPayment.ExpiresAt.Unix()

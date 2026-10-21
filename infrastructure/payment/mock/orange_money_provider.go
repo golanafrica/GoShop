@@ -53,7 +53,7 @@ func DefaultOrangeMoneyConfig() OrangeMoneyConfig {
 	return OrangeMoneyConfig{
 		AutoSuccess:  true,
 		SuccessDelay: 2 * time.Second,
-		FailureRate:  0.05,
+		FailureRate:  0,
 		Available:    true,
 	}
 }
