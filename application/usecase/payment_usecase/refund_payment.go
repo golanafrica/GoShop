@@ -16,13 +16,13 @@ import (
 // RefundPaymentUsecase gère les remboursements
 type RefundPaymentUsecase struct {
 	paymentRepo repository.PaymentRepository
-	registry    PaymentRegistry // ✅ Interface
+	registry    PaymentRegistry
 }
 
 // NewRefundPaymentUsecase crée une nouvelle instance
 func NewRefundPaymentUsecase(
 	paymentRepo repository.PaymentRepository,
-	registry PaymentRegistry, // ✅ Interface
+	registry PaymentRegistry,
 ) *RefundPaymentUsecase {
 	return &RefundPaymentUsecase{
 		paymentRepo: paymentRepo,
@@ -61,25 +61,38 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		return nil, fmt.Errorf("payment does not belong to current shop")
 	}
 
-	// 5. Vérifier que le paiement est remboursable
-	if paymentEntity.Status != entity.PaymentStatusSuccess {
-		return nil, fmt.Errorf("only successful payments can be refunded (current status: %s)", paymentEntity.Status)
+	// 5. 🛡️ PR 5 AUDIT : Vérifier que le paiement est remboursable
+	// Vérification explicite du statut refunded pour un message d'erreur clair
+	if paymentEntity.Status == entity.PaymentStatusRefunded {
+		return nil, fmt.Errorf("payment has already been fully refunded")
+	}
+	if paymentEntity.Status != entity.PaymentStatusSuccess && paymentEntity.Status != entity.PaymentStatusPartiallyRefunded {
+		return nil, fmt.Errorf("only successful or partially refunded payments can be refunded (current status: %s)", paymentEntity.Status)
+	}
+
+	// Calculer le montant restant remboursable
+	alreadyRefunded := paymentEntity.RefundedAmountCents
+	remainingRefundable := paymentEntity.AmountCents - alreadyRefunded
+
+	if remainingRefundable <= 0 {
+		return nil, fmt.Errorf("payment has already been fully refunded")
 	}
 
 	// 6. Déterminer le montant du remboursement
 	refundAmount := req.AmountCents
 	if refundAmount == 0 {
-		// Remboursement complet
-		refundAmount = paymentEntity.AmountCents
+		// Si 0, rembourser automatiquement le reste
+		refundAmount = remainingRefundable
 	}
 
-	if refundAmount > paymentEntity.AmountCents {
-		return nil, fmt.Errorf("refund amount (%d) exceeds original payment (%d)", refundAmount, paymentEntity.AmountCents)
+	if refundAmount > remainingRefundable {
+		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (%d)", refundAmount, remainingRefundable)
 	}
 
 	logger.Info().
 		Str("payment_id", paymentID.String()).
 		Int64("refund_amount", refundAmount).
+		Int64("remaining_refundable", remainingRefundable).
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
@@ -90,13 +103,11 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			return nil, fmt.Errorf("provider not found: %w", err)
 		}
 
-		// ✅ Récupérer le numéro de téléphone du client pour le cash-out
 		customerPhone := ""
 		if paymentEntity.CustomerPhone != nil {
 			customerPhone = *paymentEntity.CustomerPhone
 		}
 
-		// 🆕 Récupérer l'opérateur utilisé pour le paiement initial (pour le cash-out dynamique)
 		operator := ""
 		if paymentEntity.Metadata != nil {
 			if op, ok := paymentEntity.Metadata["operator"].(string); ok {
@@ -104,23 +115,30 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			}
 		}
 
-		// ✅ Appel corrigé avec le 5ème paramètre (operator)
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			return nil, fmt.Errorf("refund failed at provider: %w", err)
 		}
 	}
 
-	// 8. Mettre à jour le statut du paiement
-	if err := paymentEntity.MarkRefunded(); err != nil {
-		return nil, fmt.Errorf("mark refunded: %w", err)
-	}
-
-	// Ajouter la raison du remboursement dans les métadonnées
+	// 8. 🛡️ PR 5 AUDIT : Mettre à jour le statut et le cumul de façon conditionnelle
 	if paymentEntity.Metadata == nil {
 		paymentEntity.Metadata = make(map[string]interface{})
 	}
-	paymentEntity.Metadata["refund_reason"] = req.Reason
-	paymentEntity.Metadata["refund_amount"] = refundAmount
+	paymentEntity.Metadata["last_refund_reason"] = req.Reason
+	paymentEntity.Metadata["last_refund_amount"] = refundAmount
+	paymentEntity.Metadata["total_refunded_amount"] = alreadyRefunded + refundAmount
+
+	if refundAmount == remainingRefundable {
+		// Remboursement total (soit d'un coup, soit le dernier d'une série de partiels)
+		if err := paymentEntity.MarkRefunded(); err != nil {
+			return nil, fmt.Errorf("mark refunded: %w", err)
+		}
+	} else {
+		// Remboursement partiel
+		if err := paymentEntity.MarkPartiallyRefunded(refundAmount); err != nil {
+			return nil, fmt.Errorf("mark partially refunded: %w", err)
+		}
+	}
 
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
@@ -129,8 +147,9 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	logger.Info().
 		Str("payment_id", paymentID.String()).
 		Int64("refund_amount", refundAmount).
+		Str("new_status", string(paymentEntity.Status)).
 		Msg("Refund completed successfully")
 
-	// 9. Retourner la réponse
+	// 9. Retourner la réponse (mapPaymentToResponse est déjà défini dans check_payment_status.go)
 	return mapPaymentToResponse(paymentEntity), nil
 }
