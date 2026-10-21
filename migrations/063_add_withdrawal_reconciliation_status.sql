@@ -1,15 +1,14 @@
--- Migration 063: Ajout du statut reconciliation_required et mise à jour de la contrainte CHECK
+-- Migration 063: Ajout du statut reconciliation_required et extension de la taille de la colonne status
 BEGIN;
 
--- 1. Mettre à jour les retraits existants qui seraient bloqués (sécurité)
--- (Optionnel, mais recommandé si des données sont déjà dans cet état)
--- UPDATE withdrawals SET status = 'reconciliation_required' WHERE status = 'pending' AND ... (condition de blocage);
+-- 1. Étendre la taille de la colonne status à VARCHAR(50) 
+-- 'compensation_pending' fait 20 caractères, 'reconciliation_required' en fait 23.
+ALTER TABLE withdrawals ALTER COLUMN status TYPE VARCHAR(50);
 
 -- 2. Mettre à jour la contrainte CHECK pour inclure le nouveau statut
--- On suppose que la contrainte s'appelle 'withdrawals_status_check' (à vérifier dans ta DB)
 ALTER TABLE withdrawals DROP CONSTRAINT IF EXISTS withdrawals_status_check;
 
 ALTER TABLE withdrawals ADD CONSTRAINT withdrawals_status_check 
-CHECK (status IN ('pending', 'processing', 'success', 'failed', 'compensation_pending', 'reconciliation_required'));
+CHECK (status IN ('pending', 'processing', 'success', 'failed', 'cancelled', 'compensation_pending', 'reconciliation_required'));
 
 COMMIT;
