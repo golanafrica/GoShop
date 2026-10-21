@@ -19,7 +19,8 @@ type CronScheduler struct {
 	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler
 	walletGraceExpirySched      *appscheduler.WalletGraceExpiryScheduler
 	compensationPendingSched    *appscheduler.CompensationPendingScheduler
-	withdrawalReconcilSched     *appscheduler.WithdrawalReconciliationScheduler // 🛡️ AJOUT
+	withdrawalReconcilSched     *appscheduler.WithdrawalReconciliationScheduler
+	notificationRetrySched      *appscheduler.NotificationRetryScheduler // 🆕 AJOUT PR 6
 	logger                      zerolog.Logger
 	scheduleCron                string
 	onlinePaymentSchedule       string
@@ -28,7 +29,8 @@ type CronScheduler struct {
 	installmentSchedule         string
 	walletGraceExpirySchedule   string
 	compensationPendingSchedule string
-	withdrawalReconcilSchedule  string // 🛡️ AJOUT
+	withdrawalReconcilSchedule  string
+	notificationRetrySchedule   string // 🆕 AJOUT PR 6
 }
 
 // NewCronScheduler cree une nouvelle instance
@@ -40,7 +42,8 @@ func NewCronScheduler(
 	installmentAutoReleaseSched *appscheduler.InstallmentAutoReleaseScheduler,
 	walletGraceExpirySched *appscheduler.WalletGraceExpiryScheduler,
 	compensationPendingSched *appscheduler.CompensationPendingScheduler,
-	withdrawalReconcilSched *appscheduler.WithdrawalReconciliationScheduler, // 🛡️ AJOUT
+	withdrawalReconcilSched *appscheduler.WithdrawalReconciliationScheduler,
+	notificationRetrySched *appscheduler.NotificationRetryScheduler, // 🆕 AJOUT PR 6
 	logger zerolog.Logger,
 	scheduleCron string,
 	onlinePaymentSchedule string,
@@ -49,7 +52,8 @@ func NewCronScheduler(
 	installmentSchedule string,
 	walletGraceExpirySchedule string,
 	compensationPendingSchedule string,
-	withdrawalReconcilSchedule string, // 🛡️ AJOUT
+	withdrawalReconcilSchedule string,
+	notificationRetrySchedule string, // 🆕 AJOUT PR 6
 ) *CronScheduler {
 
 	if scheduleCron == "" {
@@ -76,6 +80,9 @@ func NewCronScheduler(
 	if withdrawalReconcilSchedule == "" {
 		withdrawalReconcilSchedule = "*/10 * * * *" // toutes les 10 min
 	}
+	if notificationRetrySchedule == "" {
+		notificationRetrySchedule = "*/15 * * * *" // 🆕 toutes les 15 min
+	}
 
 	return &CronScheduler{
 		cron:                        cron.New(),
@@ -86,7 +93,8 @@ func NewCronScheduler(
 		installmentAutoReleaseSched: installmentAutoReleaseSched,
 		walletGraceExpirySched:      walletGraceExpirySched,
 		compensationPendingSched:    compensationPendingSched,
-		withdrawalReconcilSched:     withdrawalReconcilSched, // 🛡️ AJOUT
+		withdrawalReconcilSched:     withdrawalReconcilSched,
+		notificationRetrySched:      notificationRetrySched, // 🆕 AJOUT PR 6
 		logger:                      logger.With().Str("component", "cron_scheduler").Logger(),
 		scheduleCron:                scheduleCron,
 		onlinePaymentSchedule:       onlinePaymentSchedule,
@@ -95,7 +103,8 @@ func NewCronScheduler(
 		installmentSchedule:         installmentSchedule,
 		walletGraceExpirySchedule:   walletGraceExpirySchedule,
 		compensationPendingSchedule: compensationPendingSchedule,
-		withdrawalReconcilSchedule:  withdrawalReconcilSchedule, // 🛡️ AJOUT
+		withdrawalReconcilSchedule:  withdrawalReconcilSchedule,
+		notificationRetrySchedule:   notificationRetrySchedule, // 🆕 AJOUT PR 6
 	}
 }
 
@@ -109,7 +118,8 @@ func (s *CronScheduler) Start() error {
 		Str("installment_schedule", s.installmentSchedule).
 		Str("wallet_grace_expiry_schedule", s.walletGraceExpirySchedule).
 		Str("compensation_pending_schedule", s.compensationPendingSchedule).
-		Str("withdrawal_reconcil_schedule", s.withdrawalReconcilSchedule). // 🛡️ AJOUT
+		Str("withdrawal_reconcil_schedule", s.withdrawalReconcilSchedule).
+		Str("notification_retry_schedule", s.notificationRetrySchedule). // 🆕 AJOUT PR 6
 		Msg("Starting cron scheduler")
 
 	// 1. COD
@@ -202,13 +212,27 @@ func (s *CronScheduler) Start() error {
 		}
 	}
 
-	// 8. 🛡️ AJOUT : Withdrawal Reconciliation
+	// 8. Withdrawal Reconciliation
 	if s.withdrawalReconcilSched != nil {
 		_, err = s.cron.AddFunc(s.withdrawalReconcilSchedule, func() {
 			s.logger.Info().Msg("Cron trigger: Withdrawal reconciliation check")
 			ctx := context.Background()
 			if err := s.withdrawalReconcilSched.Run(ctx); err != nil {
 				s.logger.Error().Err(err).Msg("Withdrawal reconciliation failed")
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// 9. 🆕 AJOUT PR 6 : Notification Retry
+	if s.notificationRetrySched != nil {
+		_, err = s.cron.AddFunc(s.notificationRetrySchedule, func() {
+			s.logger.Info().Msg("Cron trigger: Notification retry check")
+			ctx := context.Background()
+			if err := s.notificationRetrySched.Run(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("Notification retry failed")
 			}
 		})
 		if err != nil {
