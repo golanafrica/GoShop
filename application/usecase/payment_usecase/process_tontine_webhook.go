@@ -32,7 +32,7 @@ type ProcessTontineWebhookUsecase struct {
 	tontineParticipantRepo repository.TontineParticipantRepository
 	tontineVoucherRepo     repository.TontineVoucherRepository
 	shopRepo               repository.ShopRepository
-	txManager              repository.TxManager // 🛡️ v4.11.0 : Pour FOR UPDATE
+	txManager              repository.TxManager
 
 	notificationSvc    service.NotificationService
 	customerRepo       repository.CustomerRepositoryInterface
@@ -49,7 +49,7 @@ func NewProcessTontineWebhookUsecase(
 	shopRepo repository.ShopRepository,
 	notificationSvc service.NotificationService,
 	customerRepo repository.CustomerRepositoryInterface,
-	txManager repository.TxManager, // 🛡️ v4.11.0 : Ajouté
+	txManager repository.TxManager,
 ) *ProcessTontineWebhookUsecase {
 	return &ProcessTontineWebhookUsecase{
 		tontinePaymentRepo:     tontinePaymentRepo,
@@ -152,7 +152,7 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	return rate.RateBps
 }
 
-// Execute traite un webhook tontine avec protection anti-race condition
+// Execute traite un webhook tontine avec protection anti-race condition et récupérabilité (PR 3 Audit)
 func (uc *ProcessTontineWebhookUsecase) Execute(
 	ctx context.Context,
 	reference string,
@@ -172,17 +172,11 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		Str("status", string(status)).
 		Msg("Processing tontine webhook")
 
-	// ============================================================
-	// 🛡️ v4.11.0 : ANTI-RACE CONDITION
-	// Démarrer une transaction et verrouiller le paiement avec FOR UPDATE
-	// pour éviter les doubles webhooks simultanés
-	// ============================================================
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
 
-	// 🛡️ ROLLBACK ROBUSTE : Ignore l'erreur normale sql.ErrTxDone si le Commit a déjà réussi
 	defer func() {
 		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 			logger.Error().Err(err).Msg("unexpected error during transaction rollback")
@@ -191,16 +185,9 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 
 	tontinePaymentRepoTx := uc.tontinePaymentRepo.WithTX(tx)
 
-	// Verrou pessimiste : FOR UPDATE bloque les autres webhooks simultanés
 	payment, err := tontinePaymentRepoTx.FindByReferenceUnscopedForUpdate(ctx, reference)
 	if err != nil {
 		return fmt.Errorf("tontine payment not found for reference %s: %w", reference, err)
-	}
-
-	// Double-check après acquisition du verrou (idempotence)
-	if payment.IsDone() {
-		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment already done, ignoring webhook")
-		return nil
 	}
 
 	group, err := uc.tontineGroupRepo.FindByIDUnscoped(ctx, payment.GroupID)
@@ -220,13 +207,25 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 
 	ctx = tenant.WithTenant(ctx, shop)
 
-	switch status {
-	case entity.PaymentStatusSuccess:
-		if err := tontinePaymentRepoTx.MarkDone(ctx, payment.ID, transactionID); err != nil {
-			return fmt.Errorf("mark tontine payment done: %w", err)
+	var alreadyDone bool
+	if payment.IsDone() {
+		alreadyDone = true
+		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment already done, ensuring cycle completion (recovery)")
+	} else {
+		switch status {
+		case entity.PaymentStatusSuccess:
+			if err := tontinePaymentRepoTx.MarkDone(ctx, payment.ID, transactionID); err != nil {
+				return fmt.Errorf("mark tontine payment done: %w", err)
+			}
+		case entity.PaymentStatusFailed:
+			if err := tontinePaymentRepoTx.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
+				return fmt.Errorf("mark tontine payment failed: %w", err)
+			}
+		default:
+			logger.Warn().Str("status", string(status)).Msg("Unknown tontine webhook status, ignoring")
+			return nil
 		}
 
-		// Commit le changement de statut AVANT les opérations lourdes
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("failed to commit transaction: %w", err)
 		}
@@ -234,27 +233,18 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		logger.Info().
 			Str("payment_id", payment.ID).
 			Str("transaction_id", transactionID).
-			Msg("Tontine payment marked as DONE")
+			Str("new_status", string(status)).
+			Msg("Tontine payment status updated and committed")
 
-		uc.notifyGroupMembers(ctx, group, cycleNumber, payment.CustomerID, logger)
-
-	case entity.PaymentStatusFailed:
-		if err := tontinePaymentRepoTx.UpdateStatus(ctx, payment.ID, entity.TontinePaymentFailed); err != nil {
-			return fmt.Errorf("mark tontine payment failed: %w", err)
+		if status == entity.PaymentStatusSuccess {
+			uc.notifyGroupMembers(ctx, group, cycleNumber, payment.CustomerID, logger)
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit transaction: %w", err)
-		}
-		logger.Info().Str("payment_id", payment.ID).Msg("Tontine payment marked as FAILED")
-		return nil
-
-	default:
-		logger.Warn().Str("status", string(status)).Msg("Unknown tontine webhook status, ignoring")
-		return nil
 	}
 
-	if status == entity.PaymentStatusSuccess {
-		return uc.checkAndCompleteCycle(ctx, group, cycleNumber, shop)
+	// 🛡️ PR 3 AUDIT : Toujours tenter de compléter le cycle si le statut est succès (ou déjà done).
+	// Cela garantit la récupérabilité en cas de crash après MarkDone mais avant le crédit wallet.
+	if status == entity.PaymentStatusSuccess || alreadyDone {
+		return uc.ensureCycleSettled(ctx, group, cycleNumber, shop)
 	}
 
 	return nil
@@ -299,7 +289,8 @@ func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
 	logger.Info().Int("notified_count", len(participants)).Str("payer", payerName).Msg("Tontine cycle paid notifications dispatched")
 }
 
-func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
+// ensureCycleSettled est idempotent et récupérable (PR 3 Audit)
+func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	ctx context.Context,
 	group *entity.TontineGroup,
 	cycleNumber int,
@@ -324,19 +315,19 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		return fmt.Errorf("count done payments: %w", err)
 	}
 
-	logger.Info().
-		Str("group_id", groupID).
-		Int("cycle", cycleNumber).
-		Int("done_count", doneCount).
-		Int("total_cycles", group.TotalCycles).
-		Msg("Checking cycle completion")
-
 	if doneCount < group.TotalCycles {
 		logger.Info().Int("remaining", group.TotalCycles-doneCount).Msg("Waiting for remaining participants to pay")
 		return nil
 	}
 
-	logger.Info().Str("group_id", groupID).Int("cycle", cycleNumber).Msg("All participants paid, generating voucher")
+	// 🛡️ PR 3 AUDIT : Vérifier si le règlement a déjà été effectué (Idempotence)
+	existingVouchers, err := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
+	if err == nil && len(existingVouchers) > 0 {
+		logger.Info().Str("group_id", groupID).Int("cycle", cycleNumber).Msg("Cycle already settled (voucher exists), ensuring group advancement")
+		return uc.advanceGroupCycle(ctx, group, cycleNumber)
+	}
+
+	logger.Info().Str("group_id", groupID).Int("cycle", cycleNumber).Msg("All participants paid, generating voucher and settling")
 
 	beneficiary, err := uc.tontineParticipantRepo.FindByPosition(ctx, groupID, cycleNumber)
 	if err != nil {
@@ -350,16 +341,6 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 	if netCents < 0 {
 		netCents = 0
 	}
-
-	logger.Info().
-		Str("group_id", groupID).
-		Int("cycle", cycleNumber).
-		Str("circle_type", group.CircleType).
-		Int("rate_bps", rateBps).
-		Int64("gross_cents", grossCents).
-		Int64("commission_cents", commissionCents).
-		Int64("net_cents", netCents).
-		Msg("Tontine cycle settlement amounts (Phase 5: shop-aware rate + held on voucher)")
 
 	voucherCode, err := generateVoucherCode(12)
 	if err != nil {
@@ -393,37 +374,44 @@ func (uc *ProcessTontineWebhookUsecase) checkAndCompleteCycle(
 		Msg("✅ Voucher generated for beneficiary")
 
 	if uc.walletCreditor != nil && netCents > 0 {
+		// 🛡️ PR 3 AUDIT : Si le crédit échoue, on retourne l'erreur pour que le webhook soit rejoué.
+		// Au prochain replay, le bloc FindByGroupAndCycle ci-dessus interceptera et passera directement à advanceGroupCycle.
 		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
 			logger.Error().Err(err).
 				Str("shop_id", group.ShopID).
 				Int64("net_cents", netCents).
-				Msg("Failed to credit merchant wallet from tontine cycle (net)")
-		} else {
-			logger.Info().
-				Str("shop_id", group.ShopID).
-				Int64("gross_cents", grossCents).
-				Int64("commission_cents", commissionCents).
-				Int64("net_cents", netCents).
-				Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
+				Msg("Failed to credit merchant wallet from tontine cycle (net) - will retry on next webhook")
+			return fmt.Errorf("failed to credit merchant wallet: %w", err)
 		}
+		logger.Info().
+			Str("shop_id", group.ShopID).
+			Int64("gross_cents", grossCents).
+			Int64("commission_cents", commissionCents).
+			Int64("net_cents", netCents).
+			Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
 	}
 
 	uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, commissionCents, logger)
 	uc.notifyBeneficiaryAndMerchant(ctx, group, beneficiary, voucherCode, netCents, cycleNumber, shop, logger)
 
+	return uc.advanceGroupCycle(ctx, group, cycleNumber)
+}
+
+func (uc *ProcessTontineWebhookUsecase) advanceGroupCycle(ctx context.Context, group *entity.TontineGroup, cycleNumber int) error {
+	logger := zerolog.Ctx(ctx)
 	if group.IsLastCycle() {
-		if err := uc.tontineGroupRepo.Complete(ctx, groupID); err != nil {
+		if err := uc.tontineGroupRepo.Complete(ctx, group.ID); err != nil {
 			return fmt.Errorf("complete group: %w", err)
 		}
-		logger.Info().Str("group_id", groupID).Msg("🎉 Tontine group completed!")
+		logger.Info().Str("group_id", group.ID).Msg("🎉 Tontine group completed!")
 		return nil
 	}
 
-	if err := uc.tontineGroupRepo.IncrementCycle(ctx, groupID); err != nil {
+	if err := uc.tontineGroupRepo.IncrementCycle(ctx, group.ID); err != nil {
 		return fmt.Errorf("increment cycle: %w", err)
 	}
 
-	logger.Info().Str("group_id", groupID).Int("new_cycle", cycleNumber+1).Msg("Moved to next cycle")
+	logger.Info().Str("group_id", group.ID).Int("new_cycle", cycleNumber+1).Msg("Moved to next cycle")
 	return nil
 }
 

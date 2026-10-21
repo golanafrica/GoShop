@@ -66,8 +66,8 @@ type TontineParticipantRepository interface {
 type TontinePaymentRepository interface {
 	Create(ctx context.Context, payment *entity.TontinePayment) error
 	FindByID(ctx context.Context, id string) (*entity.TontinePayment, error)
-	FindByIDUnscoped(ctx context.Context, id string) (*entity.TontinePayment, error) // 🆕 AJOUT PHASE 2
-	SetProviderIntentID(ctx context.Context, id, intentID string) error              // 🆕 AJOUT PHASE 2
+	FindByIDUnscoped(ctx context.Context, id string) (*entity.TontinePayment, error)
+	SetProviderIntentID(ctx context.Context, id, intentID string) error
 	FindByReference(ctx context.Context, reference string) (*entity.TontinePayment, error)
 	FindByReferencePrefix(ctx context.Context, referencePrefix string) (*entity.TontinePayment, error)
 	FindByGroupAndCycle(ctx context.Context, groupID string, cycle int) ([]*entity.TontinePayment, error)
@@ -76,6 +76,7 @@ type TontinePaymentRepository interface {
 	CountDoneByGroupAndCycle(ctx context.Context, groupID string, cycle int) (int, error)
 	UpdateStatus(ctx context.Context, paymentID string, status string) error
 	MarkDone(ctx context.Context, paymentID string, transactionID string) error
+
 	// 🛡️ v4.11.0 : Méthodes avec verrou pessimiste (anti-race condition)
 	FindByParticipantAndCycleForUpdate(ctx context.Context, participantID string, cycle int) (*entity.TontinePayment, error)
 	FindByReferenceUnscopedForUpdate(ctx context.Context, reference string) (*entity.TontinePayment, error)
@@ -84,7 +85,6 @@ type TontinePaymentRepository interface {
 
 	FindDoneWithoutCommission(ctx context.Context, limit int) ([]*entity.TontinePayment, error)
 	UpdateTontineCommissionStatus(ctx context.Context, paymentID string, status string, batchID *string) error
-
 	FindByReferenceUnscoped(ctx context.Context, reference string) (*entity.TontinePayment, error)
 }
 
@@ -96,7 +96,7 @@ type TontineVoucherRepository interface {
 	Create(ctx context.Context, voucher *entity.TontineVoucher) error
 	FindByID(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	FindByCode(ctx context.Context, code string) (*entity.TontineVoucher, error)
-	FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error) // 🆕 Phase 5 : lister par groupe
+	FindByGroupID(ctx context.Context, groupID string) ([]*entity.TontineVoucher, error)
 	FindByParticipantAndCycle(ctx context.Context, participantID string, cycle int) (*entity.TontineVoucher, error)
 	FindByCustomerID(ctx context.Context, customerID string) ([]*entity.TontineVoucher, error)
 	FindByShopID(ctx context.Context, shopID string) ([]*entity.TontineVoucher, error)
@@ -105,4 +105,7 @@ type TontineVoucherRepository interface {
 	ExpireOldVouchers(ctx context.Context) (int, error)
 	FindByIDAdmin(ctx context.Context, id string) (*entity.TontineVoucher, error)
 	WithTX(tx Tx) TontineVoucherRepository
+
+	// 🛡️ PR 3 AUDIT : Ajout pour vérification d'idempotence du cycle (récupérabilité)
+	FindByGroupAndCycle(ctx context.Context, groupID string, cycleNumber int) ([]*entity.TontineVoucher, error)
 }

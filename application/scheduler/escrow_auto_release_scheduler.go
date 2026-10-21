@@ -21,13 +21,11 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 //
-// Anti race multi-instance & Atomicité :
-//  1. ClaimRelease atomique (funds_held → released)
-//  2. FindByReferenceIDAdmin avant crédit
-//  3. Unique partial index uq_wallet_txn_ref_completed
-//  4. CreditWithDebtSweep : dette d'abord, puis solde disponible
-//  5. 🛡️ P2 #1 : TX SQL unique pour Commission Plateforme + Ledger + Wallet.Update
-//     → plus de divergence comptable en cas de panne.
+// Anti race multi-instance & Atomicité (PR 2 Audit) :
+//  1. Pour les Tontines : ClaimRelease immédiat (le crédit wallet est géré ailleurs et est idempotent).
+//  2. Pour les Orders : ClaimRelease + Commission + Ledger + Wallet.Update dans UNE SEULE transaction SQL.
+//     → Plus de divergence comptable en cas de panne. Si le crédit échoue, le claim est rollbacké.
+//  3. FindByReferenceIDAdmin avant crédit pour l'idempotence.
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -190,24 +188,19 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		Logger()
 
 	merchantAmount := escrow.GetMerchantAmount()
-	claimed, err := s.escrowRepo.ClaimRelease(ctx, escrow.ID, entity.EscrowAccountFundsHeld, merchantAmount)
-	if err != nil {
-		return 0, fmt.Errorf("claim release failed: %w", err)
-	}
-	if !claimed {
-		itemLogger.Info().Msg("Escrow already claimed by another instance — skip")
-		return 0, nil
-	}
 
-	itemLogger.Info().Msg("Escrow claimed successfully")
-
-	// 🛡️ P2 #1 : La commission est maintenant passée à creditMerchantWallet pour être incluse dans la même TX.
-
+	// 🛡️ CAS TONTINE : Le crédit wallet est géré ailleurs (idempotent). On claim ici directement.
 	if proof.TontineVoucherID != nil {
-		itemLogger.Info().
-			Str("voucher_id", *proof.TontineVoucherID).
-			Msg("Tontine proof: escrow claimed, wallet already credited at cycle — skip credit")
+		claimed, err := s.escrowRepo.ClaimRelease(ctx, escrow.ID, entity.EscrowAccountFundsHeld, merchantAmount)
+		if err != nil {
+			return 0, fmt.Errorf("claim release failed: %w", err)
+		}
+		if !claimed {
+			itemLogger.Info().Msg("Escrow already claimed by another instance — skip")
+			return 0, nil
+		}
 
+		itemLogger.Info().Msg("Tontine proof: escrow claimed, wallet already credited at cycle — skip credit")
 		if err := proof.ReleaseFunds(); err != nil {
 			itemLogger.Warn().Err(err).Msg("proof.ReleaseFunds in-memory failed")
 		}
@@ -217,10 +210,11 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return merchantAmount, nil
 	}
 
+	// 🛡️ CAS ORDER : Le ClaimRelease sera fait DANS la transaction de crédit wallet
+	// pour garantir l'atomicité totale (PR 2 Audit).
 	var lastErr error
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
-		// 🛡️ P2 #1 : On passe maintenant escrow.CommissionCents à la fonction
-		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, escrow.CommissionCents, proof.ID, escrow.ID)
+		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, escrow.CommissionCents, proof.ID, escrow.ID, escrow.Status)
 		if err != nil {
 			lastErr = err
 			itemLogger.Warn().
@@ -237,7 +231,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	}
 
 	if lastErr != nil {
-		return 0, fmt.Errorf("failed to credit merchant wallet after %d attempts (escrow already claimed): %w", s.maxRetries, lastErr)
+		return 0, fmt.Errorf("failed to credit merchant wallet after %d attempts: %w", s.maxRetries, lastErr)
 	}
 
 	if err := proof.ReleaseFunds(); err != nil {
@@ -249,13 +243,12 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger.Info().
 		Int64("merchant_amount", merchantAmount).
-		Msg("Escrow auto-released and merchant wallet credited (debt sweep if any)")
+		Msg("Escrow auto-released and merchant wallet credited atomically (debt sweep if any)")
 
 	return merchantAmount, nil
 }
 
-// creditMerchantWallet crédite la commission plateforme + le wallet + écrit le ledger dans UNE transaction SQL.
-// Échec partiel → ROLLBACK (pas de divergence comptable).
+// creditMerchantWallet exécute le ClaimRelease, le crédit commission et le crédit wallet dans UNE SEULE transaction SQL.
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -263,6 +256,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	commissionCents int64,
 	proofID string,
 	escrowID string,
+	currentEscrowStatus entity.EscrowAccountStatus,
 ) error {
 	const refType = "escrow_auto_release"
 
@@ -270,7 +264,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("txManager is required for atomic escrow wallet credit (proof=%s)", proofID)
 	}
 
-	// Idempotence : une txn completed pour cette ref a été commitée avec le wallet
+	// 1. Idempotence check AVANT la transaction (optimisation)
 	existing, err := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
 	if err == nil && existing != nil {
 		s.logger.Info().
@@ -300,11 +294,26 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		}
 	}()
 
-	// 🛡️ P2 #1 : 1. Créditer la commission plateforme DANS la transaction
+	// 🛡️ 2. ClaimRelease DANS la transaction (Atomicité garantie - PR 2 Audit)
+	escrowRepoTx := s.escrowRepo.WithTX(tx)
+	claimed, err := escrowRepoTx.ClaimRelease(ctx, escrowID, currentEscrowStatus, merchantAmountCents)
+	if err != nil {
+		return fmt.Errorf("claim release failed in tx: %w", err)
+	}
+	if !claimed {
+		// Si une autre instance a déjà claimé, on vérifie à nouveau si le wallet a été crédité.
+		existingRetry, errRetry := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
+		if errRetry == nil && existingRetry != nil {
+			s.logger.Info().Msg("Escrow already claimed by another instance, but wallet is credited — skip")
+			return nil
+		}
+		// Incohérence critique : Escrow claimé par une autre instance, mais wallet non crédité.
+		return fmt.Errorf("escrow already claimed by another instance, but wallet is NOT credited. Manual reconciliation required for proof %s", proofID)
+	}
+
+	// 🛡️ 3. Créditer la commission plateforme DANS la transaction
 	if commissionCents > 0 && s.platformRevenueRepo != nil {
 		const commRefType = "escrow_auto_release_commission"
-
-		// Utiliser WithTx si l'interface le supporte (recommandé pour une atomicité totale)
 		if txRepo, ok := s.platformRevenueRepo.(interface {
 			WithTx(repository.Tx) repository.PlatformRevenueRepository
 		}); ok {
@@ -312,19 +321,17 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 				return fmt.Errorf("failed to credit platform commission: %w", err)
 			}
 		} else {
-			// Fallback : appel hors transaction (fonctionnel mais moins idéal)
 			if err := s.platformRevenueRepo.CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
 				return fmt.Errorf("failed to credit platform commission: %w", err)
 			}
 		}
-
 		s.logger.Info().
 			Str("proof_id", proofID).
 			Int64("commission_cents", commissionCents).
 			Msg("Platform revenue credited atomically")
 	}
 
-	// 🛡️ P2 #1 : 2. Créditer le wallet marchand
+	// 🛡️ 4. Créditer le wallet marchand DANS la transaction
 	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
 	if err != nil {
 		if err.Error() == "merchant wallet not found" {
@@ -402,6 +409,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("failed to update wallet balance: %w", err)
 	}
 
+	// 🛡️ 5. Commit de TOUTES les opérations (Claim + Commission + Wallet)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit tx: %w", err)
 	}
