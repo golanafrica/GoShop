@@ -52,7 +52,7 @@ func DefaultMoovMoneyConfig() MoovMoneyConfig {
 	return MoovMoneyConfig{
 		AutoSuccess:  true,
 		SuccessDelay: 3 * time.Second, // Moov est légèrement plus lent
-		FailureRate:  0.05,
+		FailureRate:  0,
 		Available:    true,
 	}
 }
