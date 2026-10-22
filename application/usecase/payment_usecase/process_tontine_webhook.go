@@ -241,8 +241,7 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		}
 	}
 
-	// 🛡️ PR 3 AUDIT : Toujours tenter de compléter le cycle si le statut est succès (ou déjà done).
-	// Cela garantit la récupérabilité en cas de crash après MarkDone mais avant le crédit wallet.
+	// 🛡️ PR 3 AUDIT : Toujours tenter de compléter le cycle si succès (ou déjà done).
 	if status == entity.PaymentStatusSuccess || alreadyDone {
 		return uc.ensureCycleSettled(ctx, group, cycleNumber, shop)
 	}
@@ -320,10 +319,37 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 		return nil
 	}
 
-	// 🛡️ PR 3 AUDIT : Vérifier si le règlement a déjà été effectué (Idempotence)
+	// 🛡️ PR 3 : voucher déjà là → retenter le crédit (idempotent) puis avancer le cycle
 	existingVouchers, err := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
 	if err == nil && len(existingVouchers) > 0 {
-		logger.Info().Str("group_id", groupID).Int("cycle", cycleNumber).Msg("Cycle already settled (voucher exists), ensuring group advancement")
+		logger.Info().
+			Str("group_id", groupID).
+			Int("cycle", cycleNumber).
+			Msg("Cycle voucher already exists — ensuring wallet credit then group advancement")
+
+		grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
+		rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+		commissionCents := entity.CalculateCommission(grossCents, rateBps)
+		netCents := grossCents - commissionCents
+		if netCents < 0 {
+			netCents = 0
+		}
+
+		if uc.walletCreditor != nil && netCents > 0 {
+			if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
+				logger.Error().Err(err).
+					Str("shop_id", group.ShopID).
+					Int64("net_cents", netCents).
+					Msg("Failed to credit merchant wallet on recovery path — will retry on next webhook")
+				return fmt.Errorf("failed to credit merchant wallet (recovery): %w", err)
+			}
+			logger.Info().
+				Str("shop_id", group.ShopID).
+				Int64("net_cents", netCents).
+				Msg("💰 Merchant wallet credit ensured (idempotent recovery)")
+		}
+
+		uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
 		return uc.advanceGroupCycle(ctx, group, cycleNumber)
 	}
 
@@ -374,8 +400,6 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 		Msg("✅ Voucher generated for beneficiary")
 
 	if uc.walletCreditor != nil && netCents > 0 {
-		// 🛡️ PR 3 AUDIT : Si le crédit échoue, on retourne l'erreur pour que le webhook soit rejoué.
-		// Au prochain replay, le bloc FindByGroupAndCycle ci-dessus interceptera et passera directement à advanceGroupCycle.
 		if _, err := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); err != nil {
 			logger.Error().Err(err).
 				Str("shop_id", group.ShopID).
@@ -391,7 +415,7 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 			Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
 	}
 
-	uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, commissionCents, logger)
+	uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
 	uc.notifyBeneficiaryAndMerchant(ctx, group, beneficiary, voucherCode, netCents, cycleNumber, shop, logger)
 
 	return uc.advanceGroupCycle(ctx, group, cycleNumber)
@@ -419,7 +443,6 @@ func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 	ctx context.Context,
 	groupID string,
 	cycleNumber int,
-	_ int64,
 	logger *zerolog.Logger,
 ) {
 	payments, err := uc.tontinePaymentRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)

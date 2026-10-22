@@ -149,3 +149,146 @@ func TestEscrowAutoReleaseScheduler_AtomicCreditAndIdempotentRetry(t *testing.T)
 
 	t.Log("✅ Crédit atomique + retry idempotent (pas de double ledger/solde)")
 }
+
+// TestEscrowAutoReleaseScheduler_RecoverOrphanClaim :
+// Escrow déjà "released" (claim fait) mais aucune wallet_transaction →
+// le scheduler doit compléter le crédit sans double claim / double crédit.
+func TestEscrowAutoReleaseScheduler_RecoverOrphanClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	server := testutils.NewTestServer(t)
+	ctx := context.Background()
+	logger := zerolog.Nop()
+
+	txmanagerRepo := txmanager.NewTxManagerPostgresInfra(server.DB)
+	shopRepo := shop.NewShopRepositoryInfrastructure(server.DB)
+	walletRepo := wallet.NewMerchantWalletRepositoryInfrastructure(server.DB)
+	walletTxnRepo := wallet.NewWalletTransactionRepositoryInfrastructure(server.DB)
+	escrowRepo := escrow.NewEscrowAccountRepositoryInfrastructure(server.DB)
+	orderRepo := order.NewOrderPostgresInfra(server.DB)
+	deliveryProofRepo := escrow.NewDeliveryProofRepositoryInfrastructure(server.DB)
+
+	sched := scheduler.NewEscrowAutoReleaseScheduler(
+		deliveryProofRepo,
+		escrowRepo,
+		orderRepo,
+		nil,
+		nil,
+		shopRepo,
+		walletRepo,
+		walletTxnRepo,
+		nil,
+		nil,
+		txmanagerRepo,
+		logger,
+	)
+
+	ownerID := uuid.New().String()
+	shopID := uuid.New().String()
+	customerID := uuid.New().String()
+	orderID := uuid.New().String()
+	escrowID := uuid.New().String()
+	proofID := uuid.New().String()
+	initialBalance := int64(10_000_000)
+	releaseAmount := int64(3_000_000)
+
+	_, err := server.DB.Exec(`
+		INSERT INTO users (id, email, password, created_at, updated_at)
+		VALUES ($1, $2, $3, NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, ownerID, "orphan-owner-"+ownerID[:8]+"@example.com", "hashed-password-not-used")
+	require.NoError(t, err)
+
+	_, err = server.DB.Exec(`
+		INSERT INTO shops (id, name, slug, owner_id, is_active, created_at, updated_at)
+		VALUES ($1, 'Orphan Escrow Shop', $2, $3, true, NOW(), NOW())
+	`, shopID, "orphan-"+shopID[:8], ownerID)
+	require.NoError(t, err)
+
+	_, err = server.DB.Exec(`
+		INSERT INTO merchant_wallets (shop_id, balance_cents, held_cents, debt_cents, created_at, updated_at)
+		VALUES ($1, $2, 0, 0, NOW(), NOW())
+	`, shopID, initialBalance)
+	require.NoError(t, err)
+
+	_, err = server.DB.Exec(`
+		INSERT INTO customers (id, shop_id, first_name, last_name, phone, email, kyc_level, created_at, updated_at)
+		VALUES ($1, $2, 'Test', 'Customer', '+22670000099', $3, 'verified', NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING
+	`, customerID, shopID, "orphan-cust-"+customerID[:8]+"@example.com")
+	require.NoError(t, err)
+
+	_, err = server.DB.Exec(`
+		INSERT INTO orders (id, customer_id, shop_id, total_cents, status, payment_method, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'pending_confirmation', 'cash_on_delivery', NOW(), NOW())
+	`, orderID, customerID, shopID, releaseAmount)
+	require.NoError(t, err)
+
+	// Escrow DÉJÀ released (claim fait) — simule crash après claim, avant crédit
+	_, err = server.DB.Exec(`
+		INSERT INTO escrow_accounts (
+			id, order_id, source_type,
+			total_amount_cents, released_amount_cents, commission_cents,
+			status, funds_held_at, funds_released_at, created_at, updated_at
+		) VALUES (
+			$1, $2, 'order',
+			$3, $3, 0,
+			'released', NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour', NOW(), NOW()
+		)
+	`, escrowID, orderID, releaseAmount)
+	require.NoError(t, err)
+
+	// Proof encore éligible (delivered, date ancienne) — pas encore marked released côté proof
+	_, err = server.DB.Exec(`
+		INSERT INTO delivery_proofs (
+			id, order_id, escrow_status, delivery_date, created_at, updated_at
+		) VALUES (
+			$1, $2, 'delivered', NOW() - INTERVAL '4 days', NOW(), NOW()
+		)
+	`, proofID, orderID)
+	require.NoError(t, err)
+
+	// Aucune wallet_transaction pour ce proof
+	var txnCount int
+	err = server.DB.QueryRow(`
+		SELECT COUNT(*) FROM wallet_transactions
+		WHERE reference_type = 'escrow_auto_release' AND reference_id = $1
+	`, proofID).Scan(&txnCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, txnCount)
+
+	// Run 1 — doit récupérer le crédit
+	err = sched.RunAutoRelease(ctx)
+	require.NoError(t, err)
+
+	var bal int64
+	err = server.DB.QueryRow(`SELECT balance_cents FROM merchant_wallets WHERE shop_id = $1`, shopID).Scan(&bal)
+	require.NoError(t, err)
+	assert.Equal(t, initialBalance+releaseAmount, bal, "orphan claim must complete wallet credit")
+
+	err = server.DB.QueryRow(`
+		SELECT COUNT(*) FROM wallet_transactions
+		WHERE reference_type = 'escrow_auto_release' AND reference_id = $1
+	`, proofID).Scan(&txnCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, txnCount)
+
+	// Run 2 — idempotent
+	err = sched.RunAutoRelease(ctx)
+	require.NoError(t, err)
+
+	err = server.DB.QueryRow(`SELECT balance_cents FROM merchant_wallets WHERE shop_id = $1`, shopID).Scan(&bal)
+	require.NoError(t, err)
+	assert.Equal(t, initialBalance+releaseAmount, bal)
+
+	err = server.DB.QueryRow(`
+		SELECT COUNT(*) FROM wallet_transactions
+		WHERE reference_type = 'escrow_auto_release' AND reference_id = $1
+	`, proofID).Scan(&txnCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, txnCount)
+
+	t.Log("✅ Orphan claim recovered: credit completed once, no double ledger")
+}

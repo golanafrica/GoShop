@@ -26,6 +26,7 @@ import (
 //  2. Pour les Orders : ClaimRelease + Commission + Ledger + Wallet.Update dans UNE SEULE transaction SQL.
 //     → Plus de divergence comptable en cas de panne. Si le crédit échoue, le claim est rollbacké.
 //  3. FindByReferenceIDAdmin avant crédit pour l'idempotence.
+//  4. Si claim déjà fait ailleurs mais ledger absent → reprise du crédit uniquement (orphan recovery).
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -210,8 +211,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return merchantAmount, nil
 	}
 
-	// 🛡️ CAS ORDER : Le ClaimRelease sera fait DANS la transaction de crédit wallet
-	// pour garantir l'atomicité totale (PR 2 Audit).
+	// 🛡️ CAS ORDER : ClaimRelease + crédit dans la même TX (PR 2 Audit).
 	var lastErr error
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, escrow.CommissionCents, proof.ID, escrow.ID, escrow.Status)
@@ -249,6 +249,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 }
 
 // creditMerchantWallet exécute le ClaimRelease, le crédit commission et le crédit wallet dans UNE SEULE transaction SQL.
+// Si le claim a déjà été pris ailleurs mais le ledger est absent, complète uniquement le crédit (orphan recovery).
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -301,14 +302,21 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("claim release failed in tx: %w", err)
 	}
 	if !claimed {
-		// Si une autre instance a déjà claimé, on vérifie à nouveau si le wallet a été crédité.
+		// Une autre instance (ou un run précédent interrompu) a déjà claimé.
 		existingRetry, errRetry := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
 		if errRetry == nil && existingRetry != nil {
-			s.logger.Info().Msg("Escrow already claimed by another instance, but wallet is credited — skip")
+			s.logger.Info().
+				Str("proof_id", proofID).
+				Msg("Escrow already claimed and wallet already credited — skip")
 			return nil
 		}
-		// Incohérence critique : Escrow claimé par une autre instance, mais wallet non crédité.
-		return fmt.Errorf("escrow already claimed by another instance, but wallet is NOT credited. Manual reconciliation required for proof %s", proofID)
+		// 🛡️ PR2 : claim OK ailleurs, ledger absent → on complète le crédit
+		// SANS re-claim (statut déjà "released"). Même TX, étapes commission + wallet.
+		s.logger.Warn().
+			Str("proof_id", proofID).
+			Str("escrow_id", escrowID).
+			Msg("Escrow already claimed but wallet NOT credited — recovering credit only")
+		// fall-through : pas de return, on enchaîne commission + wallet ci-dessous
 	}
 
 	// 🛡️ 3. Créditer la commission plateforme DANS la transaction
@@ -409,7 +417,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("failed to update wallet balance: %w", err)
 	}
 
-	// 🛡️ 5. Commit de TOUTES les opérations (Claim + Commission + Wallet)
+	// 🛡️ 5. Commit de TOUTES les opérations (Claim + Commission + Wallet, ou credit-only recovery)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit tx: %w", err)
 	}
