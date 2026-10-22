@@ -25,6 +25,11 @@ type WithdrawalRepository interface {
 
 	FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error)
 
+	// TransitionToReconciliationRequired passe atomiquement pending|processing → reconciliation_required.
+	// Retourne true si 1 ligne a été mise à jour (transition réussie).
+	// Retourne false si le statut a déjà changé (webhook concurrent, autre job, etc.).
+	TransitionToReconciliationRequired(ctx context.Context, id uuid.UUID, reason string) (bool, error)
+
 	// WithTX retourne le repository attache a une transaction
 	WithTX(tx Tx) WithdrawalRepository
 }

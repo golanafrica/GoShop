@@ -475,7 +475,10 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "cash-out with Yenga Pay")
+	// Message actuel (failAfterDebit + reverse impossible car creditUC nil)
+	assert.Contains(t, err.Error(), "cash-out definitively rejected by provider")
+	assert.Contains(t, err.Error(), "insufficient funds")
+	assert.Contains(t, err.Error(), "compensation pending")
 }
 
 // ============================================================
