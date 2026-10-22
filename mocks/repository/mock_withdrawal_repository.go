@@ -147,6 +147,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindStuckPendingWithdrawals(ctx,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindStuckPendingWithdrawals", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindStuckPendingWithdrawals), ctx, limit, minAgeMinutes)
 }
 
+// TransitionToReconciliationRequired mocks base method.
+func (m *MockWithdrawalRepository) TransitionToReconciliationRequired(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TransitionToReconciliationRequired", ctx, id, reason)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// TransitionToReconciliationRequired indicates an expected call of TransitionToReconciliationRequired.
+func (mr *MockWithdrawalRepositoryMockRecorder) TransitionToReconciliationRequired(ctx, id, reason any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransitionToReconciliationRequired", reflect.TypeOf((*MockWithdrawalRepository)(nil).TransitionToReconciliationRequired), ctx, id, reason)
+}
+
 // Update mocks base method.
 func (m *MockWithdrawalRepository) Update(ctx context.Context, withdrawal *entity.Withdrawal) error {
 	m.ctrl.T.Helper()

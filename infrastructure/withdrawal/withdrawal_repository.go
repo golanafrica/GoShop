@@ -273,3 +273,30 @@ func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.C
 	}
 	return out, rows.Err()
 }
+
+// TransitionToReconciliationRequired met à jour le statut de façon conditionnelle.
+// Seuls pending et processing peuvent passer en reconciliation_required.
+// Empêche une race avec un webhook success/failed concurrent.
+func (r *WithdrawalRepositoryPostgres) TransitionToReconciliationRequired(
+	ctx context.Context,
+	id uuid.UUID,
+	reason string,
+) (bool, error) {
+	query := `
+		UPDATE withdrawals
+		SET status = 'reconciliation_required',
+		    failure_reason = $2,
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND status IN ('pending', 'processing')
+	`
+	res, err := r.execContext(ctx, query, id, reason)
+	if err != nil {
+		return false, fmt.Errorf("transition reconciliation_required: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
+}

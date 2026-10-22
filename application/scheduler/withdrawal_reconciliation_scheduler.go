@@ -50,15 +50,22 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 			Str("shop_id", w.ShopID.String()).
 			Msg("CRITICAL: Withdrawal is stuck. Flagging for manual reconciliation (NO AUTO REVERSE).")
 
-		// 🛡️ CORRECTION CRITIQUE P1 : Utiliser le nouveau statut qui NE déclenche PAS de reverse automatique
-		reason := "Stuck in pending/processing after wallet debit. Provider status unknown. Manual verification required."
-		if err := w.MarkReconciliationRequired(reason); err != nil {
-			log.Error().Err(err).Str("withdrawal_id", w.ID.String()).Msg("Failed to mark withdrawal as reconciliation_required")
+		// 🛡️ Transition atomique : pending|processing → reconciliation_required
+		// Ignore si le statut a déjà changé (webhook concurrent / autre job).
+		// Aucun reverse automatique — vérification manuelle uniquement.
+		reason := "stuck_pending_manual_review"
+		ok, err := s.withdrawalRepo.TransitionToReconciliationRequired(ctx, w.ID, reason)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("withdrawal_id", w.ID.String()).
+				Msg("Failed to transition withdrawal to reconciliation_required")
 			continue
 		}
-
-		if err := s.withdrawalRepo.Update(ctx, w); err != nil {
-			log.Error().Err(err).Str("withdrawal_id", w.ID.String()).Msg("Failed to update withdrawal status to reconciliation_required")
+		if !ok {
+			log.Info().
+				Str("withdrawal_id", w.ID.String()).
+				Msg("Skipped: status already changed (webhook or concurrent job)")
 			continue
 		}
 
