@@ -132,71 +132,74 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 			}
 		}
 
-		if !escrowAlreadyCreated && paymentEntity.OrderID != uuid.Nil {
-			commissionRate := 250
-			if uc.shopSettingsRepo != nil {
-				settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
-				if err == nil && settings != nil {
-					if settings.CashCommissionRate > 0 {
-						commissionRate = settings.CashCommissionRate
+		// 🛡️ PR4 : Gestion robuste de la confirmation de commande et de l'escrow
+		if paymentEntity.OrderID != uuid.Nil {
+			if escrowAlreadyCreated {
+				// Chemin de récupération : l'escrow existe déjà, on s'assure juste que la commande est confirmée
+				logger.Info().Msg("Escrow already created — ensuring order confirmed only (recovery path)")
+				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
+					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+						logger.Error().Err(updateErr).Msg("Failed to persist payment before order-confirm error")
+					}
+					return nil, fmt.Errorf("failed to confirm order on recovery: %w", err)
+				}
+			} else {
+				commissionRate := 250
+				if uc.shopSettingsRepo != nil {
+					settings, err := uc.shopSettingsRepo.GetPaymentSettings(ctx, paymentEntity.ShopID)
+					if err == nil && settings != nil {
+						if settings.CashCommissionRate > 0 {
+							commissionRate = settings.CashCommissionRate
+						}
 					}
 				}
-			}
 
-			commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
-			providerFeesCents := completeResp.Fees * 100
-			paymentEntity.ProviderFeesCents = providerFeesCents
-			netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
+				commissionCents := (paymentEntity.AmountCents * int64(commissionRate)) / 10000
+				providerFeesCents := completeResp.Fees * 100
+				paymentEntity.ProviderFeesCents = providerFeesCents
+				netAmountCents := paymentEntity.AmountCents - providerFeesCents - commissionCents
 
-			if netAmountCents > 0 && uc.escrowRepo != nil {
-				orderIDStr := paymentEntity.OrderID.String()
-				now := time.Now().UTC()
+				if netAmountCents > 0 && uc.escrowRepo != nil {
+					orderIDStr := paymentEntity.OrderID.String()
+					now := time.Now().UTC()
 
-				escrow := &entity.EscrowAccount{
-					OrderID:             &orderIDStr,
-					SourceType:          entity.EscrowSourceOrder,
-					TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents, // 🆕 CORRECTION : Le montant séquestré est le Brut moins les frais opérateur
-					ReleasedAmountCents: 0,
-					CommissionCents:     commissionCents,
-					Status:              entity.EscrowAccountFundsHeld,
-					FundsHeldAt:         now,
-					CreatedAt:           now,
-					UpdatedAt:           now,
-				}
+					escrow := &entity.EscrowAccount{
+						OrderID:             &orderIDStr,
+						SourceType:          entity.EscrowSourceOrder,
+						TotalAmountCents:    paymentEntity.AmountCents - providerFeesCents,
+						ReleasedAmountCents: 0,
+						CommissionCents:     commissionCents,
+						Status:              entity.EscrowAccountFundsHeld,
+						FundsHeldAt:         now,
+						CreatedAt:           now,
+						UpdatedAt:           now,
+					}
 
-				if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
-					logger.Error().Err(err).Msg("Failed to create escrow account in /complete")
-					return nil, fmt.Errorf("failed to create escrow: %w", err)
-				}
+					if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
+						logger.Error().Err(err).Msg("Failed to create escrow account in /complete")
+						return nil, fmt.Errorf("failed to create escrow: %w", err)
+					}
 
-				if paymentEntity.Metadata == nil {
-					paymentEntity.Metadata = make(map[string]interface{})
-				}
-				paymentEntity.Metadata["escrow_created"] = true
+					if paymentEntity.Metadata == nil {
+						paymentEntity.Metadata = make(map[string]interface{})
+					}
+					paymentEntity.Metadata["escrow_created"] = true
 
-				logger.Info().
-					Int64("gross_amount", paymentEntity.AmountCents).
-					Int64("provider_fees_cents", providerFeesCents).
-					Int64("commission_cents", commissionCents).
-					Int64("escrow_amount", netAmountCents).
-					Str("escrow_id", escrow.ID).
-					Msg("✅ Funds successfully locked in Escrow via /complete")
+					logger.Info().
+						Int64("gross_amount", paymentEntity.AmountCents).
+						Int64("provider_fees_cents", providerFeesCents).
+						Int64("commission_cents", commissionCents).
+						Int64("escrow_amount", netAmountCents).
+						Str("escrow_id", escrow.ID).
+						Msg("✅ Funds successfully locked in Escrow via /complete")
 
-				if uc.orderRepo != nil {
-					order, err := uc.orderRepo.FindByID(ctx, orderIDStr)
-					if err == nil && order != nil && order.Status == string(entity.OrderStatusPending) {
-						order.Status = string(entity.OrderStatusConfirmed)
-						acceptedAt := time.Now().UTC()
-						order.AcceptedAt = &acceptedAt
-						order.UpdatedAt = acceptedAt
-
-						if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
-							logger.Error().Err(err).Msg("Failed to update order status to confirmed")
-						} else {
-							logger.Info().
-								Str("order_id", orderIDStr).
-								Msg("✅ Order status automatically updated to 'confirmed' (payment guaranteed)")
+					// 🛡️ PR4 : confirmation order obligatoire et récupérable (erreur = retry)
+					if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
+						// Persister d'abord payment SUCCESS + escrow_created pour le prochain retry
+						if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+							logger.Error().Err(updateErr).Msg("Failed to persist payment before order-confirm error")
 						}
+						return nil, fmt.Errorf("failed to confirm order after payment success: %w", err)
 					}
 				}
 			}
@@ -226,4 +229,41 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		Description:   description,
 		CreatedAt:     paymentEntity.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 	}, nil
+}
+
+// ensureOrderConfirmed aligne la commande sur le succès paiement (PR4 Audit).
+// No-op si pas d'order, order absente non bloquante seulement si orderRepo nil.
+// Retourne une erreur si pending → confirmed échoue (pour retry).
+func (uc *CompletePaymentUsecase) ensureOrderConfirmed(
+	ctx context.Context,
+	paymentEntity *entity.Payment,
+	logger *zerolog.Logger,
+) error {
+	if uc.orderRepo == nil || paymentEntity.OrderID == uuid.Nil {
+		return nil
+	}
+
+	orderIDStr := paymentEntity.OrderID.String()
+	order, err := uc.orderRepo.FindByID(ctx, orderIDStr)
+	if err != nil || order == nil {
+		logger.Warn().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: order not found")
+		return fmt.Errorf("order not found for payment: %w", err)
+	}
+
+	if order.Status != string(entity.OrderStatusPending) {
+		return nil
+	}
+
+	order.Status = string(entity.OrderStatusConfirmed)
+	acceptedAt := time.Now().UTC()
+	order.AcceptedAt = &acceptedAt
+	order.UpdatedAt = acceptedAt
+
+	if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
+		logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
+		return fmt.Errorf("failed to update order status: %w", err)
+	}
+
+	logger.Info().Str("order_id", orderIDStr).Msg("✅ Order confirmed after payment SUCCESS (/complete)")
+	return nil
 }
