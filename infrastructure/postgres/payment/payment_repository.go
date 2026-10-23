@@ -638,3 +638,33 @@ func (r *PaymentRepositoryPostgres) AddRefundAmount(
 	// Si rows == 0, c'est que la condition WHERE a échoué (montant insuffisant ou course)
 	return rows > 0, nil
 }
+
+// ReverseRefundAmount annule une réservation atomique (échec provider après AddRefundAmount).
+func (r *PaymentRepositoryPostgres) ReverseRefundAmount(
+	ctx context.Context,
+	paymentID uuid.UUID,
+	refundAmountCents int64,
+	newStatus entity.PaymentStatus,
+) (bool, error) {
+	query := `
+		UPDATE payments
+		SET
+			refunded_amount_cents = refunded_amount_cents - $1,
+			status = $2,
+			updated_at = NOW()
+		WHERE id = $3
+		  AND refunded_amount_cents >= $1
+	`
+
+	res, err := r.execContext(ctx, query, refundAmountCents, string(newStatus), paymentID)
+	if err != nil {
+		return false, fmt.Errorf("reverse refund amount: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("check rows affected: %w", err)
+	}
+
+	return rows > 0, nil
+}

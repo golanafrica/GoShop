@@ -49,6 +49,11 @@ type PaymentRepository interface {
 	// 🆕 PR 5 AUDIT : AddRefundAmount met à jour le cumul remboursé de manière atomique.
 	// Retourne true si la mise à jour a réussi, false si le montant remboursé dépasserait le montant total.
 	AddRefundAmount(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64, newStatus entity.PaymentStatus) (bool, error)
+
+	// ReverseRefundAmount annule une réservation de remboursement (provider a refusé).
+	// Décrémente refunded_amount_cents et restaure newStatus (ex: success ou partially_refunded).
+	// Retourne false si le cumul est insuffisant pour décrémenter.
+	ReverseRefundAmount(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64, newStatus entity.PaymentStatus) (bool, error)
 }
 
 // PaymentFilters représente les filtres pour la recherche de paiements

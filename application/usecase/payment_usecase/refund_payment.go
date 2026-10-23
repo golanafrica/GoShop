@@ -96,10 +96,34 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-	// 7. Appeler le provider pour le remboursement
+		// 7. Déterminer le nouveau statut après ce refund
+	var reservedStatus entity.PaymentStatus
+	if refundAmount == remainingRefundable {
+		reservedStatus = entity.PaymentStatusRefunded
+	} else {
+		reservedStatus = entity.PaymentStatusPartiallyRefunded
+	}
+
+	// 8. 🛡️ RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
+	ok, err := uc.paymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
+	if err != nil {
+		return nil, fmt.Errorf("reserve refund amount: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (concurrent or insufficient)", refundAmount)
+	}
+
+	// Statut local avant réservation — pour reverse si provider refuse
+	statusBeforeReserve := paymentEntity.Status
+
+	// 9. Appel provider (après réservation)
 	if paymentEntity.ProviderRef != nil {
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err != nil {
+			// Libérer la réservation
+			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+				logger.Error().Err(revErr).Msg("CRITICAL: failed to reverse refund reservation after provider not found")
+			}
 			return nil, fmt.Errorf("provider not found: %w", err)
 		}
 
@@ -107,7 +131,6 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		if paymentEntity.CustomerPhone != nil {
 			customerPhone = *paymentEntity.CustomerPhone
 		}
-
 		operator := ""
 		if paymentEntity.Metadata != nil {
 			if op, ok := paymentEntity.Metadata["operator"].(string); ok {
@@ -116,40 +139,41 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		}
 
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
+			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+				logger.Error().Err(revErr).
+					Str("payment_id", paymentID.String()).
+					Int64("amount", refundAmount).
+					Msg("CRITICAL: provider refund failed AND reverse reservation failed — manual reconciliation required")
+			}
 			return nil, fmt.Errorf("refund failed at provider: %w", err)
 		}
 	}
 
-	// 8. 🛡️ PR 5 AUDIT : Mettre à jour le statut et le cumul de façon conditionnelle
+	// 10. Metadata (best-effort) + relecture pour réponse cohérente
+	paymentEntity, err = uc.paymentRepo.FindByID(ctx, paymentID)
+	if err != nil {
+		logger.Error().Err(err).Msg("refund reserved and provider OK but reload failed")
+		// Réservation + provider OK : on ne reverse pas
+		return nil, fmt.Errorf("reload payment after refund: %w", err)
+	}
+
 	if paymentEntity.Metadata == nil {
 		paymentEntity.Metadata = make(map[string]interface{})
 	}
 	paymentEntity.Metadata["last_refund_reason"] = req.Reason
 	paymentEntity.Metadata["last_refund_amount"] = refundAmount
-	paymentEntity.Metadata["total_refunded_amount"] = alreadyRefunded + refundAmount
-
-	if refundAmount == remainingRefundable {
-		// Remboursement total (soit d'un coup, soit le dernier d'une série de partiels)
-		if err := paymentEntity.MarkRefunded(); err != nil {
-			return nil, fmt.Errorf("mark refunded: %w", err)
-		}
-	} else {
-		// Remboursement partiel
-		if err := paymentEntity.MarkPartiallyRefunded(refundAmount); err != nil {
-			return nil, fmt.Errorf("mark partially refunded: %w", err)
-		}
-	}
+	paymentEntity.Metadata["total_refunded_amount"] = paymentEntity.RefundedAmountCents
 
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
-		return nil, fmt.Errorf("update payment: %w", err)
+		logger.Error().Err(err).Msg("refund OK but metadata update failed — cumul already reserved")
+		// Ne pas échouer durement si le cumul est déjà correct
 	}
 
 	logger.Info().
 		Str("payment_id", paymentID.String()).
 		Int64("refund_amount", refundAmount).
 		Str("new_status", string(paymentEntity.Status)).
-		Msg("Refund completed successfully")
+		Msg("Refund completed successfully (atomic reservation)")
 
-	// 9. Retourner la réponse (mapPaymentToResponse est déjà défini dans check_payment_status.go)
 	return mapPaymentToResponse(paymentEntity), nil
 }

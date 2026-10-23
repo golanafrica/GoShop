@@ -177,6 +177,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindCompletedWithoutCommission(ctx,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompletedWithoutCommission", reflect.TypeOf((*MockPaymentRepository)(nil).FindCompletedWithoutCommission), ctx, limit)
 }
 
+// ReverseRefundAmount mocks base method.
+func (m *MockPaymentRepository) ReverseRefundAmount(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64, newStatus entity.PaymentStatus) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReverseRefundAmount", ctx, paymentID, refundAmountCents, newStatus)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReverseRefundAmount indicates an expected call of ReverseRefundAmount.
+func (mr *MockPaymentRepositoryMockRecorder) ReverseRefundAmount(ctx, paymentID, refundAmountCents, newStatus any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReverseRefundAmount", reflect.TypeOf((*MockPaymentRepository)(nil).ReverseRefundAmount), ctx, paymentID, refundAmountCents, newStatus)
+}
+
 // Update mocks base method.
 func (m *MockPaymentRepository) Update(ctx context.Context, payment *entity.Payment) error {
 	m.ctrl.T.Helper()
