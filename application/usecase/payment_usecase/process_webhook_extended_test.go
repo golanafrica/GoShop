@@ -30,20 +30,23 @@ func (m *mockResult) LastInsertId() (int64, error) { return m.lastInsertId, nil 
 func (m *mockResult) RowsAffected() (int64, error) { return m.rowsAffected, nil }
 
 // expectDBExecAny configure le mock pour accepter n'importe quel appel à ExecContext
-// (10 args pour l'INSERT de recordWebhook, 4 args pour markWebhookProcessed, 5 args pour markWebhookFailed)
+// (8 args pour l'INSERT de recordWebhook, 4 args pour markWebhookProcessed, 5 args pour markWebhookFailed)
 func expectDBExecAny(db *mockrepo.MockDBExecutor) {
-	// Match 10 args (recordWebhook INSERT)
-	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	// Match 8 args (recordWebhook INSERT: ctx, query, provider, eventType, externalID, payload, signature, signatureValid)
+	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).AnyTimes()
 
-	// Match 4 args (markWebhookProcessed UPDATE)
+	// Match 4 args (markWebhookProcessed UPDATE: ctx, query, provider, externalID)
 	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).AnyTimes()
 
-	// Match 5 args (markWebhookFailed UPDATE)
+	// Match 5 args (markWebhookFailed UPDATE: ctx, query, provider, externalID, errMsg)
 	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).AnyTimes()
 }
+
+// Note : createTestShopPayment() est déjà définie dans initiate_payment_extended_test.go
+// et est partagée automatiquement car les deux fichiers sont dans le même package.
 
 // ============================================================
 // TESTS
@@ -127,7 +130,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	shop := createTestShopPayment()
+	shop := createTestShopPayment() // Utilise la fonction partagée
 	ctx = tenant.WithTenant(ctx, shop)
 
 	provRef := "prov-123"
@@ -183,7 +186,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal_EscrowDone(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	shop := createTestShopPayment()
+	shop := createTestShopPayment() // Utilise la fonction partagée
 	ctx = tenant.WithTenant(ctx, shop)
 
 	provRef := "prov-123"

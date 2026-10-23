@@ -511,8 +511,9 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 }
 
 // 🛡️ PR 6 AUDIT : Claim atomique de l'inbox webhook.
-// Utilise une clause WHERE sur le DO UPDATE pour garantir qu'une seule instance peut revendiquer
-// le traitement d'un webhook, même en cas de réception simultanée par plusieurs pods/instances.
+// Utilise ExecContext avec ON CONFLICT DO UPDATE ... WHERE pour garantir qu'une seule instance
+// peut revendiquer le traitement. Si rowsAffected == 0, c'est que la condition WHERE a échoué
+// (déjà traité ou déjà en cours de traitement par une autre instance).
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -520,7 +521,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	payload []byte,
 	signature string,
 	signatureValid bool,
-	processingError string,
+	_ string, // processingError est ignoré lors du claim initial
 ) error {
 	if uc.db == nil {
 		return nil
@@ -536,10 +537,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		"raw": string(payload),
 	})
 
-	// Nous utilisons 'PROCESSING' comme verrou temporaire dans le champ processing_error.
-	// La clause WHERE garantit que l'update ne se produit que si le webhook n'a pas déjà
-	// été traité avec succès (processed=true, error=NULL) ET n'est pas déjà en cours de traitement.
-	claimQuery := `
+	query := `
 		INSERT INTO payment_webhooks (
 			provider, event_type, external_id, payload, signature,
 			signature_validated, processing_error, processed
@@ -549,39 +547,24 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 			processed = false
 		WHERE payment_webhooks.processed = false 
 		  AND (payment_webhooks.processing_error IS NULL OR payment_webhooks.processing_error != 'PROCESSING')
-		RETURNING id, processed, processing_error
 	`
 
-	var retID string
-	var retProcessed bool
-	var retError sql.NullString
-
-	err := uc.db.QueryRowContext(ctx, claimQuery,
+	res, err := uc.db.ExecContext(ctx, query,
 		provider, eventType, externalID, payloadJSON, signature, signatureValid,
-	).Scan(&retID, &retProcessed, &retError)
-
-	if err == sql.ErrNoRows {
-		// La ligne existe, mais la clause WHERE a empêché la mise à jour.
-		// Cela signifie qu'il est soit déjà traité avec succès, soit qu'une autre instance vient de le revendiquer.
-		var isProcessed bool
-		checkErr := uc.db.QueryRowContext(ctx, `
-			SELECT processed FROM payment_webhooks 
-			WHERE provider = $1 AND external_id = $2
-		`, provider, externalID).Scan(&isProcessed)
-
-		if checkErr == nil && isProcessed {
-			return ErrWebhookAlreadyProcessed
-		}
-
-		// Sinon, une autre instance est en train de le traiter. Nous abortons pour éviter le double traitement.
-		return ErrWebhookAlreadyProcessed
-	}
-
+	)
 	if err != nil {
 		return err
 	}
 
-	// Revendiqué avec succès (ou nouvellement inséré)
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		// La clause WHERE a empêché l'insertion/mise à jour.
+		// Cela signifie que le webhook est soit déjà traité avec succès (processed=true),
+		// soit qu'une autre instance est en train de le traiter (processing_error='PROCESSING').
+		// Dans les deux cas, nous devons abandonner pour éviter le double traitement.
+		return ErrWebhookAlreadyProcessed
+	}
+
 	return nil
 }
 
