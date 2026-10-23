@@ -30,20 +30,36 @@ func (r *FailedNotificationRepositoryPostgres) SaveFailedNotification(ctx contex
 	return err
 }
 
-func (r *FailedNotificationRepositoryPostgres) FindRetryableNotifications(ctx context.Context, limit int) ([]*entity.FailedNotification, error) {
+// FetchAndClaimRetryableNotifications est la méthode clé pour la concurrence multi-instance.
+// Elle sélectionne les lignes éligibles, les verrouille (SKIP LOCKED) et met à jour leur next_retry_at
+// à +1 heure (lease) en une seule opération atomique.
+func (r *FailedNotificationRepositoryPostgres) FetchAndClaimRetryableNotifications(ctx context.Context, limit int) ([]*entity.FailedNotification, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+
 	query := `
+		WITH claimed AS (
+			UPDATE failed_notifications
+			SET next_retry_at = NOW() + INTERVAL '1 hour',
+			    updated_at = NOW()
+			WHERE id IN (
+				SELECT id FROM failed_notifications
+				WHERE retry_count < max_retries AND next_retry_at <= NOW()
+				ORDER BY next_retry_at ASC
+				LIMIT $1
+				FOR UPDATE SKIP LOCKED
+			)
+			RETURNING id, notification_type, shop_id, payload, error_message, retry_count, max_retries, next_retry_at, created_at, updated_at
+		)
 		SELECT id, notification_type, shop_id, payload, error_message, retry_count, max_retries, next_retry_at, created_at, updated_at
-		FROM failed_notifications
-		WHERE retry_count < max_retries AND next_retry_at <= NOW()
+		FROM claimed
 		ORDER BY next_retry_at ASC
-		LIMIT $1
 	`
+
 	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
-		return nil, fmt.Errorf("find retryable notifications: %w", err)
+		return nil, fmt.Errorf("find and claim retryable notifications: %w", err)
 	}
 	defer rows.Close()
 
@@ -52,9 +68,11 @@ func (r *FailedNotificationRepositoryPostgres) FindRetryableNotifications(ctx co
 		var n entity.FailedNotification
 		var shopID sql.NullString
 		var errMsg sql.NullString
+
 		if err := rows.Scan(&n.ID, &n.NotificationType, &shopID, &n.Payload, &errMsg, &n.RetryCount, &n.MaxRetries, &n.NextRetryAt, &n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan failed notification: %w", err)
 		}
+
 		if shopID.Valid {
 			n.ShopID = &shopID.String
 		}
@@ -63,14 +81,16 @@ func (r *FailedNotificationRepositoryPostgres) FindRetryableNotifications(ctx co
 		}
 		notifs = append(notifs, &n)
 	}
+
 	return notifs, rows.Err()
 }
 
 func (r *FailedNotificationRepositoryPostgres) IncrementRetryCount(ctx context.Context, id string, errorMsg string) error {
+	// Cette requête écrase le "lease" de 1 heure par le vrai calcul de backoff exponentiel
 	query := `
 		UPDATE failed_notifications
 		SET retry_count = retry_count + 1,
-		    next_retry_at = NOW() + (retry_count + 1) * INTERVAL '10 minutes', -- Backoff exponentiel simple
+		    next_retry_at = NOW() + (retry_count + 1) * INTERVAL '10 minutes',
 		    error_message = $2,
 		    updated_at = NOW()
 		WHERE id = $1
@@ -80,7 +100,13 @@ func (r *FailedNotificationRepositoryPostgres) IncrementRetryCount(ctx context.C
 }
 
 func (r *FailedNotificationRepositoryPostgres) MarkAsPermanentFailure(ctx context.Context, id string) error {
-	query := `UPDATE failed_notifications SET updated_at = NOW() WHERE id = $1` // On garde l'historique, on incrémente juste plus
+	// On force retry_count = max_retries pour garantir qu'elle ne sera plus jamais sélectionnée
+	query := `
+		UPDATE failed_notifications 
+		SET retry_count = max_retries, 
+		    updated_at = NOW() 
+		WHERE id = $1
+	`
 	_, err := r.db.ExecContext(ctx, query, id)
 	return err
 }

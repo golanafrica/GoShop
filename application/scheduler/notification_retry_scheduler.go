@@ -38,13 +38,14 @@ func (s *NotificationRetryScheduler) Run(ctx context.Context) error {
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
 	log.Info().Msg("Starting notification retry job")
 
-	notifications, err := s.failedNotifRepo.FindRetryableNotifications(ctx, s.maxPerRun)
+	// 1. Récupérer ET verrouiller atomiquement les notifications (lease de 1h)
+	notifications, err := s.failedNotifRepo.FetchAndClaimRetryableNotifications(ctx, s.maxPerRun)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to find retryable notifications")
+		log.Error().Err(err).Msg("Failed to find and claim retryable notifications")
 		return err
 	}
 
-	log.Info().Int("count", len(notifications)).Msg("Found retryable notifications")
+	log.Info().Int("count", len(notifications)).Msg("Found and claimed retryable notifications")
 
 	for _, notif := range notifications {
 		var req service.NotificationRequest
@@ -54,15 +55,16 @@ func (s *NotificationRetryScheduler) Run(ctx context.Context) error {
 			continue
 		}
 
-		// On tente de renvoyer la notification
+		// 2. Tenter d'envoyer la notification
 		err := s.notifService.SendNotification(ctx, &req)
 
 		if err != nil {
-			// Si ça échoue encore, on incrémente le compteur de retry (backoff)
+			// 3a. Échec : on met à jour le compteur et on recalcule le prochain retry (backoff)
+			// Cela écrase le "lease" de 1 heure par le vrai délai de backoff
 			_ = s.failedNotifRepo.IncrementRetryCount(ctx, notif.ID, err.Error())
 			s.logger.Warn().Err(err).Str("notification_id", notif.ID).Msg("Notification retry failed, will retry later")
 		} else {
-			// Si ça réussit, on supprime l'entrée de la file d'attente
+			// 3b. Succès : on supprime l'entrée de la file d'attente
 			_ = s.failedNotifRepo.MarkAsSuccess(ctx, notif.ID)
 			s.logger.Info().Str("notification_id", notif.ID).Msg("Notification retry dispatched successfully")
 		}

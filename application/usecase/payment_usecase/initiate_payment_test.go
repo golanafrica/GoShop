@@ -901,9 +901,11 @@ func TestInitiatePaymentUsecase_OneStepEscrowCreationFails(t *testing.T) {
 
 	testOrder := createTestOrderWithItems(orderID, 50000)
 
+	// 🛡️ PR 4 AUDIT : FindByID peut être appelé plusieurs fois (récupération initiale + tentative de confirmation commande)
 	mockOrderRepo.EXPECT().
 		FindByID(gomock.Any(), orderID).
-		Return(testOrder, nil)
+		Return(testOrder, nil).
+		AnyTimes()
 
 	mockPaymentRepo.EXPECT().
 		FindByOrderID(gomock.Any(), orderUUID).
@@ -930,15 +932,25 @@ func TestInitiatePaymentUsecase_OneStepEscrowCreationFails(t *testing.T) {
 		Create(gomock.Any(), gomock.Any()).
 		Return(errors.New("database connection lost"))
 
-	// 🛡️ Le paiement doit être marqué comme ÉCHOUÉ de notre côté
+	// 🛡️ PR 4 AUDIT : Le paiement est marqué comme SUCCÈS avec un flag escrow_pending, PAS ÉCHOUÉ.
+	// Cela empêche le double prélèvement et permet une réconciliation ultérieure.
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
 		Return(nil)
 
+	// La confirmation de commande est "best effort", on l'autorise sans bloquer le test
+	mockOrderRepo.EXPECT().
+		UpdateOrder(gomock.Any(), gomock.Any()).
+		Return(nil).
+		AnyTimes()
+
 	req := createValidInitiateRequest(orderID)
 	response, err := uc.Execute(ctx, req)
 
-	assert.Error(t, err)
-	assert.Nil(t, response)
-	assert.Contains(t, err.Error(), "critical: failed to create escrow for successful payment")
+	// 🛡️ PR 4 AUDIT : Le usecase NE DOIT PAS retourner d'erreur, car le paiement a réussi côté provider.
+	// Il retourne une réponse de succès, et c'est au système de réconciliation de gérer le flag escrow_pending.
+	assert.NoError(t, err)
+	assert.NotNil(t, response)
+	assert.Equal(t, entity.PaymentStatusSuccess, response.Status)
+	assert.Equal(t, "YENGA-REF-ONE-STEP", response.ProviderRef)
 }

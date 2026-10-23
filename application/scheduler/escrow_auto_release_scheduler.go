@@ -250,6 +250,10 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 // creditMerchantWallet exécute le ClaimRelease, le crédit commission et le crédit wallet dans UNE SEULE transaction SQL.
 // Si le claim a déjà été pris ailleurs mais le ledger est absent, complète uniquement le crédit (orphan recovery).
+// creditMerchantWallet exécute le ClaimRelease, le crédit commission et le crédit wallet dans UNE SEULE transaction SQL.
+// Si le claim a déjà été pris ailleurs mais le ledger est absent, complète uniquement le crédit (orphan recovery).
+// creditMerchantWallet exécute le ClaimRelease, le crédit commission et le crédit wallet dans UNE SEULE transaction SQL.
+// Si le claim a déjà été pris ailleurs mais le ledger est absent, complète uniquement le crédit (orphan recovery).
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -357,39 +361,36 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("failed to credit wallet with debt sweep: %w", err)
 	}
 
+	// 🛡️ PR 2 AUDIT : Créer TOUJOURS un marqueur idempotent, même si netToBalance == 0.
+	// Cela empêche le scheduler de retenter indéfiniment un crédit déjà traité (ou partiellement traité).
 	refTypeCopy := refType
 	desc := fmt.Sprintf("Auto-release (Proof: %s, Escrow: %s) gross=%d net=%d swept=%d",
 		proofID, escrowID, merchantAmountCents, netToBalance, swept)
 
-	if netToBalance > 0 {
-		txn := &entity.WalletTransaction{
-			ID:                uuid.New().String(),
-			ShopID:            shopID,
-			TransactionType:   entity.WalletTxSaleCredit,
-			AmountCents:       netToBalance,
-			BalanceAfterCents: wallet.BalanceCents,
-			ReferenceType:     &refTypeCopy,
-			ReferenceID:       &proofID,
-			Description:       &desc,
-			Status:            entity.WalletTxCompleted,
-			CreatedAt:         time.Now().UTC(),
-		}
-		if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, txn); err != nil {
-			if isUniqueViolation(err) {
-				s.logger.Info().
-					Str("proof_id", proofID).
-					Msg("Unique constraint hit — wallet already credited concurrently")
-				return nil
-			}
-			return fmt.Errorf("failed to create wallet transaction: %w", err)
-		}
-	} else {
-		s.logger.Info().
-			Str("proof_id", proofID).
-			Int64("swept", swept).
-			Msg("Full debt sweep — no sale_credit line (net=0)")
+	markerTxn := &entity.WalletTransaction{
+		ID:                uuid.New().String(),
+		ShopID:            shopID,
+		TransactionType:   entity.WalletTxSaleCredit, // Utilisé comme marqueur de référence
+		AmountCents:       netToBalance,              // Sera 0 si dette totale absorbée
+		BalanceAfterCents: wallet.BalanceCents,
+		ReferenceType:     &refTypeCopy,
+		ReferenceID:       &proofID,
+		Description:       &desc,
+		Status:            entity.WalletTxCompleted,
+		CreatedAt:         time.Now().UTC(),
 	}
 
+	if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, markerTxn); err != nil {
+		if isUniqueViolation(err) {
+			s.logger.Info().
+				Str("proof_id", proofID).
+				Msg("Unique constraint hit — wallet already credited concurrently")
+			return nil // Idempotence garantie
+		}
+		return fmt.Errorf("failed to create wallet transaction marker: %w", err)
+	}
+
+	// Si un debt sweep a eu lieu, on l'enregistre aussi pour la traçabilité comptable
 	if swept > 0 {
 		sweepRefType := "debt_sweep"
 		sweepDesc := fmt.Sprintf("Debt sweep on auto-release proof=%s escrow=%s", proofID, escrowID)

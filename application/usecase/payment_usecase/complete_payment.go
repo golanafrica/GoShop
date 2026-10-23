@@ -117,6 +117,7 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 	}
 
 	if completeResp.Status == "DONE" {
+		// 🛡️ PR 4 AUDIT : Marquer le succès D'ABORD.
 		if err := paymentEntity.MarkSuccess(completeResp.TransactionID); err != nil {
 			return nil, fmt.Errorf("mark payment as success: %w", err)
 		}
@@ -138,6 +139,7 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 				// Chemin de récupération : l'escrow existe déjà, on s'assure juste que la commande est confirmée
 				logger.Info().Msg("Escrow already created — ensuring order confirmed only (recovery path)")
 				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
+					// On sauvegarde quand même le paiement comme succès avant de retourner l'erreur
 					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
 						logger.Error().Err(updateErr).Msg("Failed to persist payment before order-confirm error")
 					}
@@ -177,7 +179,21 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 
 					if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
 						logger.Error().Err(err).Msg("Failed to create escrow account in /complete")
-						return nil, fmt.Errorf("failed to create escrow: %w", err)
+
+						// 🛡️ PR 4 AUDIT : CORRECTION CRITIQUE DU BUG DE RETURN ANTICIPÉ
+						// L'argent est pris, on DOIT sauvegarder le paiement comme succès.
+						if paymentEntity.Metadata == nil {
+							paymentEntity.Metadata = make(map[string]interface{})
+						}
+						paymentEntity.Metadata["escrow_pending"] = true
+
+						if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+							logger.Error().Err(updateErr).Msg("Failed to persist payment after escrow error")
+						}
+
+						// On retourne une erreur pour que le frontend sache qu'il y a eu un souci interne,
+						// mais le paiement est bien enregistré en base comme succès avec le flag escrow_pending.
+						return nil, fmt.Errorf("payment succeeded but escrow creation failed (flagged for reconciliation): %w", err)
 					}
 
 					if paymentEntity.Metadata == nil {
@@ -208,6 +224,7 @@ func (uc *CompletePaymentUsecase) Execute(ctx context.Context, req *paymentdto.C
 		return nil, fmt.Errorf("unexpected status from provider: %s", completeResp.Status)
 	}
 
+	// Sauvegarde finale (si tout s'est bien passé ou si on est dans le chemin escrowAlreadyCreated)
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		return nil, fmt.Errorf("update payment: %w", err)
 	}

@@ -43,6 +43,21 @@ func (m *MockPaymentRepository) EXPECT() *MockPaymentRepositoryMockRecorder {
 	return m.recorder
 }
 
+// AddRefundAmount mocks base method.
+func (m *MockPaymentRepository) AddRefundAmount(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64, newStatus entity.PaymentStatus) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddRefundAmount", ctx, paymentID, refundAmountCents, newStatus)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddRefundAmount indicates an expected call of AddRefundAmount.
+func (mr *MockPaymentRepositoryMockRecorder) AddRefundAmount(ctx, paymentID, refundAmountCents, newStatus any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddRefundAmount", reflect.TypeOf((*MockPaymentRepository)(nil).AddRefundAmount), ctx, paymentID, refundAmountCents, newStatus)
+}
+
 // Create mocks base method.
 func (m *MockPaymentRepository) Create(ctx context.Context, payment *entity.Payment) error {
 	m.ctrl.T.Helper()

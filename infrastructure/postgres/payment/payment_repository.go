@@ -72,8 +72,8 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 			amount_cents, currency, customer_phone, customer_email,
 			description, status, metadata, initiated_at, completed_at, expires_at,
 			reference_type, reference_id, webhook_external_id, provider_fees_cents,
-			commission_cents, commission_rate_bps, commission_status
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			refunded_amount_cents, commission_cents, commission_rate_bps, commission_status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 	`
 
 	_, err = r.execContext(ctx, query,
@@ -96,6 +96,7 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
+		payment.RefundedAmountCents, // 🆕 PR 5 AUDIT
 		payment.CommissionCents,
 		payment.CommissionRateBps,
 		payment.CommissionStatus,
@@ -119,7 +120,7 @@ func (r *PaymentRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUID) 
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE id = $1 AND shop_id = $2
@@ -139,7 +140,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderID(ctx context.Context, orderID u
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1 AND shop_id = $2
@@ -161,7 +162,7 @@ func (r *PaymentRepositoryPostgres) FindByProviderRef(ctx context.Context, provi
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -176,7 +177,7 @@ func (r *PaymentRepositoryPostgres) FindByProviderRefForUpdate(ctx context.Conte
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE provider = $1 AND provider_ref = $2
@@ -192,7 +193,7 @@ func (r *PaymentRepositoryPostgres) FindByShop(ctx context.Context, shopID uuid.
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE shop_id = $1
@@ -246,7 +247,6 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	// ✅ CORRECTION : Ajout de commission_cents, commission_rate_bps et commission_status dans l'UPDATE
 	query := `
 		UPDATE payments SET
 			provider_ref = $1,
@@ -258,11 +258,12 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 			reference_id = $7,
 			webhook_external_id = $8,
 			provider_fees_cents = $9,
-			commission_cents = $10,
-			commission_rate_bps = $11,
-			commission_status = $12,
+			refunded_amount_cents = $10,
+			commission_cents = $11,
+			commission_rate_bps = $12,
+			commission_status = $13,
 			updated_at = NOW()
-		WHERE id = $13 AND shop_id = $14
+		WHERE id = $14 AND shop_id = $15
 	`
 
 	result, err := r.execContext(ctx, query,
@@ -275,6 +276,7 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
+		payment.RefundedAmountCents, // 🆕 PR 5 AUDIT
 		payment.CommissionCents,
 		payment.CommissionRateBps,
 		payment.CommissionStatus,
@@ -322,6 +324,7 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&referenceID,
 		&webhookExternalID,
 		&p.ProviderFeesCents,
+		&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
 		&p.CommissionCents,
 		&p.CommissionRateBps,
 		&commissionStatus,
@@ -406,6 +409,7 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 			&referenceID,
 			&webhookExternalID,
 			&p.ProviderFeesCents,
+			&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
 			&p.CommissionCents,
 			&p.CommissionRateBps,
 			&commissionStatus,
@@ -478,7 +482,8 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
             COALESCE(commission_cents, 0) as commission_cents,
             COALESCE(commission_status, 'pending') as commission_status,
             commission_collected_at,
-            COALESCE(provider_fees_cents, 0) as provider_fees_cents
+            COALESCE(provider_fees_cents, 0) as provider_fees_cents,
+            COALESCE(refunded_amount_cents, 0) as refunded_amount_cents
         FROM payments
         WHERE status = 'success'
           AND (commission_status IS NULL OR commission_status = 'pending')
@@ -521,6 +526,7 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
 			&p.CommissionStatus,
 			&p.CommissionCollectedAt,
 			&p.ProviderFeesCents,
+			&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
@@ -584,7 +590,7 @@ func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, o
 		       amount_cents, currency, customer_phone, customer_email,
 		       description, status, metadata, initiated_at, completed_at,
 		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
-		       commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
 		       created_at, updated_at
 		FROM payments
 		WHERE order_id = $1
@@ -598,4 +604,37 @@ func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, o
 	defer rows.Close()
 
 	return r.scanPayments(rows)
+}
+
+// 🆕 PR 5 AUDIT : AddRefundAmount met à jour le cumul remboursé de manière atomique.
+// La clause WHERE garantit que (montant_total - montant_déjà_remboursé) >= montant_du_nouveau_remboursement.
+// Cela empêche les conditions de course de rembourser plus que le montant initial.
+func (r *PaymentRepositoryPostgres) AddRefundAmount(
+	ctx context.Context,
+	paymentID uuid.UUID,
+	refundAmountCents int64,
+	newStatus entity.PaymentStatus,
+) (bool, error) {
+	query := `
+		UPDATE payments
+		SET 
+			refunded_amount_cents = refunded_amount_cents + $1,
+			status = $2,
+			updated_at = NOW()
+		WHERE id = $3
+		  AND (amount_cents - refunded_amount_cents) >= $1
+	`
+
+	res, err := r.execContext(ctx, query, refundAmountCents, string(newStatus), paymentID)
+	if err != nil {
+		return false, fmt.Errorf("add refund amount: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("check rows affected: %w", err)
+	}
+
+	// Si rows == 0, c'est que la condition WHERE a échoué (montant insuffisant ou course)
+	return rows > 0, nil
 }

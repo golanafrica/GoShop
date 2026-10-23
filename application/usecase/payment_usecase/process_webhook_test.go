@@ -35,10 +35,24 @@ func createMockDBExecutor(ctrl *gomock.Controller) *mockrepo.MockDBExecutor {
 	return mockrepo.NewMockDBExecutor(ctrl)
 }
 
-// INSERT processed=false + mark processed/failed (plusieurs ExecContext)
+// expectWebhookAudit configure le mock pour accepter les appels ExecContext avec les différents nombres d'arguments
+// utilisés par recordWebhook (8), markWebhookProcessed (4) et markWebhookFailed (5).
 func expectWebhookAudit(mockDB *mockrepo.MockDBExecutor) {
+	// 1. Pour recordWebhook (8 arguments : ctx, query, provider, eventType, externalID, payload, signature, signatureValid)
 	mockDB.EXPECT().
-		ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).
+		ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&mockResult{rowsAffected: 1}, nil).
+		AnyTimes()
+
+	// 2. Pour markWebhookProcessed (4 arguments : ctx, query, provider, externalID)
+	mockDB.EXPECT().
+		ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&mockResult{rowsAffected: 1}, nil).
+		AnyTimes()
+
+	// 3. Pour markWebhookFailed (5 arguments : ctx, query, provider, externalID, errMsg)
+	mockDB.EXPECT().
+		ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).
 		AnyTimes()
 }
