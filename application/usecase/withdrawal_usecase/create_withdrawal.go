@@ -20,7 +20,7 @@ import (
 // Utilisé après reverse cash-out fail, ou quand le retrait reste en processing (timeout réseau).
 type ErrWithdrawalOutcome struct {
 	WithdrawalID string
-	Status       string // "failed" | "processing" | "compensation_pending"
+	Status       string // "failed" | "processing" | "reconciliation_required" | "compensation_pending"
 	Message      string
 }
 
@@ -342,36 +342,35 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	}
 
 	// ============================================================
-	// 4) Appel Provider + Gestion P0 des erreurs (Timeout Trap)
+	// 4) Appel Provider + Gestion P0 des erreurs (Audit Step 3)
 	// ============================================================
 	cashOutResp, err := yengaProvider.CashOut(ctx, cashOutReq)
 	if err != nil {
-		// P0 : timeout / réseau → NE PAS reverse (attendre webhook)
-		if isNetworkOrTimeoutError(err) {
-			logger.Warn().
-				Err(err).
-				Str("withdrawal_id", withdrawalID).
-				Msg("CashOut network error/timeout. Leaving as PROCESSING for webhook reconciliation. DO NOT REVERSE DEBIT.")
-
-			if markErr := withdrawal.MarkProcessing(""); markErr != nil {
-				return nil, fmt.Errorf("mark processing after network error: %w", markErr)
-			}
-			if updateErr := uc.withdrawalRepo.Update(ctx, withdrawal); updateErr != nil {
-				return nil, fmt.Errorf("update withdrawal after network error: %w", updateErr)
-			}
-
-			return nil, &ErrWithdrawalOutcome{
-				WithdrawalID: withdrawalID,
-				Status:       "processing",
-				Message: fmt.Sprintf(
-					"le retrait est en cours de traitement et sera confirme par le fournisseur sous peu (reference: %s)",
-					withdrawalID,
-				),
-			}
+		// 🛡️ PR 3 AUDIT : Seul un refus explicite et définitif autorise le reverse.
+		if isDefinitiveRejection(err) {
+			return failAfterDebit(err, "cash-out definitively rejected by provider")
 		}
 
-		// Erreur métier définitive → reverse + failed/compensation_pending
-		return failAfterDebit(err, "cash-out definitively rejected by provider")
+		// Erreur ambiguë (réseau, 5xx, parsing, inconnue) → NE PAS REVERSER.
+		// On passe en reconciliation_required pour vérification manuelle ou webhook.
+		logger.Warn().
+			Err(err).
+			Str("withdrawal_id", withdrawalID).
+			Msg("CashOut ambiguous error. Moving to RECONCILIATION_REQUIRED. DO NOT REVERSE DEBIT.")
+
+		reason := fmt.Sprintf("Ambiguous cash-out error: %v", err)
+		ok, transitionErr := uc.withdrawalRepo.TransitionToReconciliationRequired(ctx, withdrawal.ID, reason)
+		if transitionErr != nil {
+			logger.Error().Err(transitionErr).Msg("CRITICAL: Failed to transition to reconciliation_required")
+		} else if !ok {
+			logger.Warn().Msg("Withdrawal status already changed by concurrent process (e.g., webhook)")
+		}
+
+		return nil, &ErrWithdrawalOutcome{
+			WithdrawalID: withdrawalID,
+			Status:       "reconciliation_required",
+			Message:      fmt.Sprintf("Le retrait est en cours de vérification auprès du fournisseur en raison d'une réponse ambiguë (reference: %s)", withdrawalID),
+		}
 	}
 
 	// CashOut accepte : NE PAS reverse
@@ -453,18 +452,64 @@ func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
 	return nil
 }
 
-func isNetworkOrTimeoutError(err error) bool {
+// 🛡️ PR 3 AUDIT : isDefinitiveRejection détermine si l'erreur est un refus explicite et définitif.
+// Si c'est une erreur réseau, de parsing, ou un 5xx, on retourne false (ambigu → pas de reverse).
+func isDefinitiveRejection(err error) bool {
 	if err == nil {
 		return false
 	}
 	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "context deadline exceeded") ||
-		strings.Contains(errStr, "no route to host") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "502 bad gateway") ||
-		strings.Contains(errStr, "504 gateway timeout") ||
-		strings.Contains(errStr, "i/o timeout")
+
+	// 1. Erreurs réseau, parsing ou marshal = AMBIGUËS (ne jamais reverse)
+	ambiguousKeywords := []string{
+		"timeout",
+		"context deadline exceeded",
+		"no route to host",
+		"connection refused",
+		"502 bad gateway",
+		"504 gateway timeout",
+		"i/o timeout",
+		"failed to send request",
+		"failed to read response",
+		"failed to parse response",
+		"failed to marshal",
+		"status 500",
+		"status 502",
+		"status 503",
+		"status 504",
+	}
+	for _, kw := range ambiguousKeywords {
+		if strings.Contains(errStr, kw) {
+			return false
+		}
+	}
+
+	// 2. Erreurs HTTP 4xx avec mots-clés de rejet métier = DÉFINITIVES
+	if strings.Contains(errStr, "status 400") ||
+		strings.Contains(errStr, "status 401") ||
+		strings.Contains(errStr, "status 403") ||
+		strings.Contains(errStr, "status 404") ||
+		strings.Contains(errStr, "status 422") {
+
+		definitiveKeywords := []string{
+			"invalid",
+			"not found",
+			"insufficient",
+			"rejected",
+			"unauthorized",
+			"forbidden",
+			"blocked",
+			"incorrect",
+		}
+		for _, kw := range definitiveKeywords {
+			if strings.Contains(errStr, kw) {
+				return true
+			}
+		}
+	}
+
+	// Par défaut, en cas de doute, on considère comme AMBIGUË pour éviter le double reverse.
+	return false
 }
 
 func markWithdrawalFailed(

@@ -95,15 +95,13 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
 	}
 
-	// 🛡️ CORRECTION CRITIQUE P1-1 : L'écriture Inbox est OBLIGATOIRE avant tout traitement.
+	// 🛡️ PR 6 AUDIT : Claim atomique de l'inbox. Empêche le double traitement en multi-instance.
 	if err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, ""); err != nil {
 		if errors.Is(err, ErrWebhookAlreadyProcessed) {
-			logger.Info().Msg("Webhook already processed (idempotent)")
+			logger.Info().Msg("Webhook already processed or claimed by another instance (idempotent)")
 			return ErrWebhookAlreadyProcessed
 		}
-		// Si l'audit ne peut pas être sauvegardé, nous ABORTONS le traitement métier.
-		// Cela force le handler à renvoyer un 500, ce qui incitera le fournisseur à réessayer.
-		logger.Error().Err(err).Msg("Failed to record webhook audit, aborting processing to allow provider retry")
+		logger.Error().Err(err).Msg("Failed to record/claim webhook audit, aborting processing to allow provider retry")
 		return fmt.Errorf("%w: failed to persist webhook inbox", ErrWebhookProcessing)
 	}
 
@@ -371,12 +369,10 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		return nil, "", err
 	}
 
-	// 1. Essayer de matcher par la référence fournisseur directe (le plus fiable)
 	if p, label, _ := tryRef(event.ProviderRef, "provider_ref"); p != nil {
 		return p, label, nil
 	}
 
-	// 2. Essayer de matcher par les identifiants de transaction dans les métadonnées
 	intentKeys := []string{
 		"payment_intent_id", "paymentIntentId", "paymentIntentID",
 		"payment_intent", "intent_id", "intentId",
@@ -401,7 +397,6 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 	}
 
-	// 3. Essayer de matcher si la référence est l'ID du paiement lui-même
 	if ref := metaString(event.Metadata, "reference"); ref != "" {
 		if pid, err := uuid.Parse(ref); err == nil {
 			p, err := uc.paymentRepo.FindByID(ctx, pid)
@@ -414,7 +409,6 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 	}
 
-	// 4. Fallback ultime : par order_id (seulement si aucun identifiant de paiement spécifique n'est fourni)
 	orderIDStr := metaString(event.Metadata, "order_id")
 	if orderIDStr == "" {
 		if ref := metaString(event.Metadata, "reference"); strings.HasPrefix(ref, "ORDER-") {
@@ -440,7 +434,6 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
 }
 
-// 🛡️ CORRECTION CRITIQUE P1-2 : Refus strict de deviner en cas d'ambiguïté
 func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error) {
 	if len(payments) == 0 {
 		return nil, fmt.Errorf("no payments found for order")
@@ -448,11 +441,6 @@ func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error
 	if len(payments) == 1 {
 		return payments[0], nil
 	}
-
-	// Si nous en sommes arrivés ici, c'est que le webhook ne contient PAS d'identifiant
-	// spécifique (payment_intent_id, transId, etc.) et que nous dépendons uniquement de l'order_id.
-	// Choisir arbitrairement parmi plusieurs paiements (surtout s'il y a plusieurs 'pending'
-	// ou 'success') est un risque financier inacceptable (application à la mauvaise tentative).
 	return nil, fmt.Errorf("ambiguous payment state: %d payments exist for this order, and webhook lacks specific payment identifier. Manual reconciliation required", len(payments))
 }
 
@@ -522,6 +510,9 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
+// 🛡️ PR 6 AUDIT : Claim atomique de l'inbox webhook.
+// Utilise une clause WHERE sur le DO UPDATE pour garantir qu'une seule instance peut revendiquer
+// le traitement d'un webhook, même en cas de réception simultanée par plusieurs pods/instances.
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -545,44 +536,52 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		"raw": string(payload),
 	})
 
-	processed := false
-
-	query := `
+	// Nous utilisons 'PROCESSING' comme verrou temporaire dans le champ processing_error.
+	// La clause WHERE garantit que l'update ne se produit que si le webhook n'a pas déjà
+	// été traité avec succès (processed=true, error=NULL) ET n'est pas déjà en cours de traitement.
+	claimQuery := `
 		INSERT INTO payment_webhooks (
 			provider, event_type, external_id, payload, signature,
 			signature_validated, processing_error, processed
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (provider, external_id) DO NOTHING
+		) VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSING', false)
+		ON CONFLICT (provider, external_id) DO UPDATE SET
+			processing_error = 'PROCESSING',
+			processed = false
+		WHERE payment_webhooks.processed = false 
+		  AND (payment_webhooks.processing_error IS NULL OR payment_webhooks.processing_error != 'PROCESSING')
+		RETURNING id, processed, processing_error
 	`
 
-	res, err := uc.db.ExecContext(ctx, query,
-		provider,
-		eventType,
-		externalID,
-		payloadJSON,
-		signature,
-		signatureValid,
-		nullIfEmpty(processingError),
-		processed,
-	)
+	var retID string
+	var retProcessed bool
+	var retError sql.NullString
+
+	err := uc.db.QueryRowContext(ctx, claimQuery,
+		provider, eventType, externalID, payloadJSON, signature, signatureValid,
+	).Scan(&retID, &retProcessed, &retError)
+
+	if err == sql.ErrNoRows {
+		// La ligne existe, mais la clause WHERE a empêché la mise à jour.
+		// Cela signifie qu'il est soit déjà traité avec succès, soit qu'une autre instance vient de le revendiquer.
+		var isProcessed bool
+		checkErr := uc.db.QueryRowContext(ctx, `
+			SELECT processed FROM payment_webhooks 
+			WHERE provider = $1 AND external_id = $2
+		`, provider, externalID).Scan(&isProcessed)
+
+		if checkErr == nil && isProcessed {
+			return ErrWebhookAlreadyProcessed
+		}
+
+		// Sinon, une autre instance est en train de le traiter. Nous abortons pour éviter le double traitement.
+		return ErrWebhookAlreadyProcessed
+	}
+
 	if err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Msg("Failed to record webhook")
 		return err
 	}
 
-	rowsAffected, _ := res.RowsAffected()
-	if rowsAffected == 0 && externalID != "" {
-		var already bool
-		q := `SELECT processed FROM payment_webhooks WHERE provider = $1 AND external_id = $2`
-		if scanErr := uc.db.QueryRowContext(ctx, q, provider, externalID).Scan(&already); scanErr == nil && already {
-			return ErrWebhookAlreadyProcessed
-		}
-		zerolog.Ctx(ctx).Info().
-			Str("provider", string(provider)).
-			Str("external_id", externalID).
-			Msg("Webhook row exists with processed=false — retry allowed")
-	}
-
+	// Revendiqué avec succès (ou nouvellement inséré)
 	return nil
 }
 

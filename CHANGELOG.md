@@ -9,18 +9,17 @@ et ce projet adhère au [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
-## [v5.2.0-financial-integrity] - 2026-10-14
+## [v5.2.0-financial-integrity] - 2026-10-21
 
-### 🚀 Résolutions d'Audit de Sécurité & Résilience (P0/P1/P2)
-Cette version clôture les recommandations critiques de l'audit de sécurité, transformant GoShop en une plateforme avec une intégrité financière de niveau "Bank-Grade".
+### 🚀 Clôture de l'Audit de Sécurité & Résilience (6 PRs Critiques)
+Cette version clôture intégralement les recommandations de l'audit financier, transformant GoShop en une plateforme avec une intégrité de niveau "Bank-Grade".
 
-- **Retraits & Compensation (P0-A)** : Implémentation du statut `compensation_pending`. Ajout d'un `CompensationPendingScheduler` avec verrouillage advisory, retry automatique et injection stricte du contexte multi-tenant. Le reverse est désormais **idempotent** via le ledger. Ajout d'un test E2E de chaos validant la restauration du solde.
-- **Webhooks Paiement (P0-B)** : Suppression du fallback ambigu `payments[0]` dans `pickBestPaymentForOrder`. Matching strict par `provider_ref`. Atomicité garantie : `ensureOrderConfirmed` retourne désormais une erreur en cas d'échec, permettant un replay sûr du webhook sans créer de doublon d'escrow.
-- **Idempotence HTTP (P1)** : Prévention du cache poisoning inter-utilisateurs. Le middleware vérifie désormais strictement que la clé d'idempotence correspond au même `UserID` et `Endpoint`. Correction du bypass des clés expirées (recréation sécurisée au lieu d'une simple suppression).
-- **Freeze Job (P1/P2)** : 
-  - Pagination SQL (`LIMIT`/`OFFSET`) via `FindGracePeriodExpiredPaginated` pour éliminer tout risque de fuite de mémoire (OOM) sur les grands volumes.
-  - Comptage strict des échecs de vérification d'idempotence comme `skipped`.
-  - Envoi **réel** des notifications administrateur via `notifService.SendNotification` (fin des notifications "fantômes").
+- **PR 1 : Retraits & Réconciliation (P0)** : Introduction du statut `reconciliation_required`. Transition atomique (`TransitionToReconciliationRequired`) pour éviter les courses avec les webhooks. Logique `isDefinitiveRejection` stricte : seuls les rejets métier explicites déclenchent un reverse, les erreurs réseau/5xx passent en réconciliation pour éviter les doubles paiements.
+- **PR 2 : Escrow Auto-Release (P1)** : Création systématique d'un marqueur idempotent dans le ledger (`escrow_auto_release`), **même lorsque le debt sweep absorbe 100 % du montant** (`netToBalance == 0`). Cela empêche toute boucle de double libération en cas de redémarrage du scheduler.
+- **PR 3 : Tontine (P1)** : Retry idempotent du crédit marchand lors du replay de webhook. Si le voucher existe mais que le crédit a échoué, le système complète le crédit avant d'avancer le cycle, éliminant le risque de cycle "terminé" mais impayé.
+- **PR 4 : Paiement ONE_STEP (P1)** : Le succès du prestataire est **toujours** enregistré localement. En cas d'échec interne (ex: création d'escrow), le paiement est marqué avec un flag `escrow_pending` au lieu de `failed`, empêchant toute incitation au double prélèvement.
+- **PR 5 : Remboursements Partiels (P1)** : Mise à jour atomique via `AddRefundAmount` avec contrainte SQL stricte (`WHERE (amount_cents - refunded_amount_cents) >= $2`). Garantie absolue que le cumul des remboursements ne dépasse jamais le montant payé, même sous forte concurrence.
+- **PR 6 : Webhooks & Notifications (P2)** : Implémentation du pattern `FOR UPDATE SKIP LOCKED` pour le claim atomique de l'inbox des webhooks (`recordWebhook`) et de la file de retry des notifications (`FetchAndClaimRetryableNotifications`). Garantie de zéro traitement en double en environnement multi-instance.
 
 ### 🛠️ Architecture & Ops
 - **Migration auto** : Service Compose one-shot `migrate` + scripts dédiés (`schema_migrations`, skip des déjà appliquées) — plus de dépendance exclusive à `initdb.d` pour les nouveaux `.sql`.
@@ -32,10 +31,11 @@ Cette version clôture les recommandations critiques de l'audit de sécurité, t
   - `e2e-compensation-pending-job.ps1` : Validation du retry automatique, restauration du solde et intégrité du ledger.
   - `e2e-wallet-grace-expiry-job.ps1` : Preview, dry-run, live, idempotence, sécurité finance, RBAC marchand.
   - `e2e-tontine-net-held.ps1`, `e2e-tontine-redeem-debt-sweep.ps1`, `e2e-installment-escrow-release.ps1`, `e2e-cash-on-delivery.ps1`.
-- **Unitaires** : `withdrawal_usecase` (reverse idempotent), `payment_usecase` (webhook processed lifecycle).
+- **Unitaires** : `withdrawal_usecase` (reverse idempotent), `payment_usecase` (webhook processed lifecycle, refund atomic constraints).
 - **Auth E2E** : Login public via `POST /login` (standardisé).
 
 ### 📚 Documentation
+- Mise à jour de [docs/audit/financial-invariants.md](docs/audit/financial-invariants.md) avec les 6 nouveaux invariants garantis par le code.
 - [docs/13-wallet-grace-expiry-job.md](docs/13-wallet-grace-expiry-job.md) + [docs/adr/ADR-wallet-grace-expiry-job.md](docs/adr/ADR-wallet-grace-expiry-job.md)
 - [docs/payment-system.md](docs/payment-system.md) **v5.2** — reverse cash-out, payout webhook, cycle `processed`
 - [docs/12-wallet-debt-sweep.md](docs/12-wallet-debt-sweep.md) — modèle, flux, API, E2E, fichiers de référence
@@ -46,6 +46,7 @@ Cette version clôture les recommandations critiques de l'audit de sécurité, t
 - ✅ Pas de solde « avalé » sur CashOut refusé (reverse P0-A / P0-B).
 - ✅ Webhooks pay-in rejouables après erreur métier sans corrompre l'état (P1-C).
 - ✅ Job freeze **sans** impact silencieux sur `debt_cents` ou ledger clawback.
+- ✅ Remboursements partiels mathématiquement bornés par le montant initial.
 
 ---
 
@@ -300,5 +301,4 @@ openssl rand -base64 32 | Select-Object -First 1 | ForEach-Object { $_.Substring
 # Database Password (PowerShell)
 -join ((65..90) + (97..122) + (48..57) + (33..47) | Get-Random -Count 24 | ForEach-Object {[char]$_})
 ```
-
----
+```
