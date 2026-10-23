@@ -42,6 +42,23 @@ func createPartiallyRefundedPayment(shopID uuid.UUID, amountCents, alreadyRefund
 	return payment
 }
 
+// paymentAfterReserve simule l'état DB après AddRefundAmount réussi.
+func paymentAfterReserve(base *entity.Payment, refundAmount int64, newStatus entity.PaymentStatus) *entity.Payment {
+	clone := *base
+	clone.RefundedAmountCents = base.RefundedAmountCents + refundAmount
+	clone.Status = newStatus
+	if clone.Metadata == nil {
+		clone.Metadata = make(map[string]interface{})
+	} else {
+		md := make(map[string]interface{}, len(base.Metadata)+3)
+		for k, v := range base.Metadata {
+			md[k] = v
+		}
+		clone.Metadata = md
+	}
+	return &clone
+}
+
 // ============================================================
 // TESTS : Validation & Multi-tenant
 // ============================================================
@@ -61,7 +78,7 @@ func TestRefundPaymentUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	uc := paymentusecase.NewRefundPaymentUsecase(mockrepo.NewMockPaymentRepository(ctrl), mockusecase.NewMockPaymentRegistry(ctrl))
-	ctx := context.Background() // Pas de tenant
+	ctx := context.Background()
 	req := createValidRefundRequest(uuid.New().String())
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
@@ -92,14 +109,12 @@ func TestRefundPaymentUsecase_PaymentNotBelongToShop(t *testing.T) {
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	uc := paymentusecase.NewRefundPaymentUsecase(mockPaymentRepo, mockusecase.NewMockPaymentRegistry(ctrl))
 	ctx := createTestContextForPayment()
-	shop, _ := tenant.FromContext(ctx)
 	wrongShopPayment := createSuccessfulPayment(uuid.New(), 50000)
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), wrongShopPayment.ID).Return(wrongShopPayment, nil)
 	req := createValidRefundRequest(wrongShopPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "does not belong to current shop")
-	_ = shop
 }
 
 func TestRefundPaymentUsecase_PaymentNotRefundable(t *testing.T) {
@@ -125,7 +140,7 @@ func TestRefundPaymentUsecase_AlreadyFullyRefunded(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	refundedPayment := createSuccessfulPayment(shop.ID, 50000)
-	refundedPayment.MarkRefunded() // Déjà 100% remboursé
+	refundedPayment.MarkRefunded()
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), refundedPayment.ID).Return(refundedPayment, nil)
 	req := createValidRefundRequest(refundedPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
@@ -141,13 +156,13 @@ func TestRefundPaymentUsecase_RefundAmountExceedsRemaining(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 
-	// Paiement de 50000, déjà remboursé de 30000. Reste 20000.
+	// 50000 total, déjà 30000 → reste 20000
 	partialPayment := createPartiallyRefundedPayment(shop.ID, 50000, 30000)
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
 
 	req := &paymentdto.RefundPaymentRequest{
 		PaymentID:   partialPayment.ID.String(),
-		AmountCents: 25000, // ❌ Dépasse le reste remboursable (20000)
+		AmountCents: 25000,
 		Reason:      "Customer request",
 	}
 	_, err := uc.Execute(ctx, req)
@@ -156,7 +171,7 @@ func TestRefundPaymentUsecase_RefundAmountExceedsRemaining(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : Provider errors
+// TESTS : Provider errors (après réservation atomique)
 // ============================================================
 
 func TestRefundPaymentUsecase_ProviderNotFound(t *testing.T) {
@@ -168,8 +183,18 @@ func TestRefundPaymentUsecase_ProviderNotFound(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	successPayment := createSuccessfulPayment(shop.ID, 50000)
+
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	// Réservation AVANT l'appel provider
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
+		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(nil, errors.New("provider not found"))
+	// Reverse de la réservation
+	mockPaymentRepo.EXPECT().
+		ReverseRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusSuccess).
+		Return(true, nil)
+
 	req := createValidRefundRequest(successPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
@@ -186,9 +211,19 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	successPayment := createSuccessfulPayment(shop.ID, 50000)
+
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
+		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
-	mockProvider.EXPECT().Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).Return(errors.New("insufficient funds"))
+	mockProvider.EXPECT().
+		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
+		Return(errors.New("insufficient funds"))
+	mockPaymentRepo.EXPECT().
+		ReverseRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusSuccess).
+		Return(true, nil)
+
 	req := createValidRefundRequest(successPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
@@ -196,7 +231,7 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 }
 
 // ============================================================
-// TESTS : Happy paths (PR 5 Audit Focus)
+// TESTS : Happy paths (réservation atomique)
 // ============================================================
 
 func TestRefundPaymentUsecase_Success_FullRefund(t *testing.T) {
@@ -209,9 +244,18 @@ func TestRefundPaymentUsecase_Success_FullRefund(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	successPayment := createSuccessfulPayment(shop.ID, 50000)
+	after := paymentAfterReserve(successPayment, 50000, entity.PaymentStatusRefunded)
+
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
+		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
-	mockProvider.EXPECT().Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).Return(nil)
+	mockProvider.EXPECT().
+		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
+		Return(nil)
+	// Reload après succès provider
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(after, nil)
 	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
@@ -233,15 +277,22 @@ func TestRefundPaymentUsecase_Success_PartialRefund(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	successPayment := createSuccessfulPayment(shop.ID, 50000)
-	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
-	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
-	mockProvider.EXPECT().Refund(gomock.Any(), "TXN-123", int64(30000), gomock.Any(), gomock.Any()).Return(nil)
+	after := paymentAfterReserve(successPayment, 30000, entity.PaymentStatusPartiallyRefunded)
 
-	// Vérifier que le statut devient partially_refunded et que le cumul est mis à jour
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(30000), entity.PaymentStatusPartiallyRefunded).
+		Return(true, nil)
+	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
+	mockProvider.EXPECT().
+		Refund(gomock.Any(), "TXN-123", int64(30000), gomock.Any(), gomock.Any()).
+		Return(nil)
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(after, nil)
 	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, p *entity.Payment) error {
 		assert.Equal(t, entity.PaymentStatusPartiallyRefunded, p.Status)
 		assert.Equal(t, int64(30000), p.RefundedAmountCents)
 		assert.Equal(t, int64(30000), p.Metadata["total_refunded_amount"])
+		assert.Equal(t, int64(30000), p.Metadata["last_refund_amount"])
 		return nil
 	})
 
@@ -267,18 +318,22 @@ func TestRefundPaymentUsecase_Success_MultiplePartialRefunds(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 
-	// Paiement de 50000, déjà remboursé de 20000. Reste 30000.
+	// 50000, déjà 20000 → reste 30000 ; on ajoute 15000 → cumul 35000
 	partialPayment := createPartiallyRefundedPayment(shop.ID, 50000, 20000)
+	after := paymentAfterReserve(partialPayment, 15000, entity.PaymentStatusPartiallyRefunded)
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), partialPayment.ID, int64(15000), entity.PaymentStatusPartiallyRefunded).
+		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
-
-	// On rembourse 15000 de plus
-	mockProvider.EXPECT().Refund(gomock.Any(), "TXN-123", int64(15000), gomock.Any(), gomock.Any()).Return(nil)
-
+	mockProvider.EXPECT().
+		Refund(gomock.Any(), "TXN-123", int64(15000), gomock.Any(), gomock.Any()).
+		Return(nil)
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(after, nil)
 	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, p *entity.Payment) error {
 		assert.Equal(t, entity.PaymentStatusPartiallyRefunded, p.Status)
-		assert.Equal(t, int64(35000), p.RefundedAmountCents) // 20000 + 15000
+		assert.Equal(t, int64(35000), p.RefundedAmountCents)
 		assert.Equal(t, int64(35000), p.Metadata["total_refunded_amount"])
 		return nil
 	})
@@ -305,25 +360,27 @@ func TestRefundPaymentUsecase_Success_FinalPartialRefundBecomesFull(t *testing.T
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 
-	// Paiement de 50000, déjà remboursé de 20000. Reste 30000.
 	partialPayment := createPartiallyRefundedPayment(shop.ID, 50000, 20000)
+	after := paymentAfterReserve(partialPayment, 30000, entity.PaymentStatusRefunded)
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), partialPayment.ID, int64(30000), entity.PaymentStatusRefunded).
+		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
-
-	// On rembourse exactement le reste (30000)
-	mockProvider.EXPECT().Refund(gomock.Any(), "TXN-123", int64(30000), gomock.Any(), gomock.Any()).Return(nil)
-
+	mockProvider.EXPECT().
+		Refund(gomock.Any(), "TXN-123", int64(30000), gomock.Any(), gomock.Any()).
+		Return(nil)
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(after, nil)
 	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, p *entity.Payment) error {
-		// Doit passer à Refunded, pas PartiallyRefunded
 		assert.Equal(t, entity.PaymentStatusRefunded, p.Status)
-		assert.Equal(t, int64(50000), p.RefundedAmountCents) // Doit égaler le montant total
+		assert.Equal(t, int64(50000), p.RefundedAmountCents)
 		return nil
 	})
 
 	req := &paymentdto.RefundPaymentRequest{
 		PaymentID:   partialPayment.ID.String(),
-		AmountCents: 30000, // Exactement le reste
+		AmountCents: 30000,
 		Reason:      "Final partial refund",
 	}
 	response, err := uc.Execute(ctx, req)
@@ -343,24 +400,24 @@ func TestRefundPaymentUsecase_Success_WithMetadata(t *testing.T) {
 	ctx := createTestContextForPayment()
 	shop, _ := tenant.FromContext(ctx)
 	successPayment := createSuccessfulPayment(shop.ID, 50000)
-	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
-	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
+	after := paymentAfterReserve(successPayment, 50000, entity.PaymentStatusRefunded)
 
-	// Appel provider avec les 2 paramètres additionnels (customerPhone, operator)
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
+		Return(true, nil)
+	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
 	mockProvider.EXPECT().
 		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
 		Return(nil)
-
-	// Vérification des métadonnées sauvegardées (PR 5 : last_refund_* et total_refunded_amount)
-	mockPaymentRepo.EXPECT().
-		Update(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, payment *entity.Payment) error {
-			assert.NotNil(t, payment.Metadata)
-			assert.Equal(t, "Customer request", payment.Metadata["last_refund_reason"])
-			assert.Equal(t, int64(50000), payment.Metadata["last_refund_amount"])
-			assert.Equal(t, int64(50000), payment.Metadata["total_refunded_amount"])
-			return nil
-		})
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(after, nil)
+	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, payment *entity.Payment) error {
+		assert.NotNil(t, payment.Metadata)
+		assert.Equal(t, "Customer request", payment.Metadata["last_refund_reason"])
+		assert.Equal(t, int64(50000), payment.Metadata["last_refund_amount"])
+		assert.Equal(t, int64(50000), payment.Metadata["total_refunded_amount"])
+		return nil
+	})
 
 	req := createValidRefundRequest(successPayment.ID.String())
 	response, err := uc.Execute(ctx, req)
@@ -368,4 +425,26 @@ func TestRefundPaymentUsecase_Success_WithMetadata(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, response)
 	assert.Equal(t, entity.PaymentStatusRefunded, response.Status)
+}
+
+// Concurrent : 2e réservation refusée par AddRefundAmount (ok=false)
+func TestRefundPaymentUsecase_ConcurrentReservationRejected(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	uc := paymentusecase.NewRefundPaymentUsecase(mockPaymentRepo, mockRegistry)
+	ctx := createTestContextForPayment()
+	shop, _ := tenant.FromContext(ctx)
+	successPayment := createSuccessfulPayment(shop.ID, 50000)
+
+	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
+	mockPaymentRepo.EXPECT().
+		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
+		Return(false, nil) // course perdue
+
+	req := createValidRefundRequest(successPayment.ID.String())
+	_, err := uc.Execute(ctx, req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds remaining refundable amount")
 }
