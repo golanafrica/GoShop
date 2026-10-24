@@ -3,6 +3,7 @@ package withdrawalusecase_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	withdrawaldto "Goshop/application/dto/withdrawal_dto"
@@ -462,23 +463,24 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
+	// "insufficient funds" sans code HTTP explicite est traité comme ambigu par isDefinitiveRejection
 	mockCashOut.EXPECT().
 		CashOut(gomock.Any(), gomock.Any()).
 		Return(nil, errors.New("insufficient funds"))
 
+	// Le usecase doit donc appeler TransitionToReconciliationRequired au lieu de faire un reverse
 	mockWithdrawalRepo.EXPECT().
-		Update(gomock.Any(), gomock.Any()).
-		Return(nil)
+		TransitionToReconciliationRequired(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(true, nil)
 
 	req := createValidWithdrawalRequest()
 	response, err := uc.Execute(ctx, req)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	// Message actuel (failAfterDebit + reverse impossible car creditUC nil)
-	assert.Contains(t, err.Error(), "cash-out definitively rejected by provider")
-	assert.Contains(t, err.Error(), "insufficient funds")
-	assert.Contains(t, err.Error(), "compensation pending")
+	// Vérification du nouveau comportement : chemin de réconciliation pour erreur ambiguë
+	assert.Contains(t, strings.ToLower(err.Error()), "ambigu")
+	assert.Contains(t, err.Error(), "vérification auprès du fournisseur")
 }
 
 // ============================================================
@@ -892,7 +894,6 @@ func TestNewCreateWithdrawalUsecase_UsesDefaultFactory_ConfigMissing(t *testing.
 // P0-A : Tests de la logique de Compensation (Reverse)
 // ============================================================
 
-// createMockCreditWalletUsecase : Helper pour mocker le usecase de crédit
 // createMockCreditWalletUsecase : Helper pour mocker le usecase de crédit
 func createMockCreditWalletUsecase(ctrl *gomock.Controller, shouldFail bool) *walletusecase.CreditWalletUsecase {
 	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
