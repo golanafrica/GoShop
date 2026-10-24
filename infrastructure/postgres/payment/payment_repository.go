@@ -668,3 +668,44 @@ func (r *PaymentRepositoryPostgres) ReverseRefundAmount(
 
 	return rows > 0, nil
 }
+
+func (r *PaymentRepositoryPostgres) FindStuckNonTerminalPayments(
+	ctx context.Context,
+	minAgeMinutes int,
+	limit int,
+) ([]*entity.Payment, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if minAgeMinutes <= 0 {
+		minAgeMinutes = 5
+	}
+
+	query := `
+		SELECT id, shop_id, order_id, provider, provider_ref, amount_cents, currency,
+		       customer_phone, customer_email, description, status, metadata,
+		       initiated_at, completed_at, expires_at, created_at, updated_at,
+		       COALESCE(provider_fees_cents, 0),
+		       COALESCE(refunded_amount_cents, 0),
+		       COALESCE(commission_cents, 0),
+		       COALESCE(commission_rate_bps, 0),
+		       COALESCE(commission_status, 'pending'),
+		       commission_collected_at
+		FROM payments
+		WHERE status IN ('pending', 'processing')
+		  AND provider_ref IS NOT NULL
+		  AND provider_ref <> ''
+		  AND updated_at < NOW() - ($1 || ' minutes')::interval
+		ORDER BY updated_at ASC
+		LIMIT $2
+	`
+	// Adapte la liste de colonnes à ton scanPayments existant si différente.
+
+	rows, err := r.queryContext(ctx, query, minAgeMinutes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stuck non-terminal payments: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanPayments(rows)
+}

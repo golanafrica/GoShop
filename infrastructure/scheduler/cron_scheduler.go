@@ -21,6 +21,7 @@ type CronScheduler struct {
 	compensationPendingSched    *appscheduler.CompensationPendingScheduler
 	withdrawalReconcilSched     *appscheduler.WithdrawalReconciliationScheduler
 	notificationRetrySched      *appscheduler.NotificationRetryScheduler // 🆕 AJOUT PR 6
+	paymentReconcilSched        *appscheduler.PaymentReconciliationScheduler
 	logger                      zerolog.Logger
 	scheduleCron                string
 	onlinePaymentSchedule       string
@@ -31,6 +32,7 @@ type CronScheduler struct {
 	compensationPendingSchedule string
 	withdrawalReconcilSchedule  string
 	notificationRetrySchedule   string // 🆕 AJOUT PR 6
+	paymentReconcilSchedule     string
 }
 
 // NewCronScheduler cree une nouvelle instance
@@ -44,6 +46,7 @@ func NewCronScheduler(
 	compensationPendingSched *appscheduler.CompensationPendingScheduler,
 	withdrawalReconcilSched *appscheduler.WithdrawalReconciliationScheduler,
 	notificationRetrySched *appscheduler.NotificationRetryScheduler, // 🆕 AJOUT PR 6
+	paymentReconcilSched *appscheduler.PaymentReconciliationScheduler,
 	logger zerolog.Logger,
 	scheduleCron string,
 	onlinePaymentSchedule string,
@@ -54,6 +57,7 @@ func NewCronScheduler(
 	compensationPendingSchedule string,
 	withdrawalReconcilSchedule string,
 	notificationRetrySchedule string, // 🆕 AJOUT PR 6
+	paymentReconcilSchedule string,
 ) *CronScheduler {
 
 	if scheduleCron == "" {
@@ -83,6 +87,9 @@ func NewCronScheduler(
 	if notificationRetrySchedule == "" {
 		notificationRetrySchedule = "*/15 * * * *" // 🆕 toutes les 15 min
 	}
+	if paymentReconcilSchedule == "" {
+		paymentReconcilSchedule = "*/5 * * * *" // toutes les 5 min
+	}
 
 	return &CronScheduler{
 		cron:                        cron.New(),
@@ -95,6 +102,7 @@ func NewCronScheduler(
 		compensationPendingSched:    compensationPendingSched,
 		withdrawalReconcilSched:     withdrawalReconcilSched,
 		notificationRetrySched:      notificationRetrySched, // 🆕 AJOUT PR 6
+		paymentReconcilSched:        paymentReconcilSched,   // ✅ CORRECTION : Ajouté
 		logger:                      logger.With().Str("component", "cron_scheduler").Logger(),
 		scheduleCron:                scheduleCron,
 		onlinePaymentSchedule:       onlinePaymentSchedule,
@@ -105,6 +113,7 @@ func NewCronScheduler(
 		compensationPendingSchedule: compensationPendingSchedule,
 		withdrawalReconcilSchedule:  withdrawalReconcilSchedule,
 		notificationRetrySchedule:   notificationRetrySchedule, // 🆕 AJOUT PR 6
+		paymentReconcilSchedule:     paymentReconcilSchedule,   // ✅ CORRECTION : Ajouté
 	}
 }
 
@@ -120,6 +129,7 @@ func (s *CronScheduler) Start() error {
 		Str("compensation_pending_schedule", s.compensationPendingSchedule).
 		Str("withdrawal_reconcil_schedule", s.withdrawalReconcilSchedule).
 		Str("notification_retry_schedule", s.notificationRetrySchedule). // 🆕 AJOUT PR 6
+		Str("payment_reconcil_schedule", s.paymentReconcilSchedule).     // ✅ CORRECTION : Ajouté au log
 		Msg("Starting cron scheduler")
 
 	// 1. COD
@@ -226,7 +236,21 @@ func (s *CronScheduler) Start() error {
 		}
 	}
 
-	// 9. 🆕 AJOUT PR 6 : Notification Retry
+	// 9. ONE_STEP payment reconciliation
+	if s.paymentReconcilSched != nil {
+		_, err = s.cron.AddFunc(s.paymentReconcilSchedule, func() {
+			s.logger.Info().Msg("Cron trigger: ONE_STEP payment reconciliation")
+			ctx := context.Background()
+			if err := s.paymentReconcilSched.Run(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("Payment reconciliation failed")
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// 10. 🆕 AJOUT PR 6 : Notification Retry
 	if s.notificationRetrySched != nil {
 		_, err = s.cron.AddFunc(s.notificationRetrySchedule, func() {
 			s.logger.Info().Msg("Cron trigger: Notification retry check")
