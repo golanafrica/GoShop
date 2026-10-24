@@ -1683,6 +1683,20 @@ func (a *App) setupRouter() {
 		})
 	})
 
+	// ============================================================
+	// 🆕 PR 4 : ONE-STEP PAYMENT RECONCILIATION SCHEDULER
+	// ============================================================
+	paymentReconcilSched := appscheduler.NewPaymentReconciliationScheduler(
+		paymentRepo,
+		shopRepo,
+		&paymentStatusCheckerAdapter{uc: checkPaymentStatusUC},
+		a.Logger.Logger,
+	)
+	paymentReconcilSchedule := os.Getenv("PAYMENT_RECONCIL_SCHEDULE")
+	if paymentReconcilSchedule == "" {
+		paymentReconcilSchedule = "*/5 * * * *"
+	}
+
 	// ============ 🆕 v4.0.0 : INITIALISATION DU CRON SCHEDULER ============
 	cronSchedule := os.Getenv("COMMISSION_SCHEDULE")
 	if cronSchedule == "" {
@@ -1747,7 +1761,8 @@ func (a *App) setupRouter() {
 		walletGraceExpirySched,
 		compensationPendingSched,
 		withdrawalReconcilSched,
-		notificationRetrySched, // 🆕 PR 6 : AJOUT
+		notificationRetrySched,
+		paymentReconcilSched, // 🆕 PR 4 : AJOUT
 		a.Logger.Logger,
 		cronSchedule,
 		onlinePaymentSchedule,
@@ -1757,7 +1772,8 @@ func (a *App) setupRouter() {
 		walletGraceExpirySchedule,
 		compensationPendingSchedule,
 		withdrawalReconcilSchedule,
-		notifRetrySchedule, // 🆕 PR 6 : AJOUT
+		notifRetrySchedule,
+		paymentReconcilSchedule, // 🆕 PR 4 : AJOUT
 	)
 
 	if err := a.Scheduler.Start(); err != nil {
@@ -1772,7 +1788,8 @@ func (a *App) setupRouter() {
 			Str("wallet_grace_expiry_schedule", walletGraceExpirySchedule).
 			Str("compensation_pending_schedule", compensationPendingSchedule).
 			Str("withdrawal_reconcil_schedule", withdrawalReconcilSchedule).
-			Str("notification_retry_schedule", notifRetrySchedule). // 🆕 PR 6 : AJOUT LOG
+			Str("notification_retry_schedule", notifRetrySchedule).
+			Str("payment_reconcil_schedule", paymentReconcilSchedule). // 🆕 PR 4 : AJOUT LOG
 			Msg("All schedulers started successfully")
 	}
 
@@ -1781,7 +1798,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API + PR6 Notification Retry)")
+		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API + PR6 Notification Retry + PR4 Payment Reconciliation)")
 }
 
 // ============ MIDDLEWARES PERSONNALISÉS ============
@@ -1852,4 +1869,17 @@ func NewRouter(db *sql.DB) http.Handler {
 	logger := setupLogging.NewLogger(loggingConfig)
 	app := NewApp(db, logger)
 	return app.Router
+}
+
+// ============================================================
+// 🆕 PR 4 : PAYMENT STATUS CHECKER ADAPTER
+// ============================================================
+// paymentStatusCheckerAdapter adapte CheckPaymentStatusUsecase à l'interface PaymentStatusChecker du scheduler
+type paymentStatusCheckerAdapter struct {
+	uc *paymentusecase.CheckPaymentStatusUsecase
+}
+
+// ✅ CORRECTION : La signature doit retourner (interface{}, error) pour correspondre à l'interface
+func (a *paymentStatusCheckerAdapter) Execute(ctx context.Context, paymentID string) (interface{}, error) {
+	return a.uc.Execute(ctx, paymentID)
 }

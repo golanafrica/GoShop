@@ -11,8 +11,9 @@ import (
 )
 
 // PaymentStatusChecker abstrait CheckPaymentStatusUsecase (évite import cycle).
+// PaymentStatusChecker abstrait CheckPaymentStatusUsecase.
 type PaymentStatusChecker interface {
-	Execute(ctx context.Context, paymentID string) error
+	Execute(ctx context.Context, paymentID string) (interface{}, error)
 }
 
 type PaymentReconciliationScheduler struct {
@@ -60,7 +61,7 @@ func (s *PaymentReconciliationScheduler) Run(ctx context.Context) error {
 		}
 		shopCtx := tenant.WithTenant(ctx, shop)
 
-		if err := s.statusChecker.Execute(shopCtx, p.ID.String()); err != nil {
+		if _, err := s.statusChecker.Execute(shopCtx, p.ID.String()); err != nil {
 			log.Error().
 				Err(err).
 				Str("payment_id", p.ID.String()).
