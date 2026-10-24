@@ -1,4 +1,4 @@
-// Package testutils fournit des utilitaires pour les tests E2E
+// Package testutils fournit des utilitaires pour les tests E2E et d'intégration
 package testutils
 
 import (
@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time" // 🆕 Ajouté pour le time.Sleep de sécurité
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -31,11 +32,12 @@ func getProjectRoot() string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(filename)))
 }
 
-// TestServer encapsule un serveur de test avec accès à la DB
+// TestServer encapsule un serveur de test avec accès à la DB et à l'App
 type TestServer struct {
 	URL string
 	DB  *sql.DB
 	Srv *httptest.Server
+	App *app.App // 🆕 Ajouté : pour pouvoir arrêter le scheduler Cron proprement
 }
 
 // NewTestServer démarre l'application réelle avec la base de test
@@ -66,29 +68,42 @@ func NewTestServer(t *testing.T) *TestServer {
 		}
 	})
 
-	t.Cleanup(func() {
-		if !t.Failed() {
-			truncateTables(t, db)
-		}
-		db.Close()
-	})
-
 	logger := setupLogging.NewLogger(setupLogging.Config{
 		Environment: cfg.Environment,
 		ServiceName: cfg.ServiceName,
 		Version:     cfg.AppVersion,
-		LogLevel:    "warn",
+		LogLevel:    "warn", // Réduit le bruit dans les logs de test
 	})
 
 	appInstance := app.NewApp(db, logger)
 	server := httptest.NewServer(appInstance.Handler())
-	t.Cleanup(server.Close)
+
+	// 🛡️ CORRECTION CRITIQUE DU TIMEOUT : Nettoyage propre en fin de test
+	t.Cleanup(func() {
+		// 1. ARRÊTER le scheduler Cron AVANT de tronquer (sinon il garde des verrous DB)
+		if appInstance.Scheduler != nil {
+			appInstance.Scheduler.Stop()
+		}
+
+		// 2. Laisser un court instant (200ms) aux goroutines pour finir et libérer les connexions
+		time.Sleep(200 * time.Millisecond)
+
+		// 3. Vider les tables uniquement si le test a réussi
+		if !t.Failed() {
+			truncateTables(t, db)
+		}
+
+		// 4. Fermer proprement la base de données
+		db.Close()
+	})
 
 	t.Logf("✅ TestServer démarré sur %s", server.URL)
+
 	return &TestServer{
 		URL: server.URL,
 		DB:  db,
 		Srv: server,
+		App: appInstance, // 🆕 On garde une référence pour le cleanup
 	}
 }
 
@@ -119,6 +134,15 @@ func RunMigrationsFromDir(db *sql.DB, migrationDir string) error {
 // truncateTables vide toutes les tables (ordre inverse des dépendances)
 func truncateTables(t *testing.T, db *sql.DB) {
 	t.Helper()
+
+	// 🛡️ Astuce : Réduire le pool à 1 connexion force la fermeture des connexions "idle"
+	// qui pourraient bloquer le TRUNCATE.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(0)
+
+	// Petite pause pour laisser le pool se rétracter
+	time.Sleep(100 * time.Millisecond)
+
 	tables := []string{
 		"order_items",
 		"orders",
@@ -128,11 +152,24 @@ func truncateTables(t *testing.T, db *sql.DB) {
 		"shops",
 		"refresh_sessions",
 		"users",
+		// Ajoute ici les nouvelles tables si nécessaire (ex: payments, withdrawals, etc.)
+		"payments",
+		"withdrawals",
+		"escrow_accounts",
+		"wallet_transactions",
+		"merchant_wallets",
 	}
+
 	for _, table := range tables {
+		// RESTART IDENTITY CASCADE est crucial pour réinitialiser les séquences (IDs)
 		_, err := db.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE")
 		if err != nil {
+			// On logue mais on ne fait pas panic, car le test est déjà fini
 			t.Logf("⚠️ Échec TRUNCATE %s: %v", table, err)
 		}
 	}
+
+	// Remettre le pool à une valeur normale (au cas où la DB serait réutilisée, bien que Close() suive)
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
 }
