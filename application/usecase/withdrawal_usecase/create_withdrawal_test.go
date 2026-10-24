@@ -478,9 +478,10 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
-	// Vérification du nouveau comportement : chemin de réconciliation pour erreur ambiguë
-	assert.Contains(t, strings.ToLower(err.Error()), "ambigu")
+
+	// ✅ Vérification du nouveau comportement : chemin de réconciliation pour erreur ambiguë
 	assert.Contains(t, err.Error(), "vérification auprès du fournisseur")
+	assert.Contains(t, strings.ToLower(err.Error()), "réponse ambiguë")
 }
 
 // ============================================================
