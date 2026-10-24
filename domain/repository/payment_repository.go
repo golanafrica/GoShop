@@ -54,6 +54,13 @@ type PaymentRepository interface {
 	// Décrémente refunded_amount_cents et restaure newStatus (ex: success ou partially_refunded).
 	// Retourne false si le cumul est insuffisant pour décrémenter.
 	ReverseRefundAmount(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64, newStatus entity.PaymentStatus) (bool, error)
+
+	// FindStuckNonTerminalPayments retourne les paiements non terminaux
+	// (pending/processing) plus vieux que minAgeMinutes, pour réconciliation ONE_STEP.
+	FindStuckNonTerminalPayments(ctx context.Context, minAgeMinutes int, limit int) ([]*entity.Payment, error)
+
+	// FindSuccessWithEscrowPending : success mais escrow pas encore créé (flag metadata).
+	// Peut être implémenté plus tard via JSONB ; optionnel en V1.
 }
 
 // PaymentFilters représente les filtres pour la recherche de paiements

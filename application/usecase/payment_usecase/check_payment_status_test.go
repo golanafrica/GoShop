@@ -527,9 +527,11 @@ func TestCheckPaymentStatusUsecase_StatusChangedToFailed(t *testing.T) {
 			FailureReason: "Insufficient funds",
 		}, nil)
 
+		// MarkFailed + éventuelle 2e persistance (canal / fin de Execute)
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
-		Return(nil)
+		Return(nil).
+		MinTimes(1)
 
 	response, err := uc.Execute(ctx, processingPayment.ID.String())
 

@@ -98,6 +98,9 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 						if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
 							_ = uc.paymentRepo.Update(ctx, paymentEntity)
 						}
+						if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
+							logger.Error().Err(err).Msg("Failed to persist payment after provider success")
+						}
 					}
 				} else if channelChanged {
 					// Déjà success : MSISDN / source viennent d'arriver → persister
