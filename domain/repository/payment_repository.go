@@ -61,6 +61,11 @@ type PaymentRepository interface {
 
 	// FindSuccessWithEscrowPending : success mais escrow pas encore créé (flag metadata).
 	// Peut être implémenté plus tard via JSONB ; optionnel en V1.
+
+	// ReverseRefundAmountAndRecompute décrémente le cumul et recalcule
+	// status (success | partially_refunded | refunded) en SQL.
+	// Retourne false si cumul insuffisant.
+	ReverseRefundAmountAndRecompute(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64) (bool, error)
 }
 
 // PaymentFilters représente les filtres pour la recherche de paiements

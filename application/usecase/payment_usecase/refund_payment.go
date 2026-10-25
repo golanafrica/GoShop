@@ -114,15 +114,12 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (concurrent or insufficient)", refundAmount)
 	}
 
-	// Statut local avant réservation — pour reverse si provider refuse
-	statusBeforeReserve := paymentEntity.Status
-
 	// 9. Appel provider (après réservation)
 	// B1 : pas de succès silencieux si le prestataire réel exige une référence.
 	requiresProviderCall := paymentRequiresProviderRefund(paymentEntity.Provider)
 	if requiresProviderCall {
 		if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
-			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 				logger.Error().Err(revErr).
 					Str("payment_id", paymentID.String()).
 					Msg("CRITICAL: missing provider_ref and reverse reservation failed")
@@ -132,7 +129,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err != nil {
-			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 				logger.Error().Err(revErr).Msg("CRITICAL: failed to reverse refund reservation after provider not found")
 			}
 			return nil, fmt.Errorf("provider not found: %w", err)
@@ -152,7 +149,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			// B2 : reverse UNIQUEMENT si refus définitif ; sinon garder la réservation.
 			if isDefinitiveRefundRejection(err) {
-				if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+				if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 					logger.Error().Err(revErr).
 						Str("payment_id", paymentID.String()).
 						Int64("amount", refundAmount).
