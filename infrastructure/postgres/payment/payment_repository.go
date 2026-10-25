@@ -709,3 +709,37 @@ func (r *PaymentRepositoryPostgres) FindStuckNonTerminalPayments(
 
 	return r.scanPayments(rows)
 }
+
+// ReverseRefundAmountAndRecompute annule une réservation et recalcule le statut
+// à partir du cumul restant (pas de statut "mémoire" passé par l'appelant).
+func (r *PaymentRepositoryPostgres) ReverseRefundAmountAndRecompute(
+	ctx context.Context,
+	paymentID uuid.UUID,
+	refundAmountCents int64,
+) (bool, error) {
+	query := `
+		UPDATE payments
+		SET
+			refunded_amount_cents = refunded_amount_cents - $1,
+			status = CASE
+				WHEN (refunded_amount_cents - $1) <= 0 THEN 'success'
+				WHEN (refunded_amount_cents - $1) < amount_cents THEN 'partially_refunded'
+				ELSE 'refunded'
+			END,
+			updated_at = NOW()
+		WHERE id = $2
+		  AND refunded_amount_cents >= $1
+	`
+
+	res, err := r.execContext(ctx, query, refundAmountCents, paymentID)
+	if err != nil {
+		return false, fmt.Errorf("reverse refund amount and recompute: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("check rows affected: %w", err)
+	}
+
+	return rows > 0, nil
+}

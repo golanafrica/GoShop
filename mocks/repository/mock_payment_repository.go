@@ -207,6 +207,21 @@ func (mr *MockPaymentRepositoryMockRecorder) ReverseRefundAmount(ctx, paymentID,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReverseRefundAmount", reflect.TypeOf((*MockPaymentRepository)(nil).ReverseRefundAmount), ctx, paymentID, refundAmountCents, newStatus)
 }
 
+// ReverseRefundAmountAndRecompute mocks base method.
+func (m *MockPaymentRepository) ReverseRefundAmountAndRecompute(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReverseRefundAmountAndRecompute", ctx, paymentID, refundAmountCents)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReverseRefundAmountAndRecompute indicates an expected call of ReverseRefundAmountAndRecompute.
+func (mr *MockPaymentRepositoryMockRecorder) ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmountCents any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReverseRefundAmountAndRecompute", reflect.TypeOf((*MockPaymentRepository)(nil).ReverseRefundAmountAndRecompute), ctx, paymentID, refundAmountCents)
+}
+
 // Update mocks base method.
 func (m *MockPaymentRepository) Update(ctx context.Context, payment *entity.Payment) error {
 	m.ctrl.T.Helper()

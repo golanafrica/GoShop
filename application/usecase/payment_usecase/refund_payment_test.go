@@ -190,9 +190,9 @@ func TestRefundPaymentUsecase_ProviderNotFound(t *testing.T) {
 		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
 		Return(true, nil)
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(nil, errors.New("provider not found"))
-	// Reverse de la réservation
+	// Reverse de la réservation avec recomputation du statut
 	mockPaymentRepo.EXPECT().
-		ReverseRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusSuccess).
+		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
 		Return(true, nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
@@ -220,8 +220,9 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 	mockProvider.EXPECT().
 		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
 		Return(errors.New("insufficient funds"))
+	// Reverse de la réservation avec recomputation du statut
 	mockPaymentRepo.EXPECT().
-		ReverseRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusSuccess).
+		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
 		Return(true, nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
