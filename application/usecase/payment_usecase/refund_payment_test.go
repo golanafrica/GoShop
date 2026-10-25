@@ -227,7 +227,7 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 	req := createValidRefundRequest(successPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "refund failed at provider")
+	assert.Contains(t, err.Error(), "refund rejected by provider")
 }
 
 // ============================================================

@@ -3,6 +3,7 @@ package paymentusecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
@@ -96,7 +97,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-		// 7. Déterminer le nouveau statut après ce refund
+	// 7. Déterminer le nouveau statut après ce refund
 	var reservedStatus entity.PaymentStatus
 	if refundAmount == remainingRefundable {
 		reservedStatus = entity.PaymentStatusRefunded
@@ -117,10 +118,20 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	statusBeforeReserve := paymentEntity.Status
 
 	// 9. Appel provider (après réservation)
-	if paymentEntity.ProviderRef != nil {
+	// B1 : pas de succès silencieux si le prestataire réel exige une référence.
+	requiresProviderCall := paymentRequiresProviderRefund(paymentEntity.Provider)
+	if requiresProviderCall {
+		if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
+			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+				logger.Error().Err(revErr).
+					Str("payment_id", paymentID.String()).
+					Msg("CRITICAL: missing provider_ref and reverse reservation failed")
+			}
+			return nil, fmt.Errorf("cannot refund: missing provider reference for provider %s — manual reconciliation required", paymentEntity.Provider)
+		}
+
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err != nil {
-			// Libérer la réservation
 			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
 				logger.Error().Err(revErr).Msg("CRITICAL: failed to reverse refund reservation after provider not found")
 			}
@@ -139,13 +150,26 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		}
 
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
-			if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
-				logger.Error().Err(revErr).
-					Str("payment_id", paymentID.String()).
-					Int64("amount", refundAmount).
-					Msg("CRITICAL: provider refund failed AND reverse reservation failed — manual reconciliation required")
+			// B2 : reverse UNIQUEMENT si refus définitif ; sinon garder la réservation.
+			if isDefinitiveRefundRejection(err) {
+				if _, revErr := uc.paymentRepo.ReverseRefundAmount(ctx, paymentID, refundAmount, statusBeforeReserve); revErr != nil {
+					logger.Error().Err(revErr).
+						Str("payment_id", paymentID.String()).
+						Int64("amount", refundAmount).
+						Msg("CRITICAL: definitive provider reject AND reverse failed — manual reconciliation required")
+				}
+				return nil, fmt.Errorf("refund rejected by provider: %w", err)
 			}
-			return nil, fmt.Errorf("refund failed at provider: %w", err)
+
+			logger.Error().Err(err).
+				Str("payment_id", paymentID.String()).
+				Int64("amount", refundAmount).
+				Str("provider_ref", *paymentEntity.ProviderRef).
+				Msg("CRITICAL: provider refund outcome UNKNOWN — reservation kept, do NOT retry blindly")
+			return nil, fmt.Errorf(
+				"refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w",
+				err,
+			)
 		}
 	}
 
@@ -176,4 +200,52 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Msg("Refund completed successfully (atomic reservation)")
 
 	return mapPaymentToResponse(paymentEntity), nil
+}
+
+// paymentRequiresProviderRefund détermine si le prestataire nécessite un appel API pour le remboursement
+func paymentRequiresProviderRefund(p entity.PaymentProvider) bool {
+	switch p {
+	case entity.ProviderYengaPay, entity.ProviderOrangeMoney, entity.ProviderMoovMoney, entity.ProviderWave:
+		return true
+	default:
+		// cash / mock : remboursement purement local
+		return false
+	}
+}
+
+// isDefinitiveRefundRejection : refus métier clair uniquement.
+// Timeout / 5xx / réseau → false (on conserve la réservation).
+func isDefinitiveRefundRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+
+	// indices de refus métier (à resserrer quand le client provider sera typé)
+	definitiveHints := []string{
+		"status 400", "status 401", "status 403", "status 404", "status 422",
+		"invalid", "rejected", "not allowed", "insufficient", "already refunded",
+		"does not support", "unsupported",
+	}
+
+	// indices d'erreurs incertaines (réseau, timeout, serveur)
+	ambiguousHints := []string{
+		"timeout", "deadline", "temporar", "unavailable", "status 500",
+		"status 502", "status 503", "status 504", "connection", "reset by peer",
+		"eof", "context canceled", "context deadline",
+	}
+
+	for _, h := range ambiguousHints {
+		if strings.Contains(msg, h) {
+			return false
+		}
+	}
+	for _, h := range definitiveHints {
+		if strings.Contains(msg, h) {
+			return true
+		}
+	}
+
+	// Par défaut : inconnu → ne pas reverse (sécurité financière)
+	return false
 }
