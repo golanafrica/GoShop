@@ -743,3 +743,89 @@ func (r *PaymentRepositoryPostgres) ReverseRefundAmountAndRecompute(
 
 	return rows > 0, nil
 }
+func (r *PaymentRepositoryPostgres) CreatePaymentRefund(ctx context.Context, refund *entity.PaymentRefund) error {
+	query := `
+		INSERT INTO payment_refunds (
+			id, payment_id, shop_id, amount_cents, status, reason,
+			idempotency_key, provider_ref, provider_error, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+	`
+	_, err := r.execContext(ctx, query,
+		refund.ID,
+		refund.PaymentID,
+		refund.ShopID,
+		refund.AmountCents,
+		string(refund.Status),
+		refund.Reason,
+		refund.IdempotencyKey,
+		refund.ProviderRef,
+		refund.ProviderError,
+	)
+	if err != nil {
+		return fmt.Errorf("create payment refund: %w", err)
+	}
+	return nil
+}
+
+func (r *PaymentRepositoryPostgres) UpdatePaymentRefundStatus(
+	ctx context.Context,
+	id uuid.UUID,
+	status entity.PaymentRefundStatus,
+	providerErr string,
+) error {
+	var pe interface{}
+	if providerErr != "" {
+		pe = providerErr
+	}
+	query := `
+		UPDATE payment_refunds
+		SET status = $1, provider_error = $2, updated_at = NOW()
+		WHERE id = $3
+	`
+	res, err := r.execContext(ctx, query, string(status), pe, id)
+	if err != nil {
+		return fmt.Errorf("update payment refund status: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("payment refund not found: %s", id)
+	}
+	return nil
+}
+
+func (r *PaymentRepositoryPostgres) FindPaymentRefundByIdempotency(
+	ctx context.Context,
+	shopID uuid.UUID,
+	key string,
+) (*entity.PaymentRefund, error) {
+	query := `
+		SELECT id, payment_id, shop_id, amount_cents, status, reason,
+		       idempotency_key, provider_ref, provider_error, created_at, updated_at
+		FROM payment_refunds
+		WHERE shop_id = $1 AND idempotency_key = $2
+	`
+	row := r.queryRowContext(ctx, query, shopID, key)
+
+	var rf entity.PaymentRefund
+	var reason, providerRef, providerError sql.NullString
+	err := row.Scan(
+		&rf.ID, &rf.PaymentID, &rf.ShopID, &rf.AmountCents, &rf.Status, &reason,
+		&rf.IdempotencyKey, &providerRef, &providerError, &rf.CreatedAt, &rf.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find payment refund by idempotency: %w", err)
+	}
+	if reason.Valid {
+		rf.Reason = reason.String
+	}
+	if providerRef.Valid {
+		rf.ProviderRef = &providerRef.String
+	}
+	if providerError.Valid {
+		rf.ProviderError = &providerError.String
+	}
+	return &rf, nil
+}

@@ -72,6 +72,20 @@ func (mr *MockPaymentRepositoryMockRecorder) Create(ctx, payment any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockPaymentRepository)(nil).Create), ctx, payment)
 }
 
+// CreatePaymentRefund mocks base method.
+func (m *MockPaymentRepository) CreatePaymentRefund(ctx context.Context, refund *entity.PaymentRefund) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePaymentRefund", ctx, refund)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreatePaymentRefund indicates an expected call of CreatePaymentRefund.
+func (mr *MockPaymentRepositoryMockRecorder) CreatePaymentRefund(ctx, refund any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePaymentRefund", reflect.TypeOf((*MockPaymentRepository)(nil).CreatePaymentRefund), ctx, refund)
+}
+
 // FindByID mocks base method.
 func (m *MockPaymentRepository) FindByID(ctx context.Context, id uuid.UUID) (*entity.Payment, error) {
 	m.ctrl.T.Helper()
@@ -177,6 +191,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindCompletedWithoutCommission(ctx,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompletedWithoutCommission", reflect.TypeOf((*MockPaymentRepository)(nil).FindCompletedWithoutCommission), ctx, limit)
 }
 
+// FindPaymentRefundByIdempotency mocks base method.
+func (m *MockPaymentRepository) FindPaymentRefundByIdempotency(ctx context.Context, shopID uuid.UUID, key string) (*entity.PaymentRefund, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindPaymentRefundByIdempotency", ctx, shopID, key)
+	ret0, _ := ret[0].(*entity.PaymentRefund)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindPaymentRefundByIdempotency indicates an expected call of FindPaymentRefundByIdempotency.
+func (mr *MockPaymentRepositoryMockRecorder) FindPaymentRefundByIdempotency(ctx, shopID, key any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPaymentRefundByIdempotency", reflect.TypeOf((*MockPaymentRepository)(nil).FindPaymentRefundByIdempotency), ctx, shopID, key)
+}
+
 // FindStuckNonTerminalPayments mocks base method.
 func (m *MockPaymentRepository) FindStuckNonTerminalPayments(ctx context.Context, minAgeMinutes, limit int) ([]*entity.Payment, error) {
 	m.ctrl.T.Helper()
@@ -248,6 +277,20 @@ func (m *MockPaymentRepository) UpdateCommissionStatus(ctx context.Context, paym
 func (mr *MockPaymentRepositoryMockRecorder) UpdateCommissionStatus(ctx, paymentID, status, commissionCents any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCommissionStatus", reflect.TypeOf((*MockPaymentRepository)(nil).UpdateCommissionStatus), ctx, paymentID, status, commissionCents)
+}
+
+// UpdatePaymentRefundStatus mocks base method.
+func (m *MockPaymentRepository) UpdatePaymentRefundStatus(ctx context.Context, id uuid.UUID, status entity.PaymentRefundStatus, providerErr string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdatePaymentRefundStatus", ctx, id, status, providerErr)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdatePaymentRefundStatus indicates an expected call of UpdatePaymentRefundStatus.
+func (mr *MockPaymentRepositoryMockRecorder) UpdatePaymentRefundStatus(ctx, id, status, providerErr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePaymentRefundStatus", reflect.TypeOf((*MockPaymentRepository)(nil).UpdatePaymentRefundStatus), ctx, id, status, providerErr)
 }
 
 // WithTX mocks base method.

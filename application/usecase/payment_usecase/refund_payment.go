@@ -63,7 +63,6 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	}
 
 	// 5. 🛡️ PR 5 AUDIT : Vérifier que le paiement est remboursable
-	// Vérification explicite du statut refunded pour un message d'erreur clair
 	if paymentEntity.Status == entity.PaymentStatusRefunded {
 		return nil, fmt.Errorf("payment has already been fully refunded")
 	}
@@ -82,7 +81,6 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	// 6. Déterminer le montant du remboursement
 	refundAmount := req.AmountCents
 	if refundAmount == 0 {
-		// Si 0, rembourser automatiquement le reste
 		refundAmount = remainingRefundable
 	}
 
@@ -97,7 +95,46 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-	// 7. Déterminer le nouveau statut après ce refund
+	// 7. 🆕 B3 AUDIT : Idempotency check
+	idemKey := req.IdempotencyKey
+	if idemKey == "" {
+		idemKey = uuid.New().String()
+	}
+
+	existing, err := uc.paymentRepo.FindPaymentRefundByIdempotency(ctx, shop.ID, idemKey)
+	if err != nil {
+		return nil, fmt.Errorf("lookup refund idempotency: %w", err)
+	}
+	if existing != nil {
+		switch existing.Status {
+		case entity.PaymentRefundCompleted:
+			p, err := uc.paymentRepo.FindByID(ctx, paymentID)
+			if err != nil {
+				return nil, err
+			}
+			return mapPaymentToResponse(p), nil
+		case entity.PaymentRefundPending, entity.PaymentRefundReconciliationRequired:
+			return nil, fmt.Errorf("refund already in progress or awaiting reconciliation (key=%s)", idemKey)
+		case entity.PaymentRefundFailed:
+			return nil, fmt.Errorf("refund previously failed for this idempotency key — use a new key")
+		}
+	}
+
+	refundRow := &entity.PaymentRefund{
+		ID:             uuid.New(),
+		PaymentID:      paymentID,
+		ShopID:         shop.ID,
+		AmountCents:    refundAmount,
+		Status:         entity.PaymentRefundPending,
+		Reason:         req.Reason,
+		IdempotencyKey: idemKey,
+		ProviderRef:    paymentEntity.ProviderRef,
+	}
+	if err := uc.paymentRepo.CreatePaymentRefund(ctx, refundRow); err != nil {
+		return nil, fmt.Errorf("create payment refund: %w", err)
+	}
+
+	// 8. Déterminer le nouveau statut après ce refund
 	var reservedStatus entity.PaymentStatus
 	if refundAmount == remainingRefundable {
 		reservedStatus = entity.PaymentStatusRefunded
@@ -105,25 +142,25 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		reservedStatus = entity.PaymentStatusPartiallyRefunded
 	}
 
-	// 8. 🛡️ RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
+	// 9. 🛡️ RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
 	ok, err := uc.paymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
 	if err != nil {
+		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
 		return nil, fmt.Errorf("reserve refund amount: %w", err)
 	}
 	if !ok {
+		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "concurrent or insufficient amount")
 		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (concurrent or insufficient)", refundAmount)
 	}
 
-	// 9. Appel provider (après réservation)
-	// B1 : pas de succès silencieux si le prestataire réel exige une référence.
+	// 10. Appel provider (après réservation)
 	requiresProviderCall := paymentRequiresProviderRefund(paymentEntity.Provider)
 	if requiresProviderCall {
 		if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
 			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
-				logger.Error().Err(revErr).
-					Str("payment_id", paymentID.String()).
-					Msg("CRITICAL: missing provider_ref and reverse reservation failed")
+				logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Msg("CRITICAL: missing provider_ref and reverse reservation failed")
 			}
+			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "missing provider_ref")
 			return nil, fmt.Errorf("cannot refund: missing provider reference for provider %s — manual reconciliation required", paymentEntity.Provider)
 		}
 
@@ -132,6 +169,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 				logger.Error().Err(revErr).Msg("CRITICAL: failed to reverse refund reservation after provider not found")
 			}
+			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
 			return nil, fmt.Errorf("provider not found: %w", err)
 		}
 
@@ -147,34 +185,25 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		}
 
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
-			// B2 : reverse UNIQUEMENT si refus définitif ; sinon garder la réservation.
 			if isDefinitiveRefundRejection(err) {
 				if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
-					logger.Error().Err(revErr).
-						Str("payment_id", paymentID.String()).
-						Int64("amount", refundAmount).
-						Msg("CRITICAL: definitive provider reject AND reverse failed — manual reconciliation required")
+					logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).Msg("CRITICAL: definitive provider reject AND reverse failed")
 				}
+				_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
 				return nil, fmt.Errorf("refund rejected by provider: %w", err)
 			}
 
-			logger.Error().Err(err).
-				Str("payment_id", paymentID.String()).
-				Int64("amount", refundAmount).
-				Str("provider_ref", *paymentEntity.ProviderRef).
-				Msg("CRITICAL: provider refund outcome UNKNOWN — reservation kept, do NOT retry blindly")
-			return nil, fmt.Errorf(
-				"refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w",
-				err,
-			)
+			logger.Error().Err(err).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).Str("provider_ref", *paymentEntity.ProviderRef).Msg("CRITICAL: provider refund outcome UNKNOWN")
+			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error())
+			return nil, fmt.Errorf("refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w", err)
 		}
 	}
 
-	// 10. Metadata (best-effort) + relecture pour réponse cohérente
+	// 11. Metadata (best-effort) + relecture pour réponse cohérente
 	paymentEntity, err = uc.paymentRepo.FindByID(ctx, paymentID)
 	if err != nil {
 		logger.Error().Err(err).Msg("refund reserved and provider OK but reload failed")
-		// Réservation + provider OK : on ne reverse pas
+		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error())
 		return nil, fmt.Errorf("reload payment after refund: %w", err)
 	}
 
@@ -187,50 +216,31 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
 		logger.Error().Err(err).Msg("refund OK but metadata update failed — cumul already reserved")
-		// Ne pas échouer durement si le cumul est déjà correct
 	}
 
-	logger.Info().
-		Str("payment_id", paymentID.String()).
-		Int64("refund_amount", refundAmount).
-		Str("new_status", string(paymentEntity.Status)).
-		Msg("Refund completed successfully (atomic reservation)")
+	_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, "")
+
+	logger.Info().Str("payment_id", paymentID.String()).Int64("refund_amount", refundAmount).Str("new_status", string(paymentEntity.Status)).Msg("Refund completed successfully (atomic reservation)")
 
 	return mapPaymentToResponse(paymentEntity), nil
 }
 
-// paymentRequiresProviderRefund détermine si le prestataire nécessite un appel API pour le remboursement
 func paymentRequiresProviderRefund(p entity.PaymentProvider) bool {
 	switch p {
 	case entity.ProviderYengaPay, entity.ProviderOrangeMoney, entity.ProviderMoovMoney, entity.ProviderWave:
 		return true
 	default:
-		// cash / mock : remboursement purement local
 		return false
 	}
 }
 
-// isDefinitiveRefundRejection : refus métier clair uniquement.
-// Timeout / 5xx / réseau → false (on conserve la réservation).
 func isDefinitiveRefundRejection(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-
-	// indices de refus métier (à resserrer quand le client provider sera typé)
-	definitiveHints := []string{
-		"status 400", "status 401", "status 403", "status 404", "status 422",
-		"invalid", "rejected", "not allowed", "insufficient", "already refunded",
-		"does not support", "unsupported",
-	}
-
-	// indices d'erreurs incertaines (réseau, timeout, serveur)
-	ambiguousHints := []string{
-		"timeout", "deadline", "temporar", "unavailable", "status 500",
-		"status 502", "status 503", "status 504", "connection", "reset by peer",
-		"eof", "context canceled", "context deadline",
-	}
+	definitiveHints := []string{"status 400", "status 401", "status 403", "status 404", "status 422", "invalid", "rejected", "not allowed", "insufficient", "already refunded", "does not support", "unsupported"}
+	ambiguousHints := []string{"timeout", "deadline", "temporar", "unavailable", "status 500", "status 502", "status 503", "status 504", "connection", "reset by peer", "eof", "context canceled", "context deadline"}
 
 	for _, h := range ambiguousHints {
 		if strings.Contains(msg, h) {
@@ -242,7 +252,5 @@ func isDefinitiveRefundRejection(err error) bool {
 			return true
 		}
 	}
-
-	// Par défaut : inconnu → ne pas reverse (sécurité financière)
 	return false
 }
