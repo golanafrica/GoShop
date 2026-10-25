@@ -247,7 +247,7 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 
 	yengaReq := map[string]interface{}{
 		"cashoutMethod": req.PaymentMethod,
-		"amount":        req.AmountCents / 100,
+		"amount":        float64(req.AmountCents) / 100.0,
 		"destNumber":    req.DestinationNumber,
 		"groupId":       p.organizationID,
 		"projectId":     p.projectID,
@@ -259,14 +259,14 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 
 	reqBody, err := json.Marshal(yengaReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, &ErrCashOutUnknown{Cause: fmt.Errorf("failed to marshal request: %w", err)}
 	}
 
 	url := fmt.Sprintf("%s/groups/%s/cash-out", p.baseURL, p.organizationID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrCashOutUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -280,26 +280,43 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrCashOutUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrCashOutUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay cash-out error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrCashOutUnknown{
+				HTTPStatus: resp.StatusCode,
+				Cause:      fmt.Errorf("Yenga Pay cash-out error: %s", body),
+			}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrCashOutDefinitive{
+				HTTPStatus: resp.StatusCode,
+				Message:    body,
+			}
+		}
+		return nil, &ErrCashOutUnknown{
+			HTTPStatus: resp.StatusCode,
+			Cause:      fmt.Errorf("Yenga Pay cash-out error: %s", body),
+		}
 	}
 
 	var yengaResp struct {
 		ID              string  `json:"id"`
-		Amount          int64   `json:"amount"`
-		Fees            int64   `json:"fees"`
-		TotalDebited    int64   `json:"totalDebited"`
+		Amount          float64 `json:"amount"`
+		Fees            float64 `json:"fees"`
+		TotalDebited    float64 `json:"totalDebited"`
 		Status          string  `json:"status"`
 		CreatedAt       string  `json:"createdAt"`
 		DestNumber      string  `json:"destNumber"`
@@ -309,21 +326,29 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 	}
 
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrCashOutUnknown{
+			HTTPStatus: resp.StatusCode,
+			Cause:      fmt.Errorf("failed to parse response: %w", err),
+		}
 	}
 
 	logger.Info().
 		Str("provider_ref", yengaResp.ID).
 		Str("status", yengaResp.Status).
-		Int64("fees", yengaResp.Fees).
+		Float64("fees", yengaResp.Fees).
 		Msg("Cash-out successful")
+
+	// Conversion des float64 en int64 cents pour la cohérence interne
+	amountCents := int64(yengaResp.Amount * 100)
+	feesCents := int64(yengaResp.Fees * 100)
+	totalDebitedCents := int64(yengaResp.TotalDebited * 100)
 
 	return &CashOutResponse{
 		ProviderRef:  yengaResp.ID,
 		Status:       yengaResp.Status,
-		Amount:       yengaResp.Amount,
-		Fees:         yengaResp.Fees,
-		TotalDebited: yengaResp.TotalDebited,
+		Amount:       amountCents,
+		Fees:         feesCents,
+		TotalDebited: totalDebitedCents,
 		CreatedAt:    yengaResp.CreatedAt,
 	}, nil
 }

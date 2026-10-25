@@ -430,6 +430,7 @@ func TestCreateWithdrawalUsecase_ProviderFactoryError(t *testing.T) {
 	assert.Contains(t, err.Error(), "create yenga provider")
 }
 
+// 🆕 C2 AUDIT : Test pour une erreur ambiguë (inconnue)
 func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -463,10 +464,13 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 			YengaPay: entity.YengaPayShopSettings{Enabled: false},
 		}, nil)
 
-	// "insufficient funds" sans code HTTP explicite est traité comme ambigu par isDefinitiveRejection
+	// 🆕 C2 AUDIT : Utilisation d'une erreur typée ambiguë (503)
 	mockCashOut.EXPECT().
 		CashOut(gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("insufficient funds"))
+		Return(nil, &payment.ErrCashOutUnknown{
+			HTTPStatus: 503,
+			Cause:      errors.New("service unavailable"),
+		})
 
 	// Le usecase doit donc appeler TransitionToReconciliationRequired au lieu de faire un reverse
 	mockWithdrawalRepo.EXPECT().
@@ -482,6 +486,67 @@ func TestCreateWithdrawalUsecase_CashOutError(t *testing.T) {
 	// ✅ Vérification du nouveau comportement : chemin de réconciliation pour erreur ambiguë
 	assert.Contains(t, err.Error(), "vérification auprès du fournisseur")
 	assert.Contains(t, strings.ToLower(err.Error()), "réponse ambiguë")
+}
+
+// 🆕 C2 AUDIT : Test pour un rejet définitif (4xx)
+func TestCreateWithdrawalUsecase_CashOutDefinitiveRejection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWithdrawalRepo := mockrepo.NewMockWithdrawalRepository(ctrl)
+	mockShopRepo := mockrepo.NewMockShopRepository(ctrl)
+	mockRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockCashOut := mockusecase.NewMockCashOutProvider(ctrl)
+	mockDebitWalletUC, mockWalletRepo := createMockDebitWalletUsecase(ctrl)
+	mockCreditWalletUC := createMockCreditWalletUsecase(ctrl, false) // Pour tester le reverse
+
+	uc := withdrawalusecase.NewCreateWithdrawalUsecaseWithFactory(
+		mockWithdrawalRepo,
+		mockShopRepo,
+		mockWalletRepo,
+		mockRegistry,
+		mockCashOutProviderFactory(mockCashOut),
+		mockDebitWalletUC,
+		mockCreditWalletUC,
+	)
+
+	ctx := createTestContextForWithdrawalWithKYC(entity.ShopKYCStatusVerified, nil)
+	shop, _ := tenant.FromContext(ctx)
+
+	mockWithdrawalRepo.EXPECT().
+		Create(gomock.Any(), gomock.Any()).
+		Return(nil)
+
+	mockShopRepo.EXPECT().
+		GetPaymentSettings(gomock.Any(), shop.ID).
+		Return(&entity.ShopPaymentSettings{
+			YengaPay: entity.YengaPayShopSettings{Enabled: false},
+		}, nil)
+
+	// 🆕 C2 AUDIT : Utilisation d'une erreur typée définitive (400)
+	mockCashOut.EXPECT().
+		CashOut(gomock.Any(), gomock.Any()).
+		Return(nil, &payment.ErrCashOutDefinitive{
+			HTTPStatus: 400,
+			Message:    `{"message":"insufficient funds"}`,
+		})
+
+	// Le usecase doit appeler le reverse du débit
+	mockWithdrawalRepo.EXPECT().
+		Update(gomock.Any(), gomock.Any()). // MarkFailed
+		Return(nil)
+
+	req := createValidWithdrawalRequest()
+	response, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, response)
+
+	// ✅ Vérification du nouveau comportement : reverse et statut failed
+	var outcome *withdrawalusecase.ErrWithdrawalOutcome
+	assert.ErrorAs(t, err, &outcome)
+	assert.Equal(t, "failed", outcome.Status)
+	assert.Contains(t, outcome.Message, "cash-out definitively rejected by provider")
 }
 
 // ============================================================
