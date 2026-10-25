@@ -2,6 +2,7 @@ package withdrawalusecase
 
 import (
 	"context"
+	"errors" // 🆕 Ajouté pour errors.As
 	"fmt"
 	"os"
 	"strings"
@@ -346,8 +347,8 @@ func (uc *CreateWithdrawalUsecase) Execute(ctx context.Context, req *withdrawald
 	// ============================================================
 	cashOutResp, err := yengaProvider.CashOut(ctx, cashOutReq)
 	if err != nil {
-		// 🛡️ PR 3 AUDIT : Seul un refus explicite et définitif autorise le reverse.
-		if isDefinitiveRejection(err) {
+		// 🛡️ C2 AUDIT : Seul un refus explicite et définitif (typé) autorise le reverse.
+		if isCashOutDefinitive(err) {
 			return failAfterDebit(err, "cash-out definitively rejected by provider")
 		}
 
@@ -450,6 +451,28 @@ func (uc *CreateWithdrawalUsecase) reversePayoutDebit(
 		Msg("Payout debit reversed after definitive provider failure")
 
 	return nil
+}
+
+// 🛡️ C2 AUDIT : isCashOutDefinitive vérifie si l'erreur est un refus métier explicite.
+// Elle utilise les nouveaux types typés, avec un fallback sur l'ancienne heuristique
+// pour assurer la compatibilité avec les anciens mocks ou erreurs non typées.
+func isCashOutDefinitive(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var def *payment.ErrCashOutDefinitive
+	if errors.As(err, &def) {
+		return true
+	}
+
+	var unk *payment.ErrCashOutUnknown
+	if errors.As(err, &unk) {
+		return false
+	}
+
+	// Fallback anciens mocks / erreurs non typées
+	return isDefinitiveRejection(err)
 }
 
 // 🛡️ PR 3 AUDIT : isDefinitiveRejection détermine si l'erreur est un refus explicite et définitif.
