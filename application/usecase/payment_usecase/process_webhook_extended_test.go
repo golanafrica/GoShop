@@ -21,19 +21,11 @@ import (
 // HELPERS
 // ============================================================
 
-type mockResult struct {
-	lastInsertId int64
-	rowsAffected int64
-}
-
-func (m *mockResult) LastInsertId() (int64, error) { return m.lastInsertId, nil }
-func (m *mockResult) RowsAffected() (int64, error) { return m.rowsAffected, nil }
-
 // expectDBExecAny configure le mock pour accepter n'importe quel appel à ExecContext
-// (8 args pour l'INSERT de recordWebhook, 4 args pour markWebhookProcessed, 5 args pour markWebhookFailed)
+// 🆕 C1 AUDIT : recordWebhook envoie maintenant 9 arguments (ajout du lease duration)
 func expectDBExecAny(db *mockrepo.MockDBExecutor) {
-	// Match 8 args (recordWebhook INSERT: ctx, query, provider, eventType, externalID, payload, signature, signatureValid)
-	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+	// Match 9 args (recordWebhook INSERT: ctx, query, provider, eventType, externalID, payload, signature, signatureValid, leaseSeconds)
+	db.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(&mockResult{rowsAffected: 1}, nil).AnyTimes()
 
 	// Match 4 args (markWebhookProcessed UPDATE: ctx, query, provider, externalID)
@@ -45,8 +37,8 @@ func expectDBExecAny(db *mockrepo.MockDBExecutor) {
 		Return(&mockResult{rowsAffected: 1}, nil).AnyTimes()
 }
 
-// Note : createTestShopPayment() est déjà définie dans initiate_payment_extended_test.go
-// et est partagée automatiquement car les deux fichiers sont dans le même package.
+// Note : createTestShopPayment() et createTestContextForPayment() sont déjà définies
+// dans d'autres fichiers du même package et sont partagées automatiquement.
 
 // ============================================================
 // TESTS
