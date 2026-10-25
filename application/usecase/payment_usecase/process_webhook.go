@@ -24,6 +24,9 @@ var (
 	ErrWebhookAlreadyProcessed = errors.New("webhook already processed")
 )
 
+// 🆕 C1 AUDIT : Durée du bail de revendication (5 minutes)
+const webhookClaimLease = 5 * time.Minute
+
 type CreditUpdater interface {
 	MarkInstallmentPaid(ctx context.Context, installmentID string, paymentID string) error
 	MarkContractDownPaymentPaid(ctx context.Context, contractID string, paymentID string) error
@@ -95,7 +98,7 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
 	}
 
-	// 🛡️ PR 6 AUDIT : Claim atomique de l'inbox. Empêche le double traitement en multi-instance.
+	// 🛡️ PR 6 & C1 AUDIT : Claim atomique de l'inbox avec lease.
 	if err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, ""); err != nil {
 		if errors.Is(err, ErrWebhookAlreadyProcessed) {
 			logger.Info().Msg("Webhook already processed or claimed by another instance (idempotent)")
@@ -107,12 +110,19 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 	var processErr error
 
+	// 🆕 C1 AUDIT : Ne plus ignorer les erreurs de finalisation
 	defer func() {
 		if processErr != nil {
-			_ = uc.markWebhookFailed(ctx, providerCode, event, processErr.Error())
+			if err := uc.markWebhookFailed(ctx, providerCode, event, processErr.Error()); err != nil {
+				logger.Error().Err(err).Str("external_id", event.ExternalID).
+					Msg("CRITICAL: webhook business failed AND markWebhookFailed failed")
+			}
 			return
 		}
-		_ = uc.markWebhookProcessed(ctx, providerCode, event)
+		if err := uc.markWebhookProcessed(ctx, providerCode, event); err != nil {
+			logger.Error().Err(err).Str("external_id", event.ExternalID).
+				Msg("CRITICAL: webhook business OK but markWebhookProcessed failed — may retry after lease")
+		}
 	}()
 
 	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
@@ -510,10 +520,7 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
-// 🛡️ PR 6 AUDIT : Claim atomique de l'inbox webhook.
-// Utilise ExecContext avec ON CONFLICT DO UPDATE ... WHERE pour garantir qu'une seule instance
-// peut revendiquer le traitement. Si rowsAffected == 0, c'est que la condition WHERE a échoué
-// (déjà traité ou déjà en cours de traitement par une autre instance).
+// 🛡️ PR 6 & C1 AUDIT : Claim atomique avec lease (bail de 5 min).
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -521,10 +528,11 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	payload []byte,
 	signature string,
 	signatureValid bool,
-	_ string, // processingError est ignoré lors du claim initial
+	_ string,
 ) error {
+	// 🆕 C1 : Sécurité stricte, la DB est obligatoire pour l'idempotence
 	if uc.db == nil {
-		return nil
+		return fmt.Errorf("webhook inbox DB required")
 	}
 
 	var eventType, externalID string
@@ -540,17 +548,27 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	query := `
 		INSERT INTO payment_webhooks (
 			provider, event_type, external_id, payload, signature,
-			signature_validated, processing_error, processed
-		) VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSING', false)
+			signature_validated, processing_error, processed, claimed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSING', false, NOW())
 		ON CONFLICT (provider, external_id) DO UPDATE SET
 			processing_error = 'PROCESSING',
-			processed = false
-		WHERE payment_webhooks.processed = false 
-		  AND (payment_webhooks.processing_error IS NULL OR payment_webhooks.processing_error != 'PROCESSING')
+			processed = false,
+			claimed_at = NOW(),
+			payload = EXCLUDED.payload,
+			signature = EXCLUDED.signature,
+			signature_validated = EXCLUDED.signature_validated
+		WHERE payment_webhooks.processed = false
+		  AND (
+		        payment_webhooks.processing_error IS NULL
+		     OR payment_webhooks.processing_error <> 'PROCESSING'
+		     OR payment_webhooks.claimed_at IS NULL
+		     OR payment_webhooks.claimed_at < NOW() - ($7::text || ' seconds')::interval
+		  )
 	`
 
 	res, err := uc.db.ExecContext(ctx, query,
 		provider, eventType, externalID, payloadJSON, signature, signatureValid,
+		int(webhookClaimLease.Seconds()),
 	)
 	if err != nil {
 		return err
@@ -558,16 +576,13 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
-		// La clause WHERE a empêché l'insertion/mise à jour.
-		// Cela signifie que le webhook est soit déjà traité avec succès (processed=true),
-		// soit qu'une autre instance est en train de le traiter (processing_error='PROCESSING').
-		// Dans les deux cas, nous devons abandonner pour éviter le double traitement.
 		return ErrWebhookAlreadyProcessed
 	}
 
 	return nil
 }
 
+// 🆕 C1 : Nettoyer claimed_at lors du succès
 func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
@@ -575,7 +590,8 @@ func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provi
 	_, err := uc.db.ExecContext(ctx, `
 		UPDATE payment_webhooks
 		SET processed = true,
-		    processing_error = NULL
+		    processing_error = NULL,
+		    claimed_at = NULL
 		WHERE provider = $1 AND external_id = $2
 	`, provider, event.ExternalID)
 	if err != nil {
@@ -586,6 +602,7 @@ func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provi
 	return err
 }
 
+// 🆕 C1 : Nettoyer claimed_at lors de l'échec pour permettre un retry immédiat
 func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, errMsg string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
@@ -593,7 +610,8 @@ func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider
 	_, err := uc.db.ExecContext(ctx, `
 		UPDATE payment_webhooks
 		SET processed = false,
-		    processing_error = $3
+		    processing_error = $3,
+		    claimed_at = NULL
 		WHERE provider = $1 AND external_id = $2
 	`, provider, event.ExternalID, truncateErr(errMsg, 500))
 	if err != nil {
