@@ -123,9 +123,10 @@ type PaymentResponse struct {
 
 // RefundPaymentRequest représente la requête de remboursement
 type RefundPaymentRequest struct {
-	PaymentID   string `json:"payment_id"`
-	AmountCents int64  `json:"amount_cents,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	PaymentID      string `json:"payment_id"`
+	AmountCents    int64  `json:"amount_cents,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // Validate valide la requête de remboursement
