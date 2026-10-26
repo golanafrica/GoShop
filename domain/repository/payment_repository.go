@@ -29,6 +29,9 @@ type PaymentRepository interface {
 	ReverseRefundAmountAndRecompute(ctx context.Context, paymentID uuid.UUID, refundAmountCents int64) (bool, error)
 	FindStuckNonTerminalPayments(ctx context.Context, minAgeMinutes int, limit int) ([]*entity.Payment, error)
 
+	// 🆕 C3 AUDIT : Gestion des paiements bloqués sans provider_ref
+	FindStuckPaymentsMissingProviderRef(ctx context.Context, minAgeMinutes int, limit int) ([]*entity.Payment, error)
+
 	// 🆕 B3 AUDIT : Gestion durable des demandes de remboursement
 	CreatePaymentRefund(ctx context.Context, refund *entity.PaymentRefund) error
 	UpdatePaymentRefundStatus(ctx context.Context, id uuid.UUID, status entity.PaymentRefundStatus, providerErr string) error
