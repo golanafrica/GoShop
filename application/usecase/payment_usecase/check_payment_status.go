@@ -61,16 +61,43 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
-	// Poll provider tant que non terminal, OU déjà terminal mais MSISDN encore seed
-	// (RealPayIn : le 1er poll peut passer success sans customerNumber).
-	needsProviderPoll := paymentEntity.ProviderRef != nil &&
-		(!paymentEntity.IsTerminal() || paymentNeedsChannelEnrichment(paymentEntity))
+	// 🆕 C3-B : Lookup par référence marchande si provider_ref est manquant
+	lookupKey := ""
+	if paymentEntity.ProviderRef != nil && *paymentEntity.ProviderRef != "" {
+		lookupKey = *paymentEntity.ProviderRef
+	} else if !paymentEntity.IsTerminal() {
+		lookupKey = paymentEntity.ID.String() // Utiliser l'ID du paiement comme référence marchande
+		logger.Info().
+			Str("payment_id", lookupKey).
+			Msg("C3-B: CheckStatus by merchant reference (missing provider_ref)")
+	}
+
+	needsProviderPoll := lookupKey != "" && (!paymentEntity.IsTerminal() || paymentNeedsChannelEnrichment(paymentEntity))
 
 	if needsProviderPoll {
 		provider, err := uc.registry.Get(paymentEntity.Provider)
 		if err == nil {
-			status, err := provider.CheckStatus(ctx, *paymentEntity.ProviderRef)
+			status, err := provider.CheckStatus(ctx, lookupKey)
 			if err == nil && status != nil {
+				// Si on a récupéré un vrai provider_ref via le lookup, on le sauvegarde
+				if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
+					if status.ProviderRef != "" {
+						ref := status.ProviderRef
+						paymentEntity.ProviderRef = &ref
+					} else if status.Metadata != nil {
+						if idStr, ok := status.Metadata["id"].(string); ok && idStr != "" {
+							paymentEntity.ProviderRef = &idStr
+						} else if idStr, ok := status.Metadata["paymentIntentId"].(string); ok && idStr != "" {
+							paymentEntity.ProviderRef = &idStr
+						}
+					}
+					// Fallback: garder la merchant ref si rien d'autre n'est trouvé
+					if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
+						ref := lookupKey
+						paymentEntity.ProviderRef = &ref
+					}
+				}
+
 				// Toujours tenter d'appliquer le canal (source + vrai MSISDN)
 				channelChanged := ApplyPayInChannelFromStatus(paymentEntity, status, logger)
 
@@ -96,23 +123,32 @@ func (uc *CheckPaymentStatusUsecase) Execute(ctx context.Context, paymentID stri
 						}
 					case entity.PaymentStatusFailed:
 						if err := paymentEntity.MarkFailed(status.FailureReason); err == nil {
-							_ = uc.paymentRepo.Update(ctx, paymentEntity)
-						}
-						if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
-							logger.Error().Err(err).Msg("Failed to persist payment after provider success")
+							if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
+								logger.Error().Err(err).Msg("Failed to persist payment after provider failed")
+							}
 						}
 					}
-				} else if channelChanged {
+				} else if channelChanged || (paymentEntity.ProviderRef != nil && *paymentEntity.ProviderRef == lookupKey && lookupKey == paymentEntity.ID.String()) {
 					// Déjà success : MSISDN / source viennent d'arriver → persister
+					// OU on vient de récupérer le provider_ref via merchant reference
 					if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
-						logger.Error().Err(err).Msg("Failed to persist pay-in channel on already-success payment")
+						logger.Error().Err(err).Msg("Failed to persist pay-in channel or recovered provider_ref")
 					} else {
-						logger.Info().
-							Str("payment_id", paymentID).
-							Msg("Pay-in channel persisted on already-success payment")
+						if channelChanged {
+							logger.Info().Str("payment_id", paymentID).Msg("Pay-in channel persisted on already-success payment")
+						} else {
+							logger.Info().Str("provider_ref", *paymentEntity.ProviderRef).Msg("C3-B: provider_ref recovered via merchant reference")
+						}
 					}
 				}
+			} else if err != nil {
+				// 404 / unknown → ne pas MarkFailed ; le scheduler C3-A a déjà flaggé ou réessaiera
+				logger.Warn().Err(err).
+					Str("payment_id", lookupKey).
+					Msg("C3-B: lookup by merchant reference failed — leave for manual recon or retry")
 			}
+		} else {
+			logger.Warn().Err(err).Msg("Provider not available for status check")
 		}
 	}
 
