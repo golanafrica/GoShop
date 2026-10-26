@@ -96,7 +96,7 @@ func (r *PaymentRepositoryPostgres) Create(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
-		payment.RefundedAmountCents, // 🆕 PR 5 AUDIT
+		payment.RefundedAmountCents,
 		payment.CommissionCents,
 		payment.CommissionRateBps,
 		payment.CommissionStatus,
@@ -276,7 +276,7 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 		payment.ReferenceID,
 		payment.WebhookExternalID,
 		payment.ProviderFeesCents,
-		payment.RefundedAmountCents, // 🆕 PR 5 AUDIT
+		payment.RefundedAmountCents,
 		payment.CommissionCents,
 		payment.CommissionRateBps,
 		payment.CommissionStatus,
@@ -324,7 +324,7 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&referenceID,
 		&webhookExternalID,
 		&p.ProviderFeesCents,
-		&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
+		&p.RefundedAmountCents,
 		&p.CommissionCents,
 		&p.CommissionRateBps,
 		&commissionStatus,
@@ -409,7 +409,7 @@ func (r *PaymentRepositoryPostgres) scanPayments(rows *sql.Rows) ([]*entity.Paym
 			&referenceID,
 			&webhookExternalID,
 			&p.ProviderFeesCents,
-			&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
+			&p.RefundedAmountCents,
 			&p.CommissionCents,
 			&p.CommissionRateBps,
 			&commissionStatus,
@@ -526,7 +526,7 @@ func (r *PaymentRepositoryPostgres) FindCompletedWithoutCommission(
 			&p.CommissionStatus,
 			&p.CommissionCollectedAt,
 			&p.ProviderFeesCents,
-			&p.RefundedAmountCents, // 🆕 PR 5 AUDIT
+			&p.RefundedAmountCents,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
@@ -606,9 +606,6 @@ func (r *PaymentRepositoryPostgres) FindByOrderIDUnscoped(ctx context.Context, o
 	return r.scanPayments(rows)
 }
 
-// 🆕 PR 5 AUDIT : AddRefundAmount met à jour le cumul remboursé de manière atomique.
-// La clause WHERE garantit que (montant_total - montant_déjà_remboursé) >= montant_du_nouveau_remboursement.
-// Cela empêche les conditions de course de rembourser plus que le montant initial.
 func (r *PaymentRepositoryPostgres) AddRefundAmount(
 	ctx context.Context,
 	paymentID uuid.UUID,
@@ -635,11 +632,9 @@ func (r *PaymentRepositoryPostgres) AddRefundAmount(
 		return false, fmt.Errorf("check rows affected: %w", err)
 	}
 
-	// Si rows == 0, c'est que la condition WHERE a échoué (montant insuffisant ou course)
 	return rows > 0, nil
 }
 
-// ReverseRefundAmount annule une réservation atomique (échec provider après AddRefundAmount).
 func (r *PaymentRepositoryPostgres) ReverseRefundAmount(
 	ctx context.Context,
 	paymentID uuid.UUID,
@@ -699,7 +694,6 @@ func (r *PaymentRepositoryPostgres) FindStuckNonTerminalPayments(
 		ORDER BY updated_at ASC
 		LIMIT $2
 	`
-	// Adapte la liste de colonnes à ton scanPayments existant si différente.
 
 	rows, err := r.queryContext(ctx, query, minAgeMinutes, limit)
 	if err != nil {
@@ -710,8 +704,6 @@ func (r *PaymentRepositoryPostgres) FindStuckNonTerminalPayments(
 	return r.scanPayments(rows)
 }
 
-// ReverseRefundAmountAndRecompute annule une réservation et recalcule le statut
-// à partir du cumul restant (pas de statut "mémoire" passé par l'appelant).
 func (r *PaymentRepositoryPostgres) ReverseRefundAmountAndRecompute(
 	ctx context.Context,
 	paymentID uuid.UUID,
@@ -743,6 +735,7 @@ func (r *PaymentRepositoryPostgres) ReverseRefundAmountAndRecompute(
 
 	return rows > 0, nil
 }
+
 func (r *PaymentRepositoryPostgres) CreatePaymentRefund(ctx context.Context, refund *entity.PaymentRefund) error {
 	query := `
 		INSERT INTO payment_refunds (
@@ -828,4 +821,44 @@ func (r *PaymentRepositoryPostgres) FindPaymentRefundByIdempotency(
 		rf.ProviderError = &providerError.String
 	}
 	return &rf, nil
+}
+
+// 🆕 C3 AUDIT : FindStuckPaymentsMissingProviderRef trouve les paiements bloqués sans référence fournisseur.
+func (r *PaymentRepositoryPostgres) FindStuckPaymentsMissingProviderRef(
+	ctx context.Context,
+	minAgeMinutes int,
+	limit int,
+) ([]*entity.Payment, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if minAgeMinutes <= 0 {
+		minAgeMinutes = 15 // 15 min par défaut pour éviter les faux positifs sur les initiations lentes
+	}
+
+	query := `
+		SELECT id, shop_id, order_id, provider, provider_ref, amount_cents, currency,
+		       customer_phone, customer_email, description, status, metadata,
+		       initiated_at, completed_at, expires_at, created_at, updated_at,
+		       COALESCE(provider_fees_cents, 0),
+		       COALESCE(refunded_amount_cents, 0),
+		       COALESCE(commission_cents, 0),
+		       COALESCE(commission_rate_bps, 0),
+		       COALESCE(commission_status, 'pending'),
+		       commission_collected_at
+		FROM payments
+		WHERE status IN ('pending', 'processing')
+		  AND (provider_ref IS NULL OR provider_ref = '')
+		  AND updated_at < NOW() - ($1 || ' minutes')::interval
+		ORDER BY updated_at ASC
+		LIMIT $2
+	`
+
+	rows, err := r.queryContext(ctx, query, minAgeMinutes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stuck payments missing provider ref: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanPayments(rows)
 }
