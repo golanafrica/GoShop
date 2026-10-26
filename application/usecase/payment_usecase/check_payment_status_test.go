@@ -34,7 +34,8 @@ func createProcessingPayment(shopID uuid.UUID, amountCents int64) *entity.Paymen
 	return payment
 }
 
-// createTestContextForPayment : list_payments_test.go
+// Note : createTestContextForPayment est déjà définie dans list_payments_test.go
+// et est partagée automatiquement car les deux fichiers sont dans le même package.
 
 func TestCheckPaymentStatusUsecase_MultiTenantError(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -272,6 +273,13 @@ func TestCheckPaymentStatusUsecase_NonTerminalWithoutProviderRef(t *testing.T) {
 	mockPaymentRepo.EXPECT().
 		FindByID(gomock.Any(), pendingPayment.ID).
 		Return(pendingPayment, nil)
+
+	// 🆕 C3-B : Le usecase tente maintenant un lookup par référence marchande (payment.ID)
+	// On simule que le provider n'est pas trouvé pour vérifier que cela ne fait pas panic/crash.
+	mockRegistry.EXPECT().
+		Get(entity.ProviderYengaPay).
+		Return(nil, errors.New("provider not found")).
+		AnyTimes()
 
 	response, err := uc.Execute(ctx, pendingPayment.ID.String())
 
@@ -527,7 +535,7 @@ func TestCheckPaymentStatusUsecase_StatusChangedToFailed(t *testing.T) {
 			FailureReason: "Insufficient funds",
 		}, nil)
 
-		// MarkFailed + éventuelle 2e persistance (canal / fin de Execute)
+	// MarkFailed + éventuelle 2e persistance (canal / fin de Execute)
 	mockPaymentRepo.EXPECT().
 		Update(gomock.Any(), gomock.Any()).
 		Return(nil).
