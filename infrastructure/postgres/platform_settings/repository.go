@@ -52,10 +52,36 @@ func (r *PlatformSettingsRepository) GetAll(ctx context.Context) (map[string]jso
 		result[key] = value
 	}
 
-	// 🛡️ CORRECTION : Vérification de l'erreur après la boucle Next()
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
 	return result, nil
+}
+
+// 🆕 PR 2 : UpdateMany garantit que tous les paramètres sont mis à jour ensemble, ou aucun (atomicité).
+func (r *PlatformSettingsRepository) UpdateMany(ctx context.Context, settings map[string]json.RawMessage, updatedBy *string) error {
+	if len(settings) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	query := `
+		INSERT INTO platform_settings (key, value, updated_by, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()
+	`
+
+	for key, value := range settings {
+		if _, err := tx.ExecContext(ctx, query, key, value, updatedBy); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
