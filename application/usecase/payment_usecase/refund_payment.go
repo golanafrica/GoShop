@@ -185,11 +185,19 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		}
 
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
+<<<<<<< Updated upstream
 			if isDefinitiveRefundRejection(err) {
 				if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 					logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).Msg("CRITICAL: definitive provider reject AND reverse failed")
 				}
 				_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
+=======
+			var definitive *payment.ErrCashOutDefinitive
+			if errors.As(err, &definitive) {
+				if revErr := uc.reverseRefundAndLog(ctx, paymentID, refundAmount, refundRow.ID, "provider definitive rejection", logger); revErr != nil {
+					logger.Error().Err(revErr).Msg("CRITICAL: Definitive reject BUT reverse failed. Manual DB intervention required.")
+				}
+>>>>>>> Stashed changes
 				return nil, fmt.Errorf("refund rejected by provider: %w", err)
 			}
 
@@ -218,13 +226,44 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		logger.Error().Err(err).Msg("refund OK but metadata update failed — cumul already reserved")
 	}
 
+<<<<<<< Updated upstream
 	_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, "")
+=======
+	// Final step: Mark refund as completed
+	if err := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, ""); err != nil {
+		logger.Error().Err(err).Msg("CRITICAL: Refund completed at provider and DB, but final status update failed. Manual reconciliation required.")
+	}
+>>>>>>> Stashed changes
 
 	logger.Info().Str("payment_id", paymentID.String()).Int64("refund_amount", refundAmount).Str("new_status", string(paymentEntity.Status)).Msg("Refund completed successfully (atomic reservation)")
 
 	return mapPaymentToResponse(paymentEntity), nil
 }
 
+<<<<<<< Updated upstream
+=======
+// reverseRefundAndLog est un helper pour gérer proprement l'échec de l'annulation de réservation
+func (uc *RefundPaymentUsecase) reverseRefundAndLog(ctx context.Context, paymentID uuid.UUID, refundAmount int64, refundID uuid.UUID, reason string, logger *zerolog.Logger) error {
+	ok, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount)
+	if revErr != nil {
+		logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).
+			Msgf("CRITICAL: Failed to reverse refund reservation (%s)", reason)
+		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundID, entity.PaymentRefundReconciliationRequired, fmt.Sprintf("reverse failed: %v", revErr))
+		return revErr
+	}
+	if !ok {
+		logger.Error().Str("payment_id", paymentID.String()).Int64("amount", refundAmount).
+			Msgf("CRITICAL: Reverse refund reservation returned false (%s)", reason)
+		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundID, entity.PaymentRefundReconciliationRequired, fmt.Sprintf("reverse failed: ok=false, %s", reason))
+		return fmt.Errorf("reverse refund failed: ok=false")
+	}
+
+	// Si l'annulation réussit, on marque le remboursement comme échoué
+	_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundID, entity.PaymentRefundFailed, reason)
+	return nil
+}
+
+>>>>>>> Stashed changes
 func paymentRequiresProviderRefund(p entity.PaymentProvider) bool {
 	switch p {
 	case entity.ProviderYengaPay, entity.ProviderOrangeMoney, entity.ProviderMoovMoney, entity.ProviderWave:
