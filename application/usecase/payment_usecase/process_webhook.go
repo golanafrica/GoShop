@@ -22,6 +22,7 @@ var (
 	ErrWebhookValidation       = errors.New("webhook validation failed")
 	ErrWebhookProcessing       = errors.New("webhook processing failed")
 	ErrWebhookAlreadyProcessed = errors.New("webhook already processed")
+	ErrWebhookClaimLost        = errors.New("webhook claim lost to another worker")
 )
 
 // 🆕 C1 AUDIT : Durée du bail de revendication (5 minutes)
@@ -94,12 +95,13 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	event, err := provider.ValidateWebhook(ctx, payload, signature)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Invalid webhook")
-		_ = uc.recordWebhook(ctx, providerCode, nil, payload, signature, false, err.Error())
+		_, _ = uc.recordWebhook(ctx, providerCode, nil, payload, signature, false, err.Error())
 		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
 	}
 
-	// 🛡️ PR 6 & C1 AUDIT : Claim atomique de l'inbox avec lease.
-	if err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, ""); err != nil {
+	// 🛡️ PR 3 AUDIT : Claim atomique avec propriété stricte (claim_id).
+	claimID, err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
+	if err != nil {
 		if errors.Is(err, ErrWebhookAlreadyProcessed) {
 			logger.Info().Msg("Webhook already processed or claimed by another instance (idempotent)")
 			return ErrWebhookAlreadyProcessed
@@ -110,16 +112,15 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 
 	var processErr error
 
-	// 🆕 C1 AUDIT : Ne plus ignorer les erreurs de finalisation
 	defer func() {
 		if processErr != nil {
-			if err := uc.markWebhookFailed(ctx, providerCode, event, processErr.Error()); err != nil {
+			if err := uc.markWebhookFailed(ctx, providerCode, event, processErr.Error(), claimID); err != nil {
 				logger.Error().Err(err).Str("external_id", event.ExternalID).
 					Msg("CRITICAL: webhook business failed AND markWebhookFailed failed")
 			}
 			return
 		}
-		if err := uc.markWebhookProcessed(ctx, providerCode, event); err != nil {
+		if err := uc.markWebhookProcessed(ctx, providerCode, event, claimID); err != nil {
 			logger.Error().Err(err).Str("external_id", event.ExternalID).
 				Msg("CRITICAL: webhook business OK but markWebhookProcessed failed — may retry after lease")
 		}
@@ -520,7 +521,7 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
-// 🛡️ PR 6 & C1 AUDIT : Claim atomique avec lease (bail de 5 min).
+// 🛡️ PR 3 AUDIT : Claim atomique avec propriété stricte. Retourne le claimID généré.
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -529,10 +530,9 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	signature string,
 	signatureValid bool,
 	_ string,
-) error {
-	// 🆕 C1 : Sécurité stricte, la DB est obligatoire pour l'idempotence
+) (string, error) {
 	if uc.db == nil {
-		return fmt.Errorf("webhook inbox DB required")
+		return "", fmt.Errorf("webhook inbox DB required")
 	}
 
 	var eventType, externalID string
@@ -545,15 +545,17 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		"raw": string(payload),
 	})
 
+	claimID := uuid.New().String()
+
 	query := `
 		INSERT INTO payment_webhooks (
 			provider, event_type, external_id, payload, signature,
-			signature_validated, processing_error, processed, claimed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSING', false, NOW())
+			signature_validated, processing_error, processed, claim_id
+		) VALUES ($1, $2, $3, $4, $5, $6, 'PROCESSING', false, $7)
 		ON CONFLICT (provider, external_id) DO UPDATE SET
 			processing_error = 'PROCESSING',
 			processed = false,
-			claimed_at = NOW(),
+			claim_id = $7,
 			payload = EXCLUDED.payload,
 			signature = EXCLUDED.signature,
 			signature_validated = EXCLUDED.signature_validated
@@ -561,65 +563,76 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 		  AND (
 		        payment_webhooks.processing_error IS NULL
 		     OR payment_webhooks.processing_error <> 'PROCESSING'
-		     OR payment_webhooks.claimed_at IS NULL
-		     OR payment_webhooks.claimed_at < NOW() - ($7::text || ' seconds')::interval
+		     OR payment_webhooks.claim_id IS NULL
+		     OR payment_webhooks.claimed_at < NOW() - ($8::text || ' seconds')::interval
 		  )
 	`
 
 	res, err := uc.db.ExecContext(ctx, query,
-		provider, eventType, externalID, payloadJSON, signature, signatureValid,
-		int(webhookClaimLease.Seconds()),
+		provider, eventType, externalID, payloadJSON, signature, signatureValid, claimID, int(webhookClaimLease.Seconds()),
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
-		return ErrWebhookAlreadyProcessed
+		return "", ErrWebhookAlreadyProcessed
 	}
 
-	return nil
+	return claimID, nil
 }
 
-// 🆕 C1 : Nettoyer claimed_at lors du succès
-func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent) error {
+// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de finaliser.
+func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
 	}
-	_, err := uc.db.ExecContext(ctx, `
+	res, err := uc.db.ExecContext(ctx, `
 		UPDATE payment_webhooks
 		SET processed = true,
 		    processing_error = NULL,
-		    claimed_at = NULL
-		WHERE provider = $1 AND external_id = $2
-	`, provider, event.ExternalID)
+		    claim_id = NULL
+		WHERE provider = $1 AND external_id = $2 AND claim_id = $3
+	`, provider, event.ExternalID, claimID)
 	if err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).
 			Str("external_id", event.ExternalID).
 			Msg("Failed to mark webhook processed")
+		return err
 	}
-	return err
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrWebhookClaimLost
+	}
+	return nil
 }
 
-// 🆕 C1 : Nettoyer claimed_at lors de l'échec pour permettre un retry immédiat
-func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, errMsg string) error {
+// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de libérer.
+func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, errMsg string, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
 	}
-	_, err := uc.db.ExecContext(ctx, `
+	res, err := uc.db.ExecContext(ctx, `
 		UPDATE payment_webhooks
 		SET processed = false,
 		    processing_error = $3,
-		    claimed_at = NULL
-		WHERE provider = $1 AND external_id = $2
-	`, provider, event.ExternalID, truncateErr(errMsg, 500))
+		    claim_id = NULL
+		WHERE provider = $1 AND external_id = $2 AND claim_id = $4
+	`, provider, event.ExternalID, truncateErr(errMsg, 500), claimID)
 	if err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).
 			Str("external_id", event.ExternalID).
 			Msg("Failed to mark webhook processing_error")
+		return err
 	}
-	return err
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrWebhookClaimLost
+	}
+	return nil
 }
 
 func nullIfEmpty(s string) interface{} {
