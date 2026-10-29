@@ -152,7 +152,7 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	return rate.RateBps
 }
 
-// Execute traite un webhook tontine avec protection anti-race condition et récupérabilité (PR 3 Audit)
+// Execute traite un webhook tontine avec protection anti-race condition et récupérabilité
 func (uc *ProcessTontineWebhookUsecase) Execute(
 	ctx context.Context,
 	reference string,
@@ -241,7 +241,6 @@ func (uc *ProcessTontineWebhookUsecase) Execute(
 		}
 	}
 
-	// 🛡️ PR 3 AUDIT : Toujours tenter de compléter le cycle si succès (ou déjà done).
 	if status == entity.PaymentStatusSuccess || alreadyDone {
 		return uc.ensureCycleSettled(ctx, group, cycleNumber, shop)
 	}
@@ -288,7 +287,7 @@ func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
 	logger.Info().Int("notified_count", len(participants)).Str("payer", payerName).Msg("Tontine cycle paid notifications dispatched")
 }
 
-// ensureCycleSettled est idempotent et récupérable (PR 3 Audit)
+// ensureCycleSettled est idempotent et récupérable (PR 1 Audit)
 func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	ctx context.Context,
 	group *entity.TontineGroup,
@@ -319,9 +318,13 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 		return nil
 	}
 
-	// 🛡️ PR 3 : voucher déjà là → retenter le crédit (idempotent) puis avancer le cycle
+	// 🛡️ CORRECTION P0 : Ne pas ignorer l'erreur de lecture.
 	existingVouchers, err := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
-	if err == nil && len(existingVouchers) > 0 {
+	if err != nil {
+		return fmt.Errorf("failed to check existing vouchers for cycle %d: %w", cycleNumber, err)
+	}
+
+	if len(existingVouchers) > 0 {
 		logger.Info().
 			Str("group_id", groupID).
 			Int("cycle", cycleNumber).
@@ -421,21 +424,34 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	return uc.advanceGroupCycle(ctx, group, cycleNumber)
 }
 
+// advanceGroupCycle utilise désormais les méthodes conditionnelles pour garantir l'idempotence.
 func (uc *ProcessTontineWebhookUsecase) advanceGroupCycle(ctx context.Context, group *entity.TontineGroup, cycleNumber int) error {
 	logger := zerolog.Ctx(ctx)
+
 	if group.IsLastCycle() {
-		if err := uc.tontineGroupRepo.Complete(ctx, group.ID); err != nil {
+		advanced, err := uc.tontineGroupRepo.CompleteIfCurrentCycle(ctx, group.ID, cycleNumber)
+		if err != nil {
 			return fmt.Errorf("complete group: %w", err)
 		}
-		logger.Info().Str("group_id", group.ID).Msg("🎉 Tontine group completed!")
+		if !advanced {
+			logger.Warn().Str("group_id", group.ID).Int("cycle", cycleNumber).Msg("Group was already completed or state is inconsistent")
+		} else {
+			logger.Info().Str("group_id", group.ID).Msg("🎉 Tontine group completed!")
+		}
 		return nil
 	}
 
-	if err := uc.tontineGroupRepo.IncrementCycle(ctx, group.ID); err != nil {
+	advanced, err := uc.tontineGroupRepo.AdvanceCycleIfCurrent(ctx, group.ID, cycleNumber)
+	if err != nil {
 		return fmt.Errorf("increment cycle: %w", err)
 	}
 
-	logger.Info().Str("group_id", group.ID).Int("new_cycle", cycleNumber+1).Msg("Moved to next cycle")
+	if !advanced {
+		logger.Warn().Str("group_id", group.ID).Int("cycle", cycleNumber).Msg("Group cycle was already advanced or state is inconsistent")
+	} else {
+		logger.Info().Str("group_id", group.ID).Int("new_cycle", cycleNumber+1).Msg("Moved to next cycle")
+	}
+
 	return nil
 }
 

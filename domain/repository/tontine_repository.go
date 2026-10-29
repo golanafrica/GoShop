@@ -41,6 +41,13 @@ type TontineGroupRepository interface {
 	WithTX(tx Tx) TontineGroupRepository
 
 	FindByIDUnscoped(ctx context.Context, id string) (*entity.TontineGroup, error)
+
+	// 🆕 PR 1 : Méthodes conditionnelles pour garantir l'idempotence des transitions
+	// AdvanceCycleIfCurrent n'avance le cycle que s'il correspond exactement au cycle attendu.
+	AdvanceCycleIfCurrent(ctx context.Context, groupID string, expectedCycle int) (bool, error)
+
+	// CompleteIfCurrentCycle marque le groupe comme terminé uniquement s'il est au cycle attendu.
+	CompleteIfCurrentCycle(ctx context.Context, groupID string, expectedCycle int) (bool, error)
 }
 
 // ============================================================

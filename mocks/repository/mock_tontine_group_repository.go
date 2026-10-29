@@ -42,6 +42,21 @@ func (m *MockTontineGroupRepository) EXPECT() *MockTontineGroupRepositoryMockRec
 	return m.recorder
 }
 
+// AdvanceCycleIfCurrent mocks base method.
+func (m *MockTontineGroupRepository) AdvanceCycleIfCurrent(ctx context.Context, groupID string, expectedCycle int) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AdvanceCycleIfCurrent", ctx, groupID, expectedCycle)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AdvanceCycleIfCurrent indicates an expected call of AdvanceCycleIfCurrent.
+func (mr *MockTontineGroupRepositoryMockRecorder) AdvanceCycleIfCurrent(ctx, groupID, expectedCycle any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AdvanceCycleIfCurrent", reflect.TypeOf((*MockTontineGroupRepository)(nil).AdvanceCycleIfCurrent), ctx, groupID, expectedCycle)
+}
+
 // Complete mocks base method.
 func (m *MockTontineGroupRepository) Complete(ctx context.Context, groupID string) error {
 	m.ctrl.T.Helper()
@@ -54,6 +69,21 @@ func (m *MockTontineGroupRepository) Complete(ctx context.Context, groupID strin
 func (mr *MockTontineGroupRepositoryMockRecorder) Complete(ctx, groupID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Complete", reflect.TypeOf((*MockTontineGroupRepository)(nil).Complete), ctx, groupID)
+}
+
+// CompleteIfCurrentCycle mocks base method.
+func (m *MockTontineGroupRepository) CompleteIfCurrentCycle(ctx context.Context, groupID string, expectedCycle int) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CompleteIfCurrentCycle", ctx, groupID, expectedCycle)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CompleteIfCurrentCycle indicates an expected call of CompleteIfCurrentCycle.
+func (mr *MockTontineGroupRepositoryMockRecorder) CompleteIfCurrentCycle(ctx, groupID, expectedCycle any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompleteIfCurrentCycle", reflect.TypeOf((*MockTontineGroupRepository)(nil).CompleteIfCurrentCycle), ctx, groupID, expectedCycle)
 }
 
 // Create mocks base method.

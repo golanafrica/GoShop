@@ -401,3 +401,65 @@ func (r *TontineGroupRepositoryInfrastructure) Complete(ctx context.Context, gro
 	}
 	return nil
 }
+
+// 🆕 PR 1 : AdvanceCycleIfCurrent
+// N'avance le cycle que s'il correspond exactement au cycle attendu, que le groupe est actif et n'a pas atteint son total.
+func (r *TontineGroupRepositoryInfrastructure) AdvanceCycleIfCurrent(ctx context.Context, groupID string, expectedCycle int) (bool, error) {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	query := `
+		UPDATE tontine_groups
+		SET current_cycle = current_cycle + 1,
+		    updated_at = NOW()
+		WHERE id = $1 
+		  AND shop_id = $2
+		  AND current_cycle = $3 
+		  AND status = 'ACTIVE'
+		  AND current_cycle < total_cycles
+	`
+	res, err := r.execContext(ctx, query, groupID, shopID, expectedCycle)
+	if err != nil {
+		return false, fmt.Errorf("advance tontine group cycle: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("check rows affected for cycle advance: %w", err)
+	}
+
+	return rows > 0, nil
+}
+
+// 🆕 PR 1 : CompleteIfCurrentCycle
+// Marque le groupe comme terminé uniquement s'il est au cycle attendu et est actif.
+func (r *TontineGroupRepositoryInfrastructure) CompleteIfCurrentCycle(ctx context.Context, groupID string, expectedCycle int) (bool, error) {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	query := `
+		UPDATE tontine_groups
+		SET status = 'COMPLETED',
+		    completed_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1 
+		  AND shop_id = $2
+		  AND current_cycle = $3 
+		  AND status = 'ACTIVE'
+	`
+	res, err := r.execContext(ctx, query, groupID, shopID, expectedCycle)
+	if err != nil {
+		return false, fmt.Errorf("complete tontine group: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("check rows affected for group completion: %w", err)
+	}
+
+	return rows > 0, nil
+}
