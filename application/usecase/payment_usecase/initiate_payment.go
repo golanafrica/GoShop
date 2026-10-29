@@ -2,6 +2,7 @@ package paymentusecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -149,6 +150,43 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 	providerResp, err := provider.InitiatePayment(ctx, providerReq)
 	if err != nil {
+		// 🛡️ PR 4 AUDIT : Gestion intelligente des erreurs prestataire
+		var initUnknown *payment.ErrPaymentInitUnknown
+		var initDefinitive *payment.ErrPaymentInitDefinitive
+
+		if errors.As(err, &initUnknown) {
+			// Résultat incertain (5xx, timeout, réseau). NE PAS marquer comme FAILED.
+			// Le prestataire a peut-être accepté la demande. On laisse en PENDING/PROCESSING
+			// pour que le scheduler de réconciliation puisse interroger le statut plus tard.
+			logger.Error().Err(err).
+				Str("payment_id", newPayment.ID.String()).
+				Msg("CRITICAL: Payment initiation outcome UNKNOWN. Leaving as PENDING for reconciliation.")
+
+			if newPayment.Metadata == nil {
+				newPayment.Metadata = make(map[string]interface{})
+			}
+			newPayment.Metadata["reconciliation_required"] = true
+			newPayment.Metadata["last_init_error"] = err.Error()
+
+			if updateErr := uc.paymentRepo.Update(ctx, newPayment); updateErr != nil {
+				logger.Error().Err(updateErr).Msg("Failed to update payment with reconciliation flag")
+			}
+
+			return nil, fmt.Errorf("payment initiation outcome uncertain (reconciliation required): %w", err)
+		}
+
+		if errors.As(err, &initDefinitive) {
+			// Refus définitif (4xx) : on peut marquer comme FAILED en toute sécurité
+			if markErr := newPayment.MarkFailed(err.Error()); markErr != nil {
+				logger.Error().Err(markErr).Msg("Failed to mark payment as failed")
+			}
+			if updateErr := uc.paymentRepo.Update(ctx, newPayment); updateErr != nil {
+				logger.Error().Err(updateErr).Msg("Failed to update payment")
+			}
+			return nil, fmt.Errorf("payment initiation definitively rejected: %w", err)
+		}
+
+		// Erreur locale (ex: json marshal, réseau avant envoi) : safe to fail
 		if markErr := newPayment.MarkFailed(err.Error()); markErr != nil {
 			logger.Error().Err(markErr).Msg("Failed to mark payment as failed")
 		}
@@ -172,8 +210,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 	// 12. Traitement du succès immédiat (ONE_STEP)
 	if providerResp.Status == entity.PaymentStatusSuccess {
-		// 🛡️ PR 4 AUDIT : Marquer le succès D'ABORD. L'argent est pris par le prestataire.
-		// Nous ne devons JAMAIS marquer ce paiement comme "failed" localement, même si nos étapes internes échouent.
 		if err := newPayment.MarkSuccess(providerResp.ProviderRef); err != nil {
 			return nil, fmt.Errorf("mark payment as success: %w", err)
 		}
@@ -213,8 +249,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 			if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
 				logger.Error().Err(err).Msg("Critical: Failed to create escrow on immediate success")
-				// 🛡️ PR 4 AUDIT : Ne pas retourner d'erreur ni marquer failed.
-				// On flague pour réconciliation et on continue.
 				if newPayment.Metadata == nil {
 					newPayment.Metadata = make(map[string]interface{})
 				}
@@ -247,8 +281,6 @@ func (uc *InitiatePaymentUsecase) Execute(ctx context.Context, req *paymentdto.I
 
 				if err := uc.orderRepo.UpdateOrder(ctx, orderToUpdate); err != nil {
 					logger.Error().Err(err).Msg("Failed to update order status to confirmed")
-					// Note: Even if order update fails, payment is successful.
-					// A reconciliation job can fix the order status later.
 				} else {
 					logger.Info().
 						Str("order_id", req.OrderID).
