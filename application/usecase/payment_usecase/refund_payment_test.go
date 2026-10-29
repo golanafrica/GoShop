@@ -9,6 +9,7 @@ import (
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
+	"Goshop/infrastructure/payment"
 	mockrepo "Goshop/mocks/repository"
 	mockusecase "Goshop/mocks/usecase"
 
@@ -186,17 +187,14 @@ func TestRefundPaymentUsecase_ProviderNotFound(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
 
-	// Réservation AVANT l'appel provider
 	mockPaymentRepo.EXPECT().
 		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
 		Return(true, nil)
@@ -208,9 +206,9 @@ func TestRefundPaymentUsecase_ProviderNotFound(t *testing.T) {
 		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
 		Return(true, nil)
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à failed
+	// Mise à jour du statut à failed (appelé par le helper reverseRefundAndLog)
 	mockPaymentRepo.EXPECT().
-		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, gomock.Any()).
+		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, "provider not found").
 		Return(nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
@@ -232,12 +230,10 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -247,18 +243,25 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 		Return(true, nil)
 
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
+
+	// 🆕 PR 5 AUDIT : Utilisation de l'erreur typée pour simuler un refus définitif
 	mockProvider.EXPECT().
 		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
-		Return(errors.New("insufficient funds"))
+		Return(&payment.ErrCashOutDefinitive{Message: "insufficient funds"})
 
 	// Reverse de la réservation avec recomputation du statut
 	mockPaymentRepo.EXPECT().
 		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
 		Return(true, nil)
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à failed
+		// Mise à jour du statut à failed (appelé par le helper reverseRefundAndLog)
 	mockPaymentRepo.EXPECT().
-		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, gomock.Any()).
+		UpdatePaymentRefundStatus(
+			gomock.Any(),
+			gomock.Any(),
+			entity.PaymentRefundFailed,
+			"cash-out definitive rejection (status 0): insufficient funds",
+		).
 		Return(nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
@@ -285,12 +288,10 @@ func TestRefundPaymentUsecase_Success_FullRefund(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -308,7 +309,6 @@ func TestRefundPaymentUsecase_Success_FullRefund(t *testing.T) {
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(after, nil)
 	mockPaymentRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à completed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundCompleted, "").
 		Return(nil)
@@ -336,12 +336,10 @@ func TestRefundPaymentUsecase_Success_PartialRefund(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -364,7 +362,6 @@ func TestRefundPaymentUsecase_Success_PartialRefund(t *testing.T) {
 		return nil
 	})
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à completed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundCompleted, "").
 		Return(nil)
@@ -397,12 +394,10 @@ func TestRefundPaymentUsecase_Success_MultiplePartialRefunds(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -424,7 +419,6 @@ func TestRefundPaymentUsecase_Success_MultiplePartialRefunds(t *testing.T) {
 		return nil
 	})
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à completed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundCompleted, "").
 		Return(nil)
@@ -456,12 +450,10 @@ func TestRefundPaymentUsecase_Success_FinalPartialRefundBecomesFull(t *testing.T
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -482,7 +474,6 @@ func TestRefundPaymentUsecase_Success_FinalPartialRefundBecomesFull(t *testing.T
 		return nil
 	})
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à completed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundCompleted, "").
 		Return(nil)
@@ -513,12 +504,10 @@ func TestRefundPaymentUsecase_Success_WithMetadata(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -541,7 +530,6 @@ func TestRefundPaymentUsecase_Success_WithMetadata(t *testing.T) {
 		return nil
 	})
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à completed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundCompleted, "").
 		Return(nil)
@@ -567,12 +555,10 @@ func TestRefundPaymentUsecase_ConcurrentReservationRejected(t *testing.T) {
 
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), successPayment.ID).Return(successPayment, nil)
 
-	// 🆕 B3 AUDIT : Vérification idempotence
 	mockPaymentRepo.EXPECT().
 		FindPaymentRefundByIdempotency(gomock.Any(), shop.ID, gomock.Any()).
 		Return(nil, nil)
 
-	// 🆕 B3 AUDIT : Création de la ligne payment_refunds
 	mockPaymentRepo.EXPECT().
 		CreatePaymentRefund(gomock.Any(), gomock.Any()).
 		Return(nil)
@@ -581,7 +567,6 @@ func TestRefundPaymentUsecase_ConcurrentReservationRejected(t *testing.T) {
 		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
 		Return(false, nil) // course perdue
 
-	// 🆕 B3 AUDIT : Mise à jour du statut à failed
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, gomock.Any()).
 		Return(nil)

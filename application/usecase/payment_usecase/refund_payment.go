@@ -145,11 +145,15 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	// 9. 🛡️ RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
 	ok, err := uc.paymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
 	if err != nil {
-		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
+		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
+			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after reserve error")
+		}
 		return nil, fmt.Errorf("reserve refund amount: %w", err)
 	}
 	if !ok {
-		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "concurrent or insufficient amount")
+		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "concurrent or insufficient amount"); stErr != nil {
+			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after concurrent reserve")
+		}
 		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (concurrent or insufficient)", refundAmount)
 	}
 
@@ -158,9 +162,15 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	if requiresProviderCall {
 		if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
 			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
-				logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Msg("CRITICAL: missing provider_ref and reverse reservation failed")
+				logger.Error().Err(revErr).
+					Str("payment_id", paymentID.String()).
+					Msg("CRITICAL: missing provider_ref and reverse reservation failed")
+				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, revErr.Error()); stErr != nil {
+					logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required")
+				}
+			} else if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "missing provider_ref"); stErr != nil {
+				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after missing provider_ref")
 			}
-			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "missing provider_ref")
 			return nil, fmt.Errorf("cannot refund: missing provider reference for provider %s — manual reconciliation required", paymentEntity.Provider)
 		}
 
@@ -168,8 +178,12 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		if err != nil {
 			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 				logger.Error().Err(revErr).Msg("CRITICAL: failed to reverse refund reservation after provider not found")
+				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, revErr.Error()); stErr != nil {
+					logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required")
+				}
+			} else if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
+				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after provider not found")
 			}
-			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
 			return nil, fmt.Errorf("provider not found: %w", err)
 		}
 
@@ -187,15 +201,33 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			if isDefinitiveRefundRejection(err) {
 				if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
-					logger.Error().Err(revErr).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).Msg("CRITICAL: definitive provider reject AND reverse failed")
+					logger.Error().Err(revErr).
+						Str("payment_id", paymentID.String()).
+						Int64("amount", refundAmount).
+						Msg("CRITICAL: definitive provider reject AND reverse failed — manual reconciliation required")
+					if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, revErr.Error()); stErr != nil {
+						logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required after reverse failure")
+					}
+					return nil, fmt.Errorf("refund rejected by provider and reverse failed: %w", err)
 				}
-				_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error())
+				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
+					logger.Error().Err(stErr).Msg("CRITICAL: reverse OK but failed to mark payment_refund failed")
+				}
 				return nil, fmt.Errorf("refund rejected by provider: %w", err)
 			}
 
-			logger.Error().Err(err).Str("payment_id", paymentID.String()).Int64("amount", refundAmount).Str("provider_ref", *paymentEntity.ProviderRef).Msg("CRITICAL: provider refund outcome UNKNOWN")
-			_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error())
-			return nil, fmt.Errorf("refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w", err)
+			logger.Error().Err(err).
+				Str("payment_id", paymentID.String()).
+				Int64("amount", refundAmount).
+				Str("provider_ref", *paymentEntity.ProviderRef).
+				Msg("CRITICAL: provider refund outcome UNKNOWN — reservation kept")
+			if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error()); stErr != nil {
+				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required")
+			}
+			return nil, fmt.Errorf(
+				"refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w",
+				err,
+			)
 		}
 	}
 
@@ -203,7 +235,9 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	paymentEntity, err = uc.paymentRepo.FindByID(ctx, paymentID)
 	if err != nil {
 		logger.Error().Err(err).Msg("refund reserved and provider OK but reload failed")
-		_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error())
+		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error()); stErr != nil {
+			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required after reload failure")
+		}
 		return nil, fmt.Errorf("reload payment after refund: %w", err)
 	}
 
@@ -218,9 +252,20 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		logger.Error().Err(err).Msg("refund OK but metadata update failed — cumul already reserved")
 	}
 
-	_ = uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, "")
+	// 12. Finalisation ligne payment_refunds — ne pas ignorer l'erreur
+	if err := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, ""); err != nil {
+		logger.Error().Err(err).
+			Str("payment_id", paymentID.String()).
+			Str("refund_id", refundRow.ID.String()).
+			Msg("CRITICAL: provider/refund cumul OK but payment_refunds status not completed — reconcile manually")
+		return nil, fmt.Errorf("refund applied but failed to finalize payment_refunds row: %w", err)
+	}
 
-	logger.Info().Str("payment_id", paymentID.String()).Int64("refund_amount", refundAmount).Str("new_status", string(paymentEntity.Status)).Msg("Refund completed successfully (atomic reservation)")
+	logger.Info().
+		Str("payment_id", paymentID.String()).
+		Int64("refund_amount", refundAmount).
+		Str("new_status", string(paymentEntity.Status)).
+		Msg("Refund completed successfully (atomic reservation)")
 
 	return mapPaymentToResponse(paymentEntity), nil
 }
@@ -239,8 +284,16 @@ func isDefinitiveRefundRejection(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	definitiveHints := []string{"status 400", "status 401", "status 403", "status 404", "status 422", "invalid", "rejected", "not allowed", "insufficient", "already refunded", "does not support", "unsupported"}
-	ambiguousHints := []string{"timeout", "deadline", "temporar", "unavailable", "status 500", "status 502", "status 503", "status 504", "connection", "reset by peer", "eof", "context canceled", "context deadline"}
+	definitiveHints := []string{
+		"status 400", "status 401", "status 403", "status 404", "status 422",
+		"invalid", "rejected", "not allowed", "insufficient", "already refunded",
+		"does not support", "unsupported",
+	}
+	ambiguousHints := []string{
+		"timeout", "deadline", "temporar", "unavailable", "status 500",
+		"status 502", "status 503", "status 504", "connection", "reset by peer",
+		"eof", "context canceled", "context deadline",
+	}
 
 	for _, h := range ambiguousHints {
 		if strings.Contains(msg, h) {
