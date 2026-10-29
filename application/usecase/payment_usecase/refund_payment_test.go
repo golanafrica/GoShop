@@ -254,9 +254,14 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
 		Return(true, nil)
 
-	// Mise à jour du statut à failed (appelé par le helper reverseRefundAndLog)
+		// Mise à jour du statut à failed (appelé par le helper reverseRefundAndLog)
 	mockPaymentRepo.EXPECT().
-		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, "provider definitive rejection").
+		UpdatePaymentRefundStatus(
+			gomock.Any(),
+			gomock.Any(),
+			entity.PaymentRefundFailed,
+			"cash-out definitive rejection (status 0): insufficient funds",
+		).
 		Return(nil)
 
 	req := createValidRefundRequest(successPayment.ID.String())
