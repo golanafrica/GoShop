@@ -353,7 +353,7 @@ func (p *YengaPayProvider) CashOut(ctx context.Context, req *CashOutRequest) (*C
 	}, nil
 }
 
-// ============ AUTRES MÉTHODES ============
+// ============ AUTRES MÉTHODES (PAY-IN) ============
 
 func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA int64, req *PaymentRequest) (*yengaPaymentIntentResponse, error) {
 	articles := []map[string]interface{}{
@@ -379,7 +379,7 @@ func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA i
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -387,24 +387,32 @@ func (p *YengaPayProvider) createPaymentIntent(ctx context.Context, amountFCFA i
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: body}
+		}
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
 	}
 
 	var yengaResp yengaPaymentIntentResponse
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	yengaResp.PaymentIntentID = yengaResp.ID
@@ -441,7 +449,7 @@ func (p *YengaPayProvider) directPaymentInit(ctx context.Context, amountFCFA int
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -449,24 +457,32 @@ func (p *YengaPayProvider) directPaymentInit(ctx context.Context, amountFCFA int
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: body}
+		}
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
 	}
 
 	var yengaResp yengaDirectInitResponse
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	return &yengaResp, nil
@@ -494,7 +510,7 @@ func (p *YengaPayProvider) directPaymentSendOTP(ctx context.Context, paymentInte
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -502,24 +518,32 @@ func (p *YengaPayProvider) directPaymentSendOTP(ctx context.Context, paymentInte
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: body}
+		}
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
 	}
 
 	var yengaResp yengaSendOTPResponse
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	return &yengaResp, nil
@@ -562,7 +586,7 @@ func (p *YengaPayProvider) directPaymentInitAndPay(ctx context.Context, amountFC
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -570,24 +594,32 @@ func (p *YengaPayProvider) directPaymentInitAndPay(ctx context.Context, amountFC
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: body}
+		}
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
 	}
 
 	var yengaResp yengaDirectPayResponse
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	return &yengaResp, nil
@@ -616,7 +648,7 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -624,24 +656,32 @@ func (p *YengaPayProvider) CompletePayment(ctx context.Context, paymentIntentID,
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		// continue
 	default:
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		body := string(respBody)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: body}
+		}
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", body)}
 	}
 
 	var yengaResp yengaDirectPayResponse
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	return &CompletePaymentResponse{
@@ -667,53 +707,48 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		// continue
 	case http.StatusNotFound:
 		url = fmt.Sprintf("%s/groups/%s/merchant-payment/project/%s/payment/%s",
 			p.baseURL, p.organizationID, p.projectID, providerRef)
 		httpReq, err = http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
+			return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to create request: %w", err)}
 		}
 		httpReq.Header.Set("x-api-key", p.apiKey)
 		resp, err = p.httpClient.Do(httpReq)
 		if err != nil {
-			return nil, fmt.Errorf("failed to send request: %w", err)
+			return nil, &ErrPaymentInitUnknown{Cause: fmt.Errorf("failed to send request: %w", err)}
 		}
 		defer resp.Body.Close()
 		respBody, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read response: %w", err)
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to read response: %w", err)}
 		}
 		if resp.StatusCode != http.StatusOK {
-			logger.Error().
-				Int("status_code", resp.StatusCode).
-				Str("response", string(respBody)).
-				Msg("Yenga Pay API error")
-			return nil, fmt.Errorf("Yenga Pay API error: %s", string(respBody))
+			logger.Error().Int("status_code", resp.StatusCode).Str("response", string(respBody)).Msg("Yenga Pay API error")
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", string(respBody))}
 		}
 	default:
-		logger.Error().
-			Int("status_code", resp.StatusCode).
-			Str("response", string(respBody)).
-			Msg("Yenga Pay API error")
-		return nil, fmt.Errorf("Yenga Pay API error (status %d): %s", resp.StatusCode, string(respBody))
+		logger.Error().Int("status_code", resp.StatusCode).Str("response", string(respBody)).Msg("Yenga Pay API error")
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout {
+			return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("Yenga Pay API error: %s", string(respBody))}
+		}
+		return nil, &ErrPaymentInitDefinitive{HTTPStatus: resp.StatusCode, Message: string(respBody)}
 	}
 
-	logger.Info().
-		Str("reference", providerRef).
-		Str("raw_body", string(respBody)).
-		Msg("Yenga CheckStatus raw response (debug canal pay-in)")
+	logger.Info().Str("reference", providerRef).Str("raw_body", string(respBody)).Msg("Yenga CheckStatus raw response (debug canal pay-in)")
 
 	var yengaResp struct {
 		ID                  string `json:"id"`
@@ -738,7 +773,7 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 	}
 
 	if err := json.Unmarshal(respBody, &yengaResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, &ErrPaymentInitUnknown{HTTPStatus: resp.StatusCode, Cause: fmt.Errorf("failed to parse response: %w", err)}
 	}
 
 	statusStr := yengaResp.TransactionStatus
@@ -820,7 +855,6 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 		custNum = strings.TrimSpace(yengaResp.CustomerPhone)
 	}
 
-	// Intent 200 DONE mais MSISDN souvent absent → 2e appel merchant-payment
 	isSuccess := status == entity.PaymentStatusSuccess ||
 		strings.EqualFold(statusStr, "DONE") ||
 		strings.EqualFold(statusStr, "SUCCESS") ||
@@ -838,10 +872,7 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 				body2, readErr := io.ReadAll(resp2.Body)
 				_ = resp2.Body.Close()
 				if readErr == nil && resp2.StatusCode == http.StatusOK {
-					logger.Info().
-						Str("reference", providerRef).
-						Str("raw_body", string(body2)).
-						Msg("Yenga merchant-payment raw (MSISDN fallback)")
+					logger.Info().Str("reference", providerRef).Str("raw_body", string(body2)).Msg("Yenga merchant-payment raw (MSISDN fallback)")
 
 					var payDetail struct {
 						CustomerNumber   string `json:"customerNumber"`
@@ -874,15 +905,10 @@ func (p *YengaPayProvider) CheckStatus(ctx context.Context, providerRef string) 
 							feesXOF = payDetail.PaymentFees
 							meta["payment_fees"] = float64(feesXOF)
 						}
-						logger.Info().
-							Str("customer_number", custNum).
-							Str("payment_source", src).
-							Msg("MSISDN enriched from merchant-payment API")
+						logger.Info().Str("customer_number", custNum).Str("payment_source", src).Msg("MSISDN enriched from merchant-payment API")
 					}
 				} else if resp2 != nil {
-					logger.Debug().
-						Int("status_code", resp2.StatusCode).
-						Msg("merchant-payment fallback non-OK (ignored)")
+					logger.Debug().Int("status_code", resp2.StatusCode).Msg("merchant-payment fallback non-OK (ignored)")
 				}
 			}
 		}
@@ -926,10 +952,7 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 
 	if !hmac.Equal([]byte(signature), []byte(expectedMAC)) {
-		logger.Warn().
-			Str("expected", expectedMAC).
-			Str("received", signature).
-			Msg("Invalid webhook signature")
+		logger.Warn().Str("expected", expectedMAC).Str("received", signature).Msg("Invalid webhook signature")
 		return nil, fmt.Errorf("invalid webhook signature")
 	}
 
@@ -998,19 +1021,18 @@ func (p *YengaPayProvider) ValidateWebhook(ctx context.Context, payload []byte, 
 		Status:      status,
 		AmountCents: amountCents,
 		Metadata: map[string]interface{}{
-			"payment_source":  webhookData.PaymentSource,
-			"customer_number": webhookData.CustomerNumber,
-			"payment_fees":    float64(webhookData.PaymentFees),
-			"country_origin":  webhookData.CountryOrigin,
-			"reference":       webhookData.Reference,
-			"currency":        webhookData.Currency,
-			"api_env":         webhookData.APIEnv,
-			"id":              webhookData.ID,
-			"operatorTransId": webhookData.OperatorTransID,
-			"status":          webhookData.Status,
-			"amount":          webhookData.Amount,
-			"fees":            webhookData.Fees,
-			// Requis pour résoudre le payment (provider_ref en base = intent cmu…)
+			"payment_source":    webhookData.PaymentSource,
+			"customer_number":   webhookData.CustomerNumber,
+			"payment_fees":      float64(webhookData.PaymentFees),
+			"country_origin":    webhookData.CountryOrigin,
+			"reference":         webhookData.Reference,
+			"currency":          webhookData.Currency,
+			"api_env":           webhookData.APIEnv,
+			"id":                webhookData.ID,
+			"operatorTransId":   webhookData.OperatorTransID,
+			"status":            webhookData.Status,
+			"amount":            webhookData.Amount,
+			"fees":              webhookData.Fees,
 			"payment_intent_id": webhookData.PaymentIntentID,
 			"paymentIntentId":   webhookData.PaymentIntentID,
 			"transId":           webhookData.TransID,
@@ -1059,10 +1081,7 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 
 	cashoutMethod := mapOperatorToCashoutMethod(operator)
 
-	logger.Info().
-		Str("operator_in", operator).
-		Str("cashout_method", cashoutMethod).
-		Msg("Mapped pay-in operator to Yenga cashoutMethod")
+	logger.Info().Str("operator_in", operator).Str("cashout_method", cashoutMethod).Msg("Mapped pay-in operator to Yenga cashoutMethod")
 
 	doCashOut := func(method string) (int, []byte, error) {
 		yengaReq := map[string]interface{}{
@@ -1116,16 +1135,8 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 		return err
 	}
 
-	// Methode non dispo sur le projet → retry ORANGE_MONEY (doc: toujours listé)
-	if statusCode == http.StatusForbidden &&
-		cashoutMethod != "ORANGE_MONEY" &&
-		strings.Contains(string(respBody), "n'est pas disponible") {
-
-		logger.Warn().
-			Str("failed_method", cashoutMethod).
-			Str("response", string(respBody)).
-			Msg("Cashout method unavailable on project — retry ORANGE_MONEY")
-
+	if statusCode == http.StatusForbidden && cashoutMethod != "ORANGE_MONEY" && strings.Contains(string(respBody), "n'est pas disponible") {
+		logger.Warn().Str("failed_method", cashoutMethod).Str("response", string(respBody)).Msg("Cashout method unavailable on project — retry ORANGE_MONEY")
 		statusCode, respBody, err = doCashOut("ORANGE_MONEY")
 		if err != nil {
 			return err
@@ -1136,19 +1147,11 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 	switch statusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
 	default:
-		logger.Error().
-			Int("status_code", statusCode).
-			Str("response", string(respBody)).
-			Str("cashout_method", cashoutMethod).
-			Msg("Yenga Pay refund API error")
+		logger.Error().Int("status_code", statusCode).Str("response", string(respBody)).Str("cashout_method", cashoutMethod).Msg("Yenga Pay refund API error")
 		return fmt.Errorf("Yenga Pay refund error (status %d): %s", statusCode, string(respBody))
 	}
 
-	logger.Info().
-		Str("provider_ref", providerRef).
-		Str("cashout_method", cashoutMethod).
-		Msg("Refund (cash-out) initiated successfully via Yenga Pay")
-
+	logger.Info().Str("provider_ref", providerRef).Str("cashout_method", cashoutMethod).Msg("Refund (cash-out) initiated successfully via Yenga Pay")
 	return nil
 }
 
