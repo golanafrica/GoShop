@@ -50,8 +50,12 @@ func (s *NotificationRetryScheduler) Run(ctx context.Context) error {
 	for _, notif := range notifications {
 		var req service.NotificationRequest
 		if err := json.Unmarshal(notif.Payload, &req); err != nil {
-			s.logger.Error().Err(err).Str("notification_id", notif.ID).Msg("Failed to unmarshal payload, marking as permanent failure")
-			_ = s.failedNotifRepo.MarkAsPermanentFailure(ctx, notif.ID)
+			s.logger.Error().Err(err).Str("notification_id", notif.ID).Msg("Failed to unmarshal payload")
+
+			// 🛡️ P1 FIX : Ne plus ignorer l'erreur de persistance
+			if markErr := s.failedNotifRepo.MarkAsPermanentFailure(ctx, notif.ID); markErr != nil {
+				s.logger.Error().Err(markErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to mark malformed notification as permanent failure")
+			}
 			continue
 		}
 
@@ -60,13 +64,20 @@ func (s *NotificationRetryScheduler) Run(ctx context.Context) error {
 
 		if err != nil {
 			// 3a. Échec : on met à jour le compteur et on recalcule le prochain retry (backoff)
-			// Cela écrase le "lease" de 1 heure par le vrai délai de backoff
-			_ = s.failedNotifRepo.IncrementRetryCount(ctx, notif.ID, err.Error())
-			s.logger.Warn().Err(err).Str("notification_id", notif.ID).Msg("Notification retry failed, will retry later")
+			// 🛡️ P1 FIX : Logger l'échec de persistance du retry
+			if retryErr := s.failedNotifRepo.IncrementRetryCount(ctx, notif.ID, err.Error()); retryErr != nil {
+				s.logger.Error().Err(retryErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to increment retry count, notification state may be desynchronized")
+			} else {
+				s.logger.Warn().Err(err).Str("notification_id", notif.ID).Msg("Notification retry failed, will retry later")
+			}
 		} else {
 			// 3b. Succès : on supprime l'entrée de la file d'attente
-			_ = s.failedNotifRepo.MarkAsSuccess(ctx, notif.ID)
-			s.logger.Info().Str("notification_id", notif.ID).Msg("Notification retry dispatched successfully")
+			// 🛡️ P1 FIX : Logger l'échec de persistance du succès
+			if successErr := s.failedNotifRepo.MarkAsSuccess(ctx, notif.ID); successErr != nil {
+				s.logger.Error().Err(successErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to mark notification as success, it may be retried unnecessarily")
+			} else {
+				s.logger.Info().Str("notification_id", notif.ID).Msg("Notification retry dispatched successfully")
+			}
 		}
 	}
 

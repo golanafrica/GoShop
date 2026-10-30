@@ -61,7 +61,6 @@ func (uc *FreezeJobUsecase) GetConfig(ctx context.Context) (*FreezeJobConfig, er
 		return nil
 	}
 
-	// 🆕 PR 2 : Ne plus ignorer silencieusement les erreurs de lecture
 	if err := getVal("wallet.freeze_job.enabled", &cfg.Enabled); err != nil {
 		return nil, err
 	}
@@ -83,14 +82,11 @@ func (uc *FreezeJobUsecase) UpdateConfig(ctx context.Context, cfg *FreezeJobConf
 		return errors.New("config cannot be nil")
 	}
 
-	// 🛡️ PR 2 : Exiger une identité d'audit réelle. Plus de "super_admin" par défaut.
-	// utils.UserIDFromContext retourne (string, bool), on vérifie donc le booléen 'ok'.
 	updatedBy, ok := utils.UserIDFromContext(ctx)
 	if !ok || updatedBy == "" {
 		return errors.New("unauthorized: valid user identity required to update config")
 	}
 
-	// 🛡️ PR 2 : Validation des entrées
 	if cfg.Policy != "alert_only" && cfg.Policy != "auto_freeze" {
 		return errors.New("invalid policy: must be 'alert_only' or 'auto_freeze'")
 	}
@@ -101,7 +97,6 @@ func (uc *FreezeJobUsecase) UpdateConfig(ctx context.Context, cfg *FreezeJobConf
 		return errors.New("invalid batch_size: must be > 0")
 	}
 
-	// 🛡️ PR 2 : Mise à jour atomique (tout ou rien)
 	settings := make(map[string]json.RawMessage)
 
 	bEnabled, _ := json.Marshal(cfg.Enabled)
@@ -123,8 +118,6 @@ func (uc *FreezeJobUsecase) UpdateConfig(ctx context.Context, cfg *FreezeJobConf
 	return nil
 }
 
-// RunJob déclenche le scheduler manuellement (en arrière-plan)
-// 🛡️ CORRECTION P1 : Vérifie les droits RBAC et évite le panic si le scheduler est nil
 func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string, isSuperAdmin bool) error {
 	if !isSuperAdmin {
 		cfg, err := uc.GetConfig(ctx)
@@ -136,15 +129,11 @@ func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string, isSuperAdmi
 		}
 	}
 
-	// 🛡️ PR 2 : Empêcher le panic si le scheduler n'est pas configuré
 	if uc.scheduler == nil {
 		return errors.New("freeze job scheduler is not configured")
 	}
 
-	// Lancer en goroutine pour ne pas bloquer la requête HTTP
 	go func() {
-		// On utilise context.Background() pour que la goroutine survive à la fin de la requête HTTP
-		// RunManual ne retourne pas de valeur, on l'appelle donc directement.
 		uc.scheduler.RunManual(context.Background(), mode)
 	}()
 
@@ -161,16 +150,22 @@ func (uc *FreezeJobUsecase) ListGraceExpired(ctx context.Context) ([]*GraceExpir
 	for _, w := range wallets {
 		daysExpired := 0
 		frozenUntilStr := ""
+		frozenAtStr := ""
 
-		// 🛡️ PR 2 : PROTECTION CONTRE LE PANIC : Vérifier si le pointeur est nil avant d'appeler Format()
+		// 🛡️ P1 FIX : PROTECTION CONTRE LE PANIC sur FrozenUntil
 		if w.FrozenUntil != nil {
 			daysExpired = int(time.Since(*w.FrozenUntil).Hours() / 24)
 			frozenUntilStr = w.FrozenUntil.Format(time.RFC3339)
 		}
 
+		// 🛡️ P1 FIX : PROTECTION CONTRE LE PANIC sur FrozenAt (peut être nil sur d'anciennes données)
+		if w.FrozenAt != nil {
+			frozenAtStr = w.FrozenAt.Format(time.RFC3339)
+		}
+
 		result = append(result, &GraceExpiredWallet{
 			ShopID:      w.ShopID,
-			FrozenAt:    w.FrozenAt.Format(time.RFC3339), // Supposé non-nil d'après le code original
+			FrozenAt:    frozenAtStr,
 			FrozenUntil: frozenUntilStr,
 			DebtCents:   w.DebtCents,
 			DaysExpired: daysExpired,
