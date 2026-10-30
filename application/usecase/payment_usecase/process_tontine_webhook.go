@@ -392,6 +392,23 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	voucher.HeldAmountCents = netCents
 
 	if err := uc.tontineVoucherRepo.Create(ctx, voucher); err != nil {
+		// Course concurrente : un autre worker a créé le bon
+		existingList, findErr := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
+		if findErr == nil && len(existingList) > 0 {
+			logger.Warn().
+				Str("group_id", groupID).
+				Int("cycle", cycleNumber).
+				Msg("Voucher create race — using existing voucher")
+			// Reprendre le chemin "voucher exists" : crédit idempotent + advance conditionnel
+			// (même logique que le début de ensureCycleSettled quand FindByGroupAndCycle trouve déjà un bon)
+			if uc.walletCreditor != nil && netCents > 0 {
+				if _, cErr := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); cErr != nil {
+					return fmt.Errorf("failed to credit merchant wallet after voucher race: %w", cErr)
+				}
+			}
+			uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
+			return uc.advanceGroupCycle(ctx, group, cycleNumber)
+		}
 		return fmt.Errorf("save voucher: %w", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"Goshop/domain/entity"
@@ -163,6 +164,12 @@ func (r *TontineVoucherRepositoryInfrastructure) Create(ctx context.Context, vou
 	).Scan(&voucher.ID, &voucher.CreatedAt)
 
 	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "uq_tontine_vouchers_group_cycle") ||
+			strings.Contains(msg, "duplicate key") ||
+			strings.Contains(msg, "23505") {
+			return fmt.Errorf("voucher already exists for group/cycle: %w", err)
+		}
 		return fmt.Errorf("failed to create voucher: %w", err)
 	}
 
