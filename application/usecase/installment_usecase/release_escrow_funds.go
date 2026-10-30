@@ -74,8 +74,19 @@ func (uc *ReleaseEscrowFundsUsecase) Execute(ctx context.Context, orderID string
 	}
 	shopID := order.ShopID
 
-	// 2. Taux commission (TODO: commissionRateRepo.GetPlatformRate)
-	commissionRateBps := 500 // 5%
+	// 2. 🛡️ P1 FIX : Taux commission dynamique via commissionRateRepo
+	// Fallback audité à 5% (500 bps) si le repo est indisponible ou aucun taux actif n'est trouvé.
+	commissionRateBps := 500
+	if uc.commissionRateRepo != nil {
+		// Remplacez "installment" par la constante exacte de votre entité (ex: entity.TransactionTypeInstallment)
+		rate, err := uc.commissionRateRepo.FindByShopAndType(ctx, shopID, "installment")
+		if err == nil && rate != nil && rate.IsActive {
+			commissionRateBps = rate.RateBps
+			log.Info().Str("shop_id", shopID).Int("rate_bps", commissionRateBps).Msg("Using dynamic commission rate for installment release")
+		} else {
+			log.Warn().Err(err).Str("shop_id", shopID).Int("fallback_bps", commissionRateBps).Msg("No active commission rate found, using audited fallback (5%)")
+		}
+	}
 
 	// 3. Calculs
 	totalCents := order.TotalCents
