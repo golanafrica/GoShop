@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ./bin/api ./cmd/a
 # ==================================================================
 # STAGE 2 : RUNTIME
 # ==================================================================
-FROM alpine:3.22.0@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 RUN apk --no-cache add ca-certificates tzdata
 
