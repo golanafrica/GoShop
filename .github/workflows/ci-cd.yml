@@ -9,7 +9,7 @@ on:
 
 env:
   # ✅ A13 FIX : Utilisation d'une version Go stable et valide (1.24) pour éviter les conflits avec golangci-lint
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.25'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
   DB_PORT: '5432'
