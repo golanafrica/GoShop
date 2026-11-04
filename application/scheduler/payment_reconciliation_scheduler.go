@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"Goshop/domain/repository"
@@ -44,28 +46,42 @@ func (s *PaymentReconciliationScheduler) Run(ctx context.Context) error {
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
 	log.Info().Msg("Starting ONE_STEP payment reconciliation")
 
+	var reconciliationErrs []error
+
 	// ============================================================
-	// 🆕 C3 AUDIT : Niveau A - Gérer les paiements bloqués SANS provider_ref
+	// 🆕 C3 AUDIT (A08) : Gérer les paiements bloqués SANS provider_ref
 	// ============================================================
 	missingRefPayments, err := s.paymentRepo.FindStuckPaymentsMissingProviderRef(ctx, s.minAgeMinutes, s.maxPerRun)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to find stuck payments missing provider_ref")
-	} else {
-		for _, p := range missingRefPayments {
-			log.Error().
-				Str("payment_id", p.ID.String()).
-				Str("status", string(p.Status)).
-				Msg("CRITICAL: Stuck payment without provider_ref. Manual reconciliation required. DO NOT MarkFailed.")
+		// 🛡️ A08 FIX : Fail-fast sur erreur de lecture DB
+		return fmt.Errorf("failed to find stuck payments missing provider_ref: %w", err)
+	}
 
-			if p.Metadata == nil {
-				p.Metadata = make(map[string]interface{})
-			}
-			p.Metadata["reconciliation_reason"] = "missing_provider_ref"
-			p.Metadata["reconciliation_at"] = time.Now().UTC().Format(time.RFC3339)
+	for _, p := range missingRefPayments {
+		log.Error().
+			Str("payment_id", p.ID.String()).
+			Str("status", string(p.Status)).
+			Msg("CRITICAL: Stuck payment without provider_ref. Manual reconciliation required. DO NOT MarkFailed.")
 
-			if updateErr := s.paymentRepo.Update(ctx, p); updateErr != nil {
-				log.Error().Err(updateErr).Str("payment_id", p.ID.String()).Msg("Failed to update stuck payment metadata")
-			}
+		if p.Metadata == nil {
+			p.Metadata = make(map[string]interface{})
+		}
+
+		// 🛡️ A08 FIX : Ajouter un compteur de tentatives
+		attempts := 1
+		if prevAttempts, ok := p.Metadata["reconciliation_attempts"].(int); ok {
+			attempts = prevAttempts + 1
+		}
+
+		p.Metadata["reconciliation_attempts"] = attempts
+		p.Metadata["reconciliation_reason"] = "missing_provider_ref"
+		p.Metadata["reconciliation_at"] = time.Now().UTC().Format(time.RFC3339)
+
+		if updateErr := s.paymentRepo.Update(ctx, p); updateErr != nil {
+			log.Error().Err(updateErr).Str("payment_id", p.ID.String()).Msg("Failed to update stuck payment metadata")
+			// 🛡️ A08 FIX : Agréger l'erreur au lieu de l'ignorer
+			reconciliationErrs = append(reconciliationErrs, fmt.Errorf("failed to update metadata for payment %s: %w", p.ID.String(), updateErr))
 		}
 	}
 
@@ -75,7 +91,8 @@ func (s *PaymentReconciliationScheduler) Run(ctx context.Context) error {
 	stuck, err := s.paymentRepo.FindStuckNonTerminalPayments(ctx, s.minAgeMinutes, s.maxPerRun)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to list stuck payments with provider_ref")
-		return err
+		// 🛡️ A08 FIX : Fail-fast sur erreur de lecture DB
+		return fmt.Errorf("failed to list stuck payments with provider_ref: %w", err)
 	}
 
 	log.Info().Int("count", len(stuck)).Msg("Stuck non-terminal payments with provider_ref found")
@@ -84,6 +101,7 @@ func (s *PaymentReconciliationScheduler) Run(ctx context.Context) error {
 		shop, err := s.shopRepo.FindByID(ctx, p.ShopID)
 		if err != nil {
 			log.Error().Err(err).Str("payment_id", p.ID.String()).Msg("Shop not found, skip")
+			reconciliationErrs = append(reconciliationErrs, fmt.Errorf("shop not found for payment %s: %w", p.ID.String(), err))
 			continue
 		}
 		shopCtx := tenant.WithTenant(ctx, shop)
@@ -94,11 +112,23 @@ func (s *PaymentReconciliationScheduler) Run(ctx context.Context) error {
 				Str("payment_id", p.ID.String()).
 				Str("status", string(p.Status)).
 				Msg("Reconciliation failed for payment")
+			// 🛡️ A08 FIX : Agréger l'erreur pour que le job remonte un échec partiel
+			reconciliationErrs = append(reconciliationErrs, fmt.Errorf("reconciliation failed for payment %s: %w", p.ID.String(), err))
 			continue
 		}
-		log.Info().Str("payment_id", p.ID.String()).Msg("Payment reconciled")
+		log.Info().Str("payment_id", p.ID.String()).Msg("Payment reconciled successfully")
 	}
 
-	log.Info().Msg("ONE_STEP payment reconciliation completed")
+	// 🛡️ A08 FIX : Retourner une erreur agrégée si des opérations ont échoué
+	// Cela permet aux outils de monitoring (Prometheus, Datadog, K8s CronJob) de détecter l'échec.
+	if len(reconciliationErrs) > 0 {
+		log.Error().
+			Int("error_count", len(reconciliationErrs)).
+			Err(errors.Join(reconciliationErrs...)).
+			Msg("Payment reconciliation completed with errors")
+		return fmt.Errorf("payment reconciliation completed with %d errors: %w", len(reconciliationErrs), errors.Join(reconciliationErrs...))
+	}
+
+	log.Info().Msg("ONE_STEP payment reconciliation completed successfully")
 	return nil
 }
