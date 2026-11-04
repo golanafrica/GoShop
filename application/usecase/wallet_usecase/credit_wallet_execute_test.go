@@ -33,17 +33,16 @@ func creditWalletValidRequest(shopID string) *walletusecase.CreditWalletRequest 
 	}
 }
 
-// 🆕 v4.8.0 : Ajout de MockEscrowAccountRepository
 func newCreditWalletUsecase(ctrl *gomock.Controller) (
 	*walletusecase.CreditWalletUsecase,
 	*mockrepo.MockMerchantWalletRepository,
 	*mockrepo.MockWalletTransactionRepository,
-	*mockrepo.MockEscrowAccountRepository, // 🆕 v4.8.0
+	*mockrepo.MockEscrowAccountRepository,
 	*mockrepo.MockTxManager,
 ) {
 	walletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
 	txnRepo := mockrepo.NewMockWalletTransactionRepository(ctrl)
-	escrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl) // 🆕 v4.8.0
+	escrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
 	txManager := mockrepo.NewMockTxManager(ctrl)
 
 	uc := walletusecase.NewCreditWalletUsecase(walletRepo, txnRepo, escrowRepo, txManager)
@@ -355,7 +354,6 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
@@ -365,7 +363,12 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// 🆕 v4.8.0 : Mock pour la vérification escrow (CreditFromSale passe ReferenceType="order")
+	// 🛡️ FIX : Idempotence : aucune txn existante pour cette référence
+	txnRepo.EXPECT().
+		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("not found")).
+		AnyTimes()
+
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
 
@@ -392,7 +395,6 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
 
 	ctx, shopID := walletTestContext()
@@ -402,7 +404,12 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// 🆕 v4.8.0 : Mock pour la vérification escrow (CreditFromCOD passe ReferenceType="order")
+	// 🛡️ FIX : Idempotence : aucune txn existante pour cette référence
+	txnRepo.EXPECT().
+		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("not found")).
+		AnyTimes()
+
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
 
@@ -418,4 +425,106 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, entity.WalletTxCOD, resp.TransactionType)
+}
+
+// ============================================================
+// 🛡️ TESTS : A01 FIX - Idempotence Lookup Error & Skip
+// ============================================================
+
+func TestCreditWalletUsecase_IdempotencyLookupError_Aborts(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
+
+	ctx, shopID := walletTestContext()
+	refType := "order"
+	refID := "order-xyz"
+	req := &walletusecase.CreditWalletRequest{
+		ShopID:          shopID.String(),
+		AmountCents:     10000,
+		TransactionType: entity.WalletTxSaleCredit,
+		ReferenceType:   &refType,
+		ReferenceID:     &refID,
+	}
+	mockTx := mockrepo.NewMockTx(ctrl)
+	wallet := entity.NewMerchantWallet(req.ShopID)
+
+	expectWalletRepoWithTXSelf(walletRepo, mockTx)
+	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+
+	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, errors.New("not found")).AnyTimes()
+
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
+
+	// 🛡️ A01 FIX TEST : La vérification d'idempotence échoue (panne DB)
+	txnRepo.EXPECT().
+		FindByReferenceID(gomock.Any(), refType, refID).
+		Return(nil, errors.New("connection reset by peer"))
+
+	// Pas de Update / Create : le crédit ne doit pas avancer
+	mockTx.EXPECT().Rollback().Return(nil)
+
+	resp, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "failed to check existing wallet transaction")
+}
+
+func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
+
+	ctx, shopID := walletTestContext()
+	refType := "order"
+	refID := "order-abc"
+	req := &walletusecase.CreditWalletRequest{
+		ShopID:          shopID.String(),
+		AmountCents:     10000,
+		TransactionType: entity.WalletTxSaleCredit,
+		ReferenceType:   &refType,
+		ReferenceID:     &refID,
+	}
+	mockTx := mockrepo.NewMockTx(ctrl)
+	wallet := entity.NewMerchantWallet(req.ShopID)
+	wallet.BalanceCents = 25000
+
+	existing := &entity.WalletTransaction{
+		ID:                "txn-already",
+		ShopID:            req.ShopID,
+		TransactionType:   entity.WalletTxSaleCredit,
+		AmountCents:       10000,
+		BalanceAfterCents: 25000,
+		Status:            entity.WalletTxCompleted,
+	}
+
+	expectWalletRepoWithTXSelf(walletRepo, mockTx)
+	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+
+	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, errors.New("not found")).AnyTimes()
+
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
+
+	// 🛡️ A01 FIX TEST : La transaction existe déjà et est complétée
+	txnRepo.EXPECT().FindByReferenceID(gomock.Any(), refType, refID).Return(existing, nil)
+
+	// Le code doit committer proprement et retourner le succès idempotent
+	mockTx.EXPECT().Commit().Return(nil)
+	mockTx.EXPECT().Rollback().Return(nil)
+
+	resp, err := uc.Execute(ctx, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, "txn-already", resp.TransactionID)
+	assert.Equal(t, int64(10000), resp.AmountCents)
 }

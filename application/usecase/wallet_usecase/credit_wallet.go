@@ -2,6 +2,8 @@ package walletusecase
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -19,16 +21,12 @@ import (
 
 // CreditWalletRequest représente la requête pour créditer un wallet
 type CreditWalletRequest struct {
-	ShopID string `json:"shop_id"`
-
-	AmountCents int64 `json:"amount_cents"`
-
+	ShopID          string                       `json:"shop_id"`
+	AmountCents     int64                        `json:"amount_cents"`
 	TransactionType entity.WalletTransactionType `json:"transaction_type"`
-
-	ReferenceType *string `json:"reference_type,omitempty"`
-	ReferenceID   *string `json:"reference_id,omitempty"`
-	Description   *string `json:"description,omitempty"`
-
+	ReferenceType   *string                      `json:"reference_type,omitempty"`
+	ReferenceID     *string                      `json:"reference_id,omitempty"`
+	Description     *string                      `json:"description,omitempty"`
 	// Phase 2 : si true, crédit ledger + gel immédiat (held_cents += amount).
 	// Utilisé pour tontine : non retirable tant que preuve / redeem.
 	HoldAfterCredit bool `json:"hold_after_credit,omitempty"`
@@ -36,13 +34,12 @@ type CreditWalletRequest struct {
 
 // CreditWalletResponse représente la réponse après crédit
 type CreditWalletResponse struct {
-	ShopID          string `json:"shop_id"`
-	BalanceCents    int64  `json:"balance_cents"`
-	HeldCents       int64  `json:"held_cents"`
-	AvailableCents  int64  `json:"available_cents"`
-	PreviousBalance int64  `json:"previous_balance"`
-	IsFrozen        bool   `json:"is_frozen"`
-
+	ShopID            string                       `json:"shop_id"`
+	BalanceCents      int64                        `json:"balance_cents"`
+	HeldCents         int64                        `json:"held_cents"`
+	AvailableCents    int64                        `json:"available_cents"`
+	PreviousBalance   int64                        `json:"previous_balance"`
+	IsFrozen          bool                         `json:"is_frozen"`
 	TransactionID     string                       `json:"transaction_id"`
 	TransactionType   entity.WalletTransactionType `json:"transaction_type"`
 	AmountCents       int64                        `json:"amount_cents"`
@@ -103,6 +100,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		logger.Error().Err(err).Msg("Multi-tenant error")
 		return nil, fmt.Errorf("multi-tenant: %w", err)
 	}
+
 	if shop.ID.String() != req.ShopID {
 		return nil, fmt.Errorf("access denied: shop_id does not match tenant")
 	}
@@ -142,27 +140,23 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 						Str("reference_type", *req.ReferenceType).
 						Str("reference_id", *req.ReferenceID).
 						Msg("BLOCKED: Attempted to credit wallet while escrow is still locked")
-
 					return nil, fmt.Errorf(
 						"cannot credit wallet: escrow %s is locked (status: %s). Funds must be released first via delivery confirmation or auto-release after 3 days",
 						escrow.ID,
 						escrow.Status,
 					)
 				}
-
 				if !escrow.CanReleaseToMerchant() {
 					logger.Error().
 						Str("escrow_id", escrow.ID).
 						Str("escrow_status", string(escrow.Status)).
 						Msg("Escrow cannot release funds to merchant")
-
 					return nil, fmt.Errorf(
 						"escrow %s cannot release funds (status: %s)",
 						escrow.ID,
 						escrow.Status,
 					)
 				}
-
 				logger.Info().
 					Str("escrow_id", escrow.ID).
 					Str("escrow_status", string(escrow.Status)).
@@ -199,11 +193,22 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	// ============================================================
-	// IDEMPOTENCE : déjà crédité pour cette référence ?
+	// 🛡️ A01 FIX : IDEMPOTENCE STRICTE
+	// Une erreur SQL de lecture ≠ « aucune ligne ».
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
-		if findErr == nil && existing != nil && existing.Status == entity.WalletTxCompleted {
+		if findErr != nil {
+			// Absence de ligne : continuer. Toute autre erreur : abort (pas de crédit aveugle).
+			if !isWalletTxnNotFound(findErr) {
+				logger.Error().
+					Err(findErr).
+					Str("ref_type", *req.ReferenceType).
+					Str("ref_id", *req.ReferenceID).
+					Msg("Failed to check existing wallet transaction for idempotency")
+				return nil, fmt.Errorf("failed to check existing wallet transaction: %w", findErr)
+			}
+		} else if existing != nil && existing.Status == entity.WalletTxCompleted {
 			logger.Info().
 				Str("ref_type", *req.ReferenceType).
 				Str("ref_id", *req.ReferenceID).
@@ -211,6 +216,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				Msg("Idempotent skip — credit already completed")
 			if err := tx.Commit(); err != nil {
 				_ = tx.Rollback()
+				return nil, fmt.Errorf("failed to commit after idempotent skip: %w", err)
 			}
 			return &CreditWalletResponse{
 				ShopID:            wallet.ShopID,
@@ -329,6 +335,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			Description:       &sweepDesc,
 			Status:            entity.WalletTxCompleted,
 		}
+
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
 			msg := strings.ToLower(err.Error())
 			if !(strings.Contains(msg, "duplicate key") ||
@@ -338,6 +345,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
 			}
 		}
+
 		if txnID == "" {
 			txnID = sweepTxn.ID
 		}
@@ -432,7 +440,6 @@ func (uc *CreditWalletUsecase) CreditFromTontine(
 	refType := "tontine_cycle"
 	refID := fmt.Sprintf("%s:cycle:%d", groupID, cycleNumber)
 	description := fmt.Sprintf("Tontine cycle %d settlement (net) group %s", cycleNumber, groupID)
-
 	req := &CreditWalletRequest{
 		ShopID:          shopID,
 		AmountCents:     amountCents,
@@ -496,4 +503,23 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 		Description:     &description,
 	}
 	return uc.Execute(ctx, req)
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+// isWalletTxnNotFound distingue « aucune transaction » d'une vraie erreur SQL.
+// Accepte sql.ErrNoRows et les messages habituels des repos Postgres du projet.
+func isWalletTxnNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no rows") ||
+		strings.Contains(msg, "sql: no rows")
 }

@@ -92,6 +92,12 @@ func simulateSuccessfulCredit(
 		escrowRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
 	}
 
+	// 🛡️ A01 FIX : Idempotence check - aucune txn existante pour cette référence
+	txnRepo.EXPECT().
+		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, errors.New("not found")).
+		AnyTimes()
+
 	wallet := entity.NewMerchantWallet(shopID)
 	wallet.BalanceCents = 50000
 
@@ -133,12 +139,10 @@ func TestCreditWalletUsecase_CreditFromSale_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromSale(ctx, shopID, 10000, "order-123")
@@ -157,12 +161,10 @@ func TestCreditWalletUsecase_CreditFromCOD_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromCOD(ctx, shopID, 10000, "order-456")
@@ -180,12 +182,10 @@ func TestCreditWalletUsecase_CreditFromTontine_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromTontine(ctx, shopID, 10000, "group-789", 1)
@@ -203,12 +203,10 @@ func TestCreditWalletUsecase_CreditFromCreditPlan_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromCreditPlan(ctx, shopID, 10000, "contract-999")
@@ -226,12 +224,10 @@ func TestCreditWalletUsecase_CreditFromDeposit_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromDeposit(ctx, shopID, 10000, "Manual deposit")
@@ -249,12 +245,10 @@ func TestCreditWalletUsecase_CreditFromUnfreeze_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// 🆕 v4.8.0 : Récupérer escrowRepo (au lieu de _)
 	uc, walletRepo, txnRepo, escrowRepo, txManager := setupCreditWalletMocks(ctrl)
 	ctx, shopID := createWalletTestContext()
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// 🆕 v4.8.0 : Passer escrowRepo à simulateSuccessfulCredit
 	simulateSuccessfulCredit(walletRepo, txnRepo, escrowRepo, txManager, mockTx, shopID)
 
 	resp, err := uc.CreditFromUnfreeze(ctx, shopID, 10000)
@@ -374,7 +368,6 @@ func TestFreezeAccountUsecase_FreezeForNegativeBalance_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -418,7 +411,6 @@ func TestFreezeAccountUsecase_FreezeForUnpaidCommission_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -462,7 +454,6 @@ func TestFreezeAccountUsecase_FreezeForFraud_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -506,7 +497,6 @@ func TestFreezeAccountUsecase_FreezeByAdmin_Success(t *testing.T) {
 	freezeRepo.EXPECT().FindActiveByShopID(gomock.Any(), shopID).Return(nil, nil)
 
 	wallet := entity.NewMerchantWallet(shopID)
-	// ✅ CORRECTION : Utilisation de FindByShopIDForUpdate
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID).Return(wallet, nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 
