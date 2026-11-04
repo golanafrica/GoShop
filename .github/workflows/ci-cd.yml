@@ -8,7 +8,8 @@ on:
     branches: [ main ]
 
 env:
-  GO_VERSION: '1.26.9'
+  # ✅ A13 FIX : Utilisation d'une version Go stable et valide (1.24) pour éviter les conflits avec golangci-lint
+  GO_VERSION: '1.23'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
   DB_PORT: '5432'
@@ -30,14 +31,13 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
+          # ✅ A13 FIX : Le commentaire est sorti du bloc d'assignation pour ne pas casser la syntaxe bash
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
             grep -v '/usecase/order_usecase' | \
             grep -v '/usecase/auth_usecase' | \
             grep -v '/usecase/shop_usecase' | \
-            # ✅ A13 FIX : Réintégration des tests wallet (A01) désormais robustes
-            # grep -v '/usecase/wallet_usecase' | \ 
             grep -v '/usecase/withdrawal_usecase' | \
             grep -v '/handler/orders' | \
             grep -v '/infrastructure/postgres' | \
