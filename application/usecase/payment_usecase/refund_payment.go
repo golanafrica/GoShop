@@ -62,7 +62,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		return nil, fmt.Errorf("payment does not belong to current shop")
 	}
 
-	// 5. 🛡️ PR 5 AUDIT : Vérifier que le paiement est remboursable
+	// 5. Vérifier que le paiement est remboursable
 	if paymentEntity.Status == entity.PaymentStatusRefunded {
 		return nil, fmt.Errorf("payment has already been fully refunded")
 	}
@@ -95,10 +95,12 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-	// 7. 🆕 B3 AUDIT : Idempotency check
+	// 7. 🛡️ A03 FIX : Idempotency check avec fallback déterministe
 	idemKey := req.IdempotencyKey
 	if idemKey == "" {
-		idemKey = uuid.New().String()
+		// Fallback déterministe pour éviter de générer un nouvel UUID à chaque retry
+		idemKey = fmt.Sprintf("auto_refund_%s_%d", req.PaymentID, refundAmount)
+		logger.Warn().Str("payment_id", req.PaymentID).Msg("Idempotency key not provided by client, using deterministic fallback")
 	}
 
 	existing, err := uc.paymentRepo.FindPaymentRefundByIdempotency(ctx, shop.ID, idemKey)
@@ -142,7 +144,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		reservedStatus = entity.PaymentStatusPartiallyRefunded
 	}
 
-	// 9. 🛡️ RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
+	// 9. RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
 	ok, err := uc.paymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
 	if err != nil {
 		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
@@ -231,7 +233,8 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		}
 	}
 
-	// 11. Metadata (best-effort) + relecture pour réponse cohérente
+	// 11. Provider succeeded. Now we MUST update our DB.
+	// Re-read payment to get latest state
 	paymentEntity, err = uc.paymentRepo.FindByID(ctx, paymentID)
 	if err != nil {
 		logger.Error().Err(err).Msg("refund reserved and provider OK but reload failed")
@@ -249,10 +252,14 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	paymentEntity.Metadata["total_refunded_amount"] = paymentEntity.RefundedAmountCents
 
 	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
-		logger.Error().Err(err).Msg("refund OK but metadata update failed — cumul already reserved")
+		logger.Error().Err(err).Msg("CRITICAL: refund OK at provider but metadata update failed")
+		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error()); stErr != nil {
+			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required after metadata update fail")
+		}
+		return nil, fmt.Errorf("update payment metadata after refund: %w", err)
 	}
 
-	// 12. Finalisation ligne payment_refunds — ne pas ignorer l'erreur
+	// 12. 🛡️ A03 FIX : Finalisation ligne payment_refunds — ne pas ignorer l'erreur
 	if err := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundCompleted, ""); err != nil {
 		logger.Error().Err(err).
 			Str("payment_id", paymentID.String()).
@@ -279,6 +286,7 @@ func paymentRequiresProviderRefund(p entity.PaymentProvider) bool {
 	}
 }
 
+// isDefinitiveRefundRejection distingue les erreurs définitives des erreurs temporaires (timeout, etc.)
 func isDefinitiveRefundRejection(err error) bool {
 	if err == nil {
 		return false
