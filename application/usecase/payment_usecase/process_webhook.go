@@ -79,7 +79,9 @@ func (uc *ProcessWebhookUsecase) WithCommissionRateRepo(r repository.CommissionR
 	return uc
 }
 
-func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) error {
+// 🛡️ A05 FIX : Utilisation d'une valeur de retour nommée (err error) pour permettre au defer de modifier
+// la réponse en cas d'échec de la finalisation de l'inbox après un succès métier.
+func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entity.PaymentProvider, payload []byte, signature string) (err error) {
 	logger := zerolog.Ctx(ctx)
 
 	logger.Info().
@@ -87,44 +89,55 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		Int("payload_size", len(payload)).
 		Msg("Processing webhook")
 
-	provider, err := uc.registry.Get(providerCode)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
+	provider, getErr := uc.registry.Get(providerCode)
+	if getErr != nil {
+		return fmt.Errorf("provider not found: %w", getErr)
 	}
 
-	event, err := provider.ValidateWebhook(ctx, payload, signature)
-	if err != nil {
-		logger.Warn().Err(err).Msg("Invalid webhook")
-		_, _ = uc.recordWebhook(ctx, providerCode, nil, payload, signature, false, err.Error())
-		return fmt.Errorf("%w: %v", ErrWebhookValidation, err)
-	}
+	var event *payment.WebhookEvent
+	var claimID string
 
-	// 🛡️ PR 3 AUDIT : Claim atomique avec propriété stricte (claim_id).
-	claimID, err := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
-	if err != nil {
-		if errors.Is(err, ErrWebhookAlreadyProcessed) {
-			logger.Info().Msg("Webhook already processed or claimed by another instance (idempotent)")
-			return ErrWebhookAlreadyProcessed
-		}
-		logger.Error().Err(err).Msg("Failed to record/claim webhook audit, aborting processing to allow provider retry")
-		return fmt.Errorf("%w: failed to persist webhook inbox", ErrWebhookProcessing)
-	}
-
-	var processErr error
-
+	// 🛡️ A05 FIX : Defer robuste qui gère la finalisation ou l'échec en fonction de l'état de 'err'
 	defer func() {
-		if processErr != nil {
-			if err := uc.markWebhookFailed(ctx, providerCode, event, processErr.Error(), claimID); err != nil {
-				logger.Error().Err(err).Str("external_id", event.ExternalID).
-					Msg("CRITICAL: webhook business failed AND markWebhookFailed failed")
+		if err != nil {
+			// Le traitement métier a échoué. On tente de marquer l'inbox comme échouée.
+			if event != nil && claimID != "" {
+				if markErr := uc.markWebhookFailed(ctx, providerCode, event, err.Error(), claimID); markErr != nil {
+					logger.Error().Err(markErr).Str("external_id", event.ExternalID).
+						Msg("CRITICAL: webhook business failed AND markWebhookFailed failed")
+				}
 			}
 			return
 		}
-		if err := uc.markWebhookProcessed(ctx, providerCode, event, claimID); err != nil {
-			logger.Error().Err(err).Str("external_id", event.ExternalID).
-				Msg("CRITICAL: webhook business OK but markWebhookProcessed failed — may retry after lease")
+
+		// Le traitement métier a réussi (err == nil). On tente de marquer l'inbox comme traitée.
+		if event != nil && claimID != "" {
+			if markErr := uc.markWebhookProcessed(ctx, providerCode, event, claimID); markErr != nil {
+				logger.Error().Err(markErr).Str("external_id", event.ExternalID).
+					Msg("CRITICAL: webhook business OK but markWebhookProcessed failed — returning error to trigger provider retry")
+				// On modifie la valeur de retour pour forcer un code HTTP 500, incitant le fournisseur à rejouer.
+				// La rejoue sera gérée en toute sécurité grâce aux vérifications d'idempotence (IsTerminal, escrowAlreadyCreated).
+				err = fmt.Errorf("webhook business OK but markWebhookProcessed failed: %w", markErr)
+			}
 		}
 	}()
+
+	event, validateErr := provider.ValidateWebhook(ctx, payload, signature)
+	if validateErr != nil {
+		logger.Warn().Err(validateErr).Msg("Invalid webhook")
+		_, _ = uc.recordWebhook(ctx, providerCode, nil, payload, signature, false, validateErr.Error())
+		return fmt.Errorf("%w: %v", ErrWebhookValidation, validateErr)
+	}
+
+	claimID, claimErr := uc.recordWebhook(ctx, providerCode, event, payload, signature, true, "")
+	if claimErr != nil {
+		if errors.Is(claimErr, ErrWebhookAlreadyProcessed) {
+			logger.Info().Msg("Webhook already processed or claimed by another instance (idempotent)")
+			return ErrWebhookAlreadyProcessed
+		}
+		logger.Error().Err(claimErr).Msg("Failed to record/claim webhook audit, aborting processing to allow provider retry")
+		return fmt.Errorf("%w: failed to persist webhook inbox", ErrWebhookProcessing)
+	}
 
 	if reference, ok := event.Metadata["reference"].(string); ok && IsTontineReference(reference) {
 		logger.Info().
@@ -134,14 +147,12 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			Msg("Tontine webhook detected, delegating to ProcessTontineWebhookUsecase")
 
 		if uc.tontineWebhookUC == nil {
-			processErr = fmt.Errorf("%w: tontine webhook handler not configured", ErrWebhookProcessing)
-			return processErr
+			return fmt.Errorf("%w: tontine webhook handler not configured", ErrWebhookProcessing)
 		}
 
-		if err := uc.tontineWebhookUC.Execute(ctx, reference, event.ExternalID, event.Status); err != nil {
-			logger.Error().Err(err).Msg("Tontine webhook processing failed")
-			processErr = fmt.Errorf("%w: tontine webhook: %v", ErrWebhookProcessing, err)
-			return processErr
+		if tontineErr := uc.tontineWebhookUC.Execute(ctx, reference, event.ExternalID, event.Status); tontineErr != nil {
+			logger.Error().Err(tontineErr).Msg("Tontine webhook processing failed")
+			return fmt.Errorf("%w: tontine webhook: %v", ErrWebhookProcessing, tontineErr)
 		}
 
 		logger.Info().Str("reference", reference).Msg("Tontine webhook processed successfully")
@@ -155,18 +166,16 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			Str("provider_ref", event.ProviderRef).
 			Interface("metadata_debug", event.Metadata).
 			Msg("Payment definitively not found for webhook")
-		processErr = fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
-		return processErr
+		return fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
 	}
 	logger.Info().
 		Str("payment_id", paymentEntity.ID.String()).
 		Str("matched_by", matchedBy).
 		Msg("Payment resolved for webhook")
 
-	shop, err := uc.shopRepo.FindByID(ctx, paymentEntity.ShopID)
-	if err != nil {
-		processErr = fmt.Errorf("%w: shop not found for payment: %v", ErrWebhookProcessing, err)
-		return processErr
+	shop, shopErr := uc.shopRepo.FindByID(ctx, paymentEntity.ShopID)
+	if shopErr != nil {
+		return fmt.Errorf("%w: shop not found for payment: %v", ErrWebhookProcessing, shopErr)
 	}
 	ctx = tenant.WithTenant(ctx, shop)
 
@@ -193,9 +202,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment already terminal and escrow already created, ignoring webhook")
 
-			if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
-				processErr = fmt.Errorf("failed to ensure order confirmed on retry: %w", err)
-				return processErr
+			if ensureErr := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); ensureErr != nil {
+				return fmt.Errorf("failed to ensure order confirmed on retry: %w", ensureErr)
 			}
 			return nil
 		}
@@ -206,9 +214,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		switch event.Status {
 		case entity.PaymentStatusSuccess:
 			successRef := markSuccessProviderRef(paymentEntity, event)
-			if err := paymentEntity.MarkSuccess(successRef); err != nil {
-				processErr = fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, err)
-				return processErr
+			if markErr := paymentEntity.MarkSuccess(successRef); markErr != nil {
+				return fmt.Errorf("%w: mark success: %v", ErrWebhookProcessing, markErr)
 			}
 			ApplyPayInChannelFromMeta(paymentEntity, event.Metadata, logger)
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as SUCCESS")
@@ -221,23 +228,20 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					reason = s
 				}
 			}
-			if err := paymentEntity.MarkFailed(reason); err != nil {
-				processErr = fmt.Errorf("%w: mark failed: %v", ErrWebhookProcessing, err)
-				return processErr
+			if markErr := paymentEntity.MarkFailed(reason); markErr != nil {
+				return fmt.Errorf("%w: mark failed: %v", ErrWebhookProcessing, markErr)
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Str("reason", reason).Msg("Payment marked as FAILED")
 
 		case entity.PaymentStatusCancelled:
-			if err := paymentEntity.MarkCancelled(); err != nil {
-				processErr = fmt.Errorf("%w: mark cancelled: %v", ErrWebhookProcessing, err)
-				return processErr
+			if markErr := paymentEntity.MarkCancelled(); markErr != nil {
+				return fmt.Errorf("%w: mark cancelled: %v", ErrWebhookProcessing, markErr)
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as CANCELLED")
 
 		case entity.PaymentStatusRefunded:
-			if err := paymentEntity.MarkRefunded(); err != nil {
-				processErr = fmt.Errorf("%w: mark refunded: %v", ErrWebhookProcessing, err)
-				return processErr
+			if markErr := paymentEntity.MarkRefunded(); markErr != nil {
+				return fmt.Errorf("%w: mark refunded: %v", ErrWebhookProcessing, markErr)
 			}
 			logger.Info().Str("payment_id", paymentEntity.ID.String()).Msg("Payment marked as REFUNDED")
 
@@ -290,19 +294,17 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 				if uc.txManager != nil {
 					tx, txErr := uc.txManager.BeginTx(ctx)
 					if txErr != nil {
-						processErr = fmt.Errorf("failed to begin tx: %w", txErr)
-						return processErr
+						return fmt.Errorf("failed to begin tx: %w", txErr)
 					}
 
 					defer func() {
-						if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-							logger.Error().Err(err).Msg("unexpected error during transaction rollback")
+						if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+							logger.Error().Err(rbErr).Msg("unexpected error during transaction rollback")
 						}
 					}()
 
-					if err := uc.escrowRepo.WithTX(tx).Create(ctx, escrow); err != nil {
-						processErr = fmt.Errorf("failed to create escrow: %w", err)
-						return processErr
+					if createErr := uc.escrowRepo.WithTX(tx).Create(ctx, escrow); createErr != nil {
+						return fmt.Errorf("failed to create escrow: %w", createErr)
 					}
 
 					if paymentEntity.Metadata == nil {
@@ -310,19 +312,16 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					}
 					paymentEntity.Metadata["escrow_created"] = true
 
-					if err := uc.paymentRepo.WithTX(tx).Update(ctx, paymentEntity); err != nil {
-						processErr = fmt.Errorf("failed to update payment with escrow flag: %w", err)
-						return processErr
+					if updateErr := uc.paymentRepo.WithTX(tx).Update(ctx, paymentEntity); updateErr != nil {
+						return fmt.Errorf("failed to update payment with escrow flag: %w", updateErr)
 					}
 
-					if err := tx.Commit(); err != nil {
-						processErr = fmt.Errorf("failed to commit tx: %w", err)
-						return processErr
+					if commitErr := tx.Commit(); commitErr != nil {
+						return fmt.Errorf("failed to commit tx: %w", commitErr)
 					}
 				} else {
-					if err := uc.escrowRepo.Create(ctx, escrow); err != nil {
-						processErr = fmt.Errorf("failed to create escrow: %w", err)
-						return processErr
+					if createErr := uc.escrowRepo.Create(ctx, escrow); createErr != nil {
+						return fmt.Errorf("failed to create escrow: %w", createErr)
 					}
 					if paymentEntity.Metadata == nil {
 						paymentEntity.Metadata = make(map[string]interface{})
@@ -343,9 +342,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					Str("escrow_id", escrow.ID).
 					Msg("Funds locked in Escrow atomically (Phase 2 settlement)")
 
-				if err := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); err != nil {
-					processErr = fmt.Errorf("failed to ensure order confirmed: %w", err)
-					return processErr
+				if ensureErr := uc.ensureOrderConfirmed(ctx, paymentEntity, logger); ensureErr != nil {
+					return fmt.Errorf("failed to ensure order confirmed: %w", ensureErr)
 				}
 
 				return nil
@@ -353,9 +351,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		}
 	}
 
-	if err := uc.paymentRepo.Update(ctx, paymentEntity); err != nil {
-		processErr = fmt.Errorf("%w: update payment: %v", ErrWebhookProcessing, err)
-		return processErr
+	if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
+		return fmt.Errorf("%w: update payment: %v", ErrWebhookProcessing, updateErr)
 	}
 
 	logger.Info().Str("payment_id", paymentEntity.ID.String()).Str("status", string(paymentEntity.Status)).Msg("Webhook processed successfully")
@@ -501,18 +498,18 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 		return nil
 	}
 
-	if err := order.MarkAccepted(); err != nil {
+	if markErr := order.MarkAccepted(); markErr != nil {
 		if logger != nil {
-			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to mark order as accepted")
+			logger.Error().Err(markErr).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to mark order as accepted")
 		}
-		return fmt.Errorf("failed to mark order accepted: %w", err)
+		return fmt.Errorf("failed to mark order accepted: %w", markErr)
 	}
 
-	if err := uc.orderRepo.UpdateOrder(ctx, order); err != nil {
+	if updateErr := uc.orderRepo.UpdateOrder(ctx, order); updateErr != nil {
 		if logger != nil {
-			logger.Error().Err(err).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
+			logger.Error().Err(updateErr).Str("order_id", orderIDStr).Msg("ensureOrderConfirmed: failed to update order")
 		}
-		return fmt.Errorf("failed to update order status: %w", err)
+		return fmt.Errorf("failed to update order status: %w", updateErr)
 	}
 
 	if logger != nil {
@@ -648,3 +645,6 @@ func truncateErr(s string, max int) string {
 	}
 	return s[:max]
 }
+
+// NOTE: La fonction metaString a été supprimée d'ici car elle est déjà définie
+// dans apply_payin_channel.go dans le même package.
