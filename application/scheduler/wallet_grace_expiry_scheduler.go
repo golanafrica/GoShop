@@ -22,7 +22,6 @@ const (
 	configKeyMaxPerRun      = "wallet.freeze_job.max_per_run"
 	configKeyBatchSize      = "wallet.freeze_job.batch_size"
 
-	// defaultPageSize : taille d'un lot DB (mémoire). Indépendant de maxPerRun (budget métier).
 	defaultPageSize  = 100
 	defaultMaxPerRun = 500
 )
@@ -52,7 +51,6 @@ func NewWalletGraceExpiryScheduler(
 func (s *WalletGraceExpiryScheduler) Run() {
 	ctx := context.Background()
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
-
 	log.Info().Msg("🔍 Starting wallet grace expiry job")
 
 	if os.Getenv("FREEZE_JOB_HARD_DISABLED") == "true" {
@@ -83,7 +81,8 @@ func (s *WalletGraceExpiryScheduler) Run() {
 		pageSize = defaultPageSize
 	}
 
-	runID, err := s.createJobRun(ctx, "scheduled", "live")
+	// 🛡️ A07 FIX : Ajout de l'acteur "system_cron"
+	runID, err := s.createJobRun(ctx, "scheduled", "live", "system_cron")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create job run record")
 		return
@@ -110,92 +109,52 @@ func (s *WalletGraceExpiryScheduler) Run() {
 	}
 	defer s.releaseAdvisoryLockOnConn(ctx, conn)
 
-	processed, skipped, scanned := 0, 0, 0
-	offset := 0
-
-	// 🛡️ P1 : pageSize (mémoire) ≠ maxPerRun (budget métier)
-	for processed < maxPerRun {
-		wallets, err := s.walletRepo.FindGracePeriodExpiredPaginated(ctx, pageSize, offset)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to find expired wallets")
-			s.finishJobRun(ctx, runID, scanned, processed, skipped, err.Error())
-			return
-		}
-		if len(wallets) == 0 {
-			break
-		}
-
-		for _, wallet := range wallets {
-			if processed >= maxPerRun {
-				log.Warn().Int("max_per_run", maxPerRun).Msg("Reached max wallets per run, stopping")
-				break
-			}
-			scanned++
-
-			alreadyProcessed, err := s.isAlreadyProcessed(ctx, wallet.ShopID, wallet.FrozenUntil)
-			if err != nil {
-				// 🛡️ P1 : erreur d'idempotence → comptée skipped, pas ignorée
-				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to check idempotence, marking as skipped")
-				skipped++
-				continue
-			}
-			if alreadyProcessed {
-				skipped++
-				log.Debug().Str("shop_id", wallet.ShopID).Msg("Wallet already processed for this grace period, skipping")
-				continue
-			}
-
-			if err := s.processExpiredWallet(ctx, runID, wallet, policy); err != nil {
-				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to process expired wallet")
-				skipped++
-				continue
-			}
-			processed++
-		}
-
-		offset += len(wallets)
-		if len(wallets) < pageSize {
-			break
-		}
-	}
-
-	s.finishJobRun(ctx, runID, scanned, processed, skipped, "")
-	log.Info().
-		Int("scanned", scanned).
-		Int("processed", processed).
-		Int("skipped", skipped).
-		Str("policy", policy).
-		Msg("✅ Wallet grace expiry job completed")
+	s.executeJobRun(ctx, runID, "live", policy, maxPerRun, pageSize)
 }
 
-// RunManual — déclenchement admin (API). HARD_DISABLED bloque toujours.
-func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string) {
-	log := s.logger.With().Str("mode", mode).Logger()
+// 🛡️ A07 FIX : Retourne le runID et lance l'exécution en arrière-plan avec un contexte limité dans le temps.
+func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string, actor string) (string, error) {
+	log := s.logger.With().Str("mode", mode).Str("actor", actor).Logger()
 	log.Info().Msg("🔧 Starting MANUAL wallet grace expiry job")
 
 	if os.Getenv("FREEZE_JOB_HARD_DISABLED") == "true" {
 		log.Warn().Msg("⛔ Job hard disabled via FREEZE_JOB_HARD_DISABLED=true, manual run aborted")
-		return
+		return "", fmt.Errorf("job hard disabled")
 	}
 
-	policy, _ := s.getConfigString(ctx, configKeyPolicy)
-	if policy == "" {
-		policy = "alert_only"
-	}
-	maxPerRun, _ := s.getConfigInt(ctx, configKeyMaxPerRun)
-	if maxPerRun <= 0 {
-		maxPerRun = defaultMaxPerRun
-	}
-	pageSize, _ := s.getConfigInt(ctx, configKeyBatchSize)
-	if pageSize <= 0 {
-		pageSize = defaultPageSize
-	}
-
-	runID, err := s.createJobRun(ctx, "manual", mode)
+	runID, err := s.createJobRun(ctx, "manual", mode, actor)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create manual job run record")
-		return
+		return "", fmt.Errorf("failed to create job run: %w", err)
 	}
+
+	// Lancement asynchrone avec un timeout de sécurité (15 min) pour éviter les fuites de goroutines
+	workCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	go func() {
+		defer cancel()
+
+		policy, _ := s.getConfigString(workCtx, configKeyPolicy)
+		if policy == "" {
+			policy = "alert_only"
+		}
+		maxPerRun, _ := s.getConfigInt(workCtx, configKeyMaxPerRun)
+		if maxPerRun <= 0 {
+			maxPerRun = defaultMaxPerRun
+		}
+		pageSize, _ := s.getConfigInt(workCtx, configKeyBatchSize)
+		if pageSize <= 0 {
+			pageSize = defaultPageSize
+		}
+
+		s.executeJobRun(workCtx, runID, mode, policy, maxPerRun, pageSize)
+	}()
+
+	return runID, nil
+}
+
+// executeJobRun contient la logique réelle d'exécution (extraite pour être réutilisée par Run et RunManual)
+func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID string, mode string, policy string, maxPerRun int, pageSize int) {
+	log := s.logger.With().Str("run_id", runID).Str("mode", mode).Logger()
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -212,7 +171,7 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string)
 		return
 	}
 	if !acquired {
-		log.Warn().Msg("🔒 Another instance is running, manual run skipped")
+		log.Warn().Msg("🔒 Another instance is running, run skipped")
 		s.finishJobRun(ctx, runID, 0, 0, 0, "another instance running")
 		return
 	}
@@ -224,7 +183,7 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string)
 	for processed < maxPerRun {
 		wallets, err := s.walletRepo.FindGracePeriodExpiredPaginated(ctx, pageSize, offset)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to find expired wallets for manual run")
+			log.Error().Err(err).Msg("Failed to find expired wallets")
 			s.finishJobRun(ctx, runID, scanned, processed, skipped, err.Error())
 			return
 		}
@@ -246,7 +205,7 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string)
 
 			alreadyProcessed, err := s.isAlreadyProcessed(ctx, wallet.ShopID, wallet.FrozenUntil)
 			if err != nil {
-				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to check idempotence in manual run")
+				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to check idempotence")
 				skipped++
 				continue
 			}
@@ -256,7 +215,7 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string)
 			}
 
 			if err := s.processExpiredWallet(ctx, runID, wallet, policy); err != nil {
-				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to process expired wallet in manual run")
+				log.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to process expired wallet")
 				skipped++
 				continue
 			}
@@ -270,15 +229,10 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string)
 	}
 
 	s.finishJobRun(ctx, runID, scanned, processed, skipped, "")
-	log.Info().Int("processed", processed).Int("skipped", skipped).Msg("✅ Manual job completed")
+	log.Info().Int("processed", processed).Int("skipped", skipped).Msg("✅ Job completed")
 }
 
-func (s *WalletGraceExpiryScheduler) processExpiredWallet(
-	ctx context.Context,
-	runID string,
-	wallet *entity.MerchantWallet,
-	policy string,
-) error {
+func (s *WalletGraceExpiryScheduler) processExpiredWallet(ctx context.Context, runID string, wallet *entity.MerchantWallet, policy string) error {
 	log := s.logger.With().Str("shop_id", wallet.ShopID).Logger()
 
 	if err := s.insertJobAction(ctx, runID, wallet.ShopID, wallet.FrozenUntil, "grace_expired_detected", policy); err != nil {
@@ -298,7 +252,6 @@ func (s *WalletGraceExpiryScheduler) processExpiredWallet(
 	return nil
 }
 
-// 🛡️ P2 : envoi réel via NotificationService
 func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *entity.MerchantWallet) {
 	if s.notifService == nil {
 		s.logger.Warn().Msg("Notification service not available, skipping admin notification")
@@ -311,13 +264,8 @@ func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *en
 	}
 
 	message := fmt.Sprintf(
-		"🚨 Wallet grace period expired for shop %s\n"+
-			"Frozen until: %s\n"+
-			"Debt: %d cents\n"+
-			"Action required: Review and escalate if necessary",
-		wallet.ShopID,
-		frozenUntilStr,
-		wallet.DebtCents,
+		"🚨 Wallet grace period expired for shop %s\nFrozen until: %s\nDebt: %d cents\nAction required: Review and escalate if necessary",
+		wallet.ShopID, frozenUntilStr, wallet.DebtCents,
 	)
 
 	req := &service.NotificationRequest{
@@ -338,8 +286,6 @@ func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *en
 		s.logger.Info().Str("shop_id", wallet.ShopID).Msg("📧 Admin notification sent successfully for expired grace period")
 	}
 }
-
-// ---------- Config ----------
 
 func (s *WalletGraceExpiryScheduler) getConfigBool(ctx context.Context, key string) (bool, error) {
 	query := `SELECT value FROM platform_settings WHERE key = $1`
@@ -392,12 +338,17 @@ func (s *WalletGraceExpiryScheduler) getConfigInt(ctx context.Context, key strin
 	return num, nil
 }
 
-// ---------- Job runs / actions ----------
-
-func (s *WalletGraceExpiryScheduler) createJobRun(ctx context.Context, runType, mode string) (string, error) {
-	query := `INSERT INTO wallet_freeze_job_runs (run_type, mode, started_at) VALUES ($1, $2, NOW()) RETURNING id`
+// 🛡️ A07 FIX : Ajout du paramètre 'actor' pour la traçabilité.
+// NOTE: Si ta table n'a pas encore la colonne 'triggered_by', exécute :
+// ALTER TABLE wallet_freeze_job_runs ADD COLUMN triggered_by VARCHAR(255);
+func (s *WalletGraceExpiryScheduler) createJobRun(ctx context.Context, runType, mode, actor string) (string, error) {
+	query := `
+		INSERT INTO wallet_freeze_job_runs (run_type, mode, triggered_by, started_at) 
+		VALUES ($1, $2, $3, NOW()) 
+		RETURNING id
+	`
 	var runID string
-	err := s.db.QueryRowContext(ctx, query, runType, mode).Scan(&runID)
+	err := s.db.QueryRowContext(ctx, query, runType, mode, actor).Scan(&runID)
 	return runID, err
 }
 
@@ -454,8 +405,6 @@ func (s *WalletGraceExpiryScheduler) insertJobAction(ctx context.Context, runID,
 	}
 	return nil
 }
-
-// ---------- Advisory lock ----------
 
 func (s *WalletGraceExpiryScheduler) acquireAdvisoryLockOnConn(ctx context.Context, conn *sql.Conn) (bool, error) {
 	var acquired bool

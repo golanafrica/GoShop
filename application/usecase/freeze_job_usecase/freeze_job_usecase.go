@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	appscheduler "Goshop/application/scheduler"
@@ -118,26 +119,42 @@ func (uc *FreezeJobUsecase) UpdateConfig(ctx context.Context, cfg *FreezeJobConf
 	return nil
 }
 
-func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string, isSuperAdmin bool) error {
+// 🛡️ A07 FIX : Retourne désormais le runID pour la traçabilité, et valide le mode en interne.
+func (uc *FreezeJobUsecase) RunJob(ctx context.Context, mode string, isSuperAdmin bool) (string, error) {
+	// 1. Validation du mode côté serveur (pas seulement dans le handler)
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "live" && mode != "dry_run" {
+		return "", errors.New("invalid mode: must be 'live' or 'dry_run'")
+	}
+
+	// 2. Vérification des permissions
 	if !isSuperAdmin {
 		cfg, err := uc.GetConfig(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to read freeze job config: %w", err)
+			return "", fmt.Errorf("failed to read freeze job config: %w", err)
 		}
 		if !cfg.Enabled {
-			return errors.New("freeze job is disabled by super admin")
+			return "", errors.New("freeze job is disabled by super admin")
 		}
 	}
 
 	if uc.scheduler == nil {
-		return errors.New("freeze job scheduler is not configured")
+		return "", errors.New("freeze job scheduler is not configured")
 	}
 
-	go func() {
-		uc.scheduler.RunManual(context.Background(), mode)
-	}()
+	// 3. Récupération de l'acteur pour la traçabilité de l'exécution
+	actor, _ := utils.UserIDFromContext(ctx)
+	if actor == "" {
+		actor = "unknown_api_caller"
+	}
 
-	return nil
+	// 4. Lancement du job et récupération de l'identifiant d'exécution
+	runID, err := uc.scheduler.RunManual(ctx, mode, actor)
+	if err != nil {
+		return "", fmt.Errorf("failed to start manual freeze job: %w", err)
+	}
+
+	return runID, nil
 }
 
 func (uc *FreezeJobUsecase) ListGraceExpired(ctx context.Context) ([]*GraceExpiredWallet, error) {
@@ -152,13 +169,11 @@ func (uc *FreezeJobUsecase) ListGraceExpired(ctx context.Context) ([]*GraceExpir
 		frozenUntilStr := ""
 		frozenAtStr := ""
 
-		// 🛡️ P1 FIX : PROTECTION CONTRE LE PANIC sur FrozenUntil
 		if w.FrozenUntil != nil {
 			daysExpired = int(time.Since(*w.FrozenUntil).Hours() / 24)
 			frozenUntilStr = w.FrozenUntil.Format(time.RFC3339)
 		}
 
-		// 🛡️ P1 FIX : PROTECTION CONTRE LE PANIC sur FrozenAt (peut être nil sur d'anciennes données)
 		if w.FrozenAt != nil {
 			frozenAtStr = w.FrozenAt.Format(time.RFC3339)
 		}

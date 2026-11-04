@@ -13,25 +13,22 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+// 🛡️ Test existant : Vérifie que les dates nulles ne provoquent pas de panic
 func TestFreezeJobUsecase_ListGraceExpired_NilDatesNoPanic(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// On mock uniquement le repository qui est réellement appelé par ListGraceExpired
 	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
-
-	// On passe nil pour les autres dépendances car elles ne sont pas utilisées dans cette méthode
 	uc := freezejobusecase.NewFreezeJobUsecase(nil, mockWalletRepo, nil)
 
 	ctx := context.Background()
 	shopID := uuid.New().String()
 
-	// 🛡️ SCÉNARIO P1 : Données historiques avec FrozenAt et FrozenUntil à nil
 	walletsWithNilDates := []*entity.MerchantWallet{
 		{
 			ShopID:      shopID,
-			FrozenAt:    nil, // Pointeur nil
-			FrozenUntil: nil, // Pointeur nil
+			FrozenAt:    nil,
+			FrozenUntil: nil,
 			DebtCents:   50000,
 		},
 	}
@@ -40,7 +37,6 @@ func TestFreezeJobUsecase_ListGraceExpired_NilDatesNoPanic(t *testing.T) {
 		FindGracePeriodExpired(gomock.Any()).
 		Return(walletsWithNilDates, nil)
 
-	// L'appel NE DOIT PAS paniquer
 	result, err := uc.ListGraceExpired(ctx)
 
 	assert.NoError(t, err)
@@ -48,8 +44,44 @@ func TestFreezeJobUsecase_ListGraceExpired_NilDatesNoPanic(t *testing.T) {
 	assert.Equal(t, shopID, result[0].ShopID)
 	assert.Equal(t, int64(50000), result[0].DebtCents)
 
-	// 🛡️ VÉRIFICATION : Les chaînes de caractères doivent être vides, pas de panic
 	assert.Equal(t, "", result[0].FrozenAt)
 	assert.Equal(t, "", result[0].FrozenUntil)
 	assert.Equal(t, 0, result[0].DaysExpired)
+}
+
+// 🛡️ A07 FIX : Test de la nouvelle signature de RunJob (validation du mode)
+func TestFreezeJobUsecase_RunJob_InvalidMode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
+
+	// On passe nil pour settingsRepo car isSuperAdmin=true empêche l'appel à GetConfig
+	uc := freezejobusecase.NewFreezeJobUsecase(nil, mockWalletRepo, nil)
+	ctx := context.Background()
+
+	// Le mode doit être "live" ou "dry_run". On teste un mode invalide.
+	runID, err := uc.RunJob(ctx, "invalid_mode", true)
+
+	assert.Error(t, err)
+	assert.Empty(t, runID)
+	assert.Contains(t, err.Error(), "invalid mode")
+}
+
+// 🛡️ A07 FIX : Test de RunJob avec mode valide mais scheduler non configuré
+func TestFreezeJobUsecase_RunJob_SchedulerNil(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWalletRepo := mockrepo.NewMockMerchantWalletRepository(ctrl)
+
+	// On passe nil pour settingsRepo car isSuperAdmin=true empêche l'appel à GetConfig
+	uc := freezejobusecase.NewFreezeJobUsecase(nil, mockWalletRepo, nil)
+	ctx := context.Background()
+
+	runID, err := uc.RunJob(ctx, "live", true)
+
+	assert.Error(t, err)
+	assert.Empty(t, runID)
+	assert.Contains(t, err.Error(), "scheduler is not configured")
 }
