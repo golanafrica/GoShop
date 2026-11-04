@@ -287,7 +287,7 @@ func (uc *ProcessTontineWebhookUsecase) notifyGroupMembers(
 	logger.Info().Int("notified_count", len(participants)).Str("payer", payerName).Msg("Tontine cycle paid notifications dispatched")
 }
 
-// ensureCycleSettled est idempotent et récupérable (PR 1 Audit)
+// ensureCycleSettled est idempotent et récupérable
 func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	ctx context.Context,
 	group *entity.TontineGroup,
@@ -318,7 +318,7 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 		return nil
 	}
 
-	// 🛡️ CORRECTION P0 : Ne pas ignorer l'erreur de lecture.
+	// Vérification des vouchers existants
 	existingVouchers, err := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
 	if err != nil {
 		return fmt.Errorf("failed to check existing vouchers for cycle %d: %w", cycleNumber, err)
@@ -352,7 +352,12 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 				Msg("💰 Merchant wallet credit ensured (idempotent recovery)")
 		}
 
-		uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
+		// 🛡️ A02 FIX : Propagation stricte de l'erreur de marquage des commissions
+		if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
+			logger.Error().Err(err).Msg("Failed to mark cycle commissions collected on recovery path")
+			return fmt.Errorf("failed to mark cycle commissions collected (recovery): %w", err)
+		}
+
 		return uc.advanceGroupCycle(ctx, group, cycleNumber)
 	}
 
@@ -399,14 +404,17 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 				Str("group_id", groupID).
 				Int("cycle", cycleNumber).
 				Msg("Voucher create race — using existing voucher")
-			// Reprendre le chemin "voucher exists" : crédit idempotent + advance conditionnel
-			// (même logique que le début de ensureCycleSettled quand FindByGroupAndCycle trouve déjà un bon)
+
 			if uc.walletCreditor != nil && netCents > 0 {
 				if _, cErr := uc.walletCreditor.CreditFromTontine(ctx, group.ShopID, netCents, groupID, cycleNumber); cErr != nil {
 					return fmt.Errorf("failed to credit merchant wallet after voucher race: %w", cErr)
 				}
 			}
-			uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
+
+			// 🛡️ A02 FIX : Propagation stricte de l'erreur
+			if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
+				return fmt.Errorf("failed to mark cycle commissions collected after voucher race: %w", err)
+			}
 			return uc.advanceGroupCycle(ctx, group, cycleNumber)
 		}
 		return fmt.Errorf("save voucher: %w", err)
@@ -435,13 +443,18 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 			Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
 	}
 
-	uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber, logger)
+	// 🛡️ A02 FIX : Propagation stricte de l'erreur de marquage des commissions
+	if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
+		logger.Error().Err(err).Msg("Failed to mark cycle commissions collected on nominal path")
+		return fmt.Errorf("failed to mark cycle commissions collected: %w", err)
+	}
+
 	uc.notifyBeneficiaryAndMerchant(ctx, group, beneficiary, voucherCode, netCents, cycleNumber, shop, logger)
 
 	return uc.advanceGroupCycle(ctx, group, cycleNumber)
 }
 
-// advanceGroupCycle utilise désormais les méthodes conditionnelles pour garantir l'idempotence.
+// advanceGroupCycle utilise les méthodes conditionnelles pour garantir l'idempotence.
 func (uc *ProcessTontineWebhookUsecase) advanceGroupCycle(ctx context.Context, group *entity.TontineGroup, cycleNumber int) error {
 	logger := zerolog.Ctx(ctx)
 
@@ -472,16 +485,16 @@ func (uc *ProcessTontineWebhookUsecase) advanceGroupCycle(ctx context.Context, g
 	return nil
 }
 
+// 🛡️ A02 FIX : markCycleCommissionsCollected retourne désormais une erreur.
+// Si la lecture ou la mise à jour échoue, l'erreur est propagée pour empêcher l'avancement du cycle.
 func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 	ctx context.Context,
 	groupID string,
 	cycleNumber int,
-	logger *zerolog.Logger,
-) {
+) error {
 	payments, err := uc.tontinePaymentRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
 	if err != nil {
-		logger.Warn().Err(err).Msg("Phase 3: could not list cycle payments for commission mark")
-		return
+		return fmt.Errorf("failed to list cycle payments for commission mark: %w", err)
 	}
 
 	for _, p := range payments {
@@ -491,9 +504,10 @@ func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 		if err := uc.tontinePaymentRepo.UpdateTontineCommissionStatus(
 			ctx, p.ID, entity.CommissionStatusCollected, nil,
 		); err != nil {
-			logger.Warn().Err(err).Str("payment_id", p.ID).Msg("Phase 3: failed to mark payment commission collected")
+			return fmt.Errorf("failed to mark payment %s commission collected: %w", p.ID, err)
 		}
 	}
+	return nil
 }
 
 func (uc *ProcessTontineWebhookUsecase) notifyBeneficiaryAndMerchant(
