@@ -8,7 +8,7 @@ on:
     branches: [ main ]
 
 env:
-  # ✅ A13 FIX : Aligné avec go.mod (1.25.0)
+  # ✅ A13 FIX : Aligné avec go.mod
   GO_VERSION: '1.25.0'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
@@ -31,7 +31,6 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          # ✅ A13 FIX : Le commentaire est sorti du bloc d'assignation pour ne pas casser la syntaxe bash
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
@@ -49,7 +48,7 @@ jobs:
           go test -v -count=1 -coverprofile=coverage.out ${PACKAGES}
       - uses: codecov/codecov-action@v4
         if: always()
-        continue-on-error: true # Laissé en true car les quotas/failures de token ne doivent pas bloquer la dev
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.out
@@ -270,7 +269,7 @@ jobs:
           go build -v -ldflags="-w -s" -o goshop-api ./cmd/api
           ls -la goshop-api
       - name: Generate Swagger (best effort)
-        continue-on-error: true # La génération de docs ne doit pas bloquer la CI
+        continue-on-error: true
         run: |
           go install github.com/swaggo/swag/cmd/swag@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
@@ -288,7 +287,6 @@ jobs:
       - run: go mod download && go mod verify
       - name: Run gosec
         id: gosec
-        # ✅ A13 FIX : Suppression de continue-on-error. Échec bloquant si vulnérabilité détectée.
         run: |
           set -euo pipefail
           docker run --rm \
@@ -305,7 +303,6 @@ jobs:
           retention-days: 30
       - name: Run govulncheck
         id: govuln
-        # ✅ A13 FIX : Suppression de continue-on-error. Échec bloquant si vulnérabilité Go connue.
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -322,11 +319,10 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v6
         # ✅ A13 FIX : Suppression de continue-on-error. Le lint doit être propre pour merger.
-        # ✅ A13 FIX : Ajout de go-version pour forcer le linter à utiliser la même version que le projet (1.25.0)
+        # Note : La version de Go est automatiquement héritée de l'étape setup-go ci-dessus.
         with:
           version: latest
           args: --timeout=10m
-          go-version: ${{ env.GO_VERSION }}
 
   docker:
     name: Build, Scan & Push Docker Image
@@ -361,7 +357,6 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
-          # ✅ A13 FIX : exit-code '1' pour bloquer le push si CRITICAL ou HIGH sont détectés
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
