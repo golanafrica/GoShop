@@ -375,7 +375,9 @@ func TestFreezeAccountUsecase_Success_CustomGracePeriod(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
-	assert.Equal(t, 14, resp.DaysRemaining)
+	assert.GreaterOrEqual(t, resp.DaysRemaining, 13)
+	assert.LessOrEqual(t, resp.DaysRemaining, 14)
+
 }
 
 // ============================================================

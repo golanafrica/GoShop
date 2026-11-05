@@ -9,7 +9,7 @@ on:
 
 env:
   # ✅ A13 FIX : Aligné avec go.mod
-  GO_VERSION: '1.25.0'
+  GO_VERSION: '1.26.9'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
   DB_PORT: '5432'
