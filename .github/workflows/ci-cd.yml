@@ -8,6 +8,7 @@ on:
     branches: [ main ]
 
 env:
+  # ✅ A13 FIX : Aligné parfaitement avec go.mod (1.26.9)
   GO_VERSION: '1.26.9'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
@@ -36,7 +37,6 @@ jobs:
             grep -v '/usecase/order_usecase' | \
             grep -v '/usecase/auth_usecase' | \
             grep -v '/usecase/shop_usecase' | \
-            grep -v '/usecase/wallet_usecase' | \
             grep -v '/usecase/withdrawal_usecase' | \
             grep -v '/handler/orders' | \
             grep -v '/infrastructure/postgres' | \
@@ -150,7 +150,6 @@ jobs:
   e2e-test:
     name: Run E2E Tests
     runs-on: ubuntu-latest
-    # HARD-FAIL : plus de continue-on-error
     services:
       postgres:
         image: postgres:16-alpine
@@ -288,7 +287,7 @@ jobs:
       - run: go mod download && go mod verify
       - name: Run gosec
         id: gosec
-        continue-on-error: true
+        # ✅ A13 FIX : Plus de continue-on-error. Échec bloquant si vulnérabilité.
         run: |
           set -euo pipefail
           docker run --rm \
@@ -305,15 +304,11 @@ jobs:
           retention-days: 30
       - name: Run govulncheck
         id: govuln
-        continue-on-error: true
+        # ✅ A13 FIX : Plus de continue-on-error. Échec bloquant si vulnérabilité connue.
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
-      - name: Security scan warnings
-        if: steps.gosec.outcome == 'failure' || steps.govuln.outcome == 'failure'
-        run: |
-          echo "::warning::gosec and/or govulncheck reported issues (non-blocking transition). See artifacts / logs."
 
   lint:
     name: Code Quality
@@ -325,7 +320,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - uses: golangci/golangci-lint-action@v6
-        continue-on-error: true
+        # ✅ A13 FIX : Plus de continue-on-error. Le lint doit être propre.
+        # Note : Pas de paramètre 'go-version' ici, il hérite automatiquement de setup-go
         with:
           version: latest
           args: --timeout=10m
@@ -359,11 +355,12 @@ jobs:
           tags: ${{ env.DOCKER_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
-          exit-code: '0'
+          # ✅ A13 FIX : exit-code '1' pour bloquer le push si CRITICAL ou HIGH
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
