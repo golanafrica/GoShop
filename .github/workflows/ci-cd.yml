@@ -8,7 +8,7 @@ on:
     branches: [ main ]
 
 env:
-  # ✅ A13 FIX : Utilisation d'une version Go stable et valide (1.24) pour éviter les conflits avec golangci-lint
+  # ✅ A13 FIX : Aligné avec go.mod (1.25.0)
   GO_VERSION: '1.25.0'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
@@ -322,9 +322,11 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v6
         # ✅ A13 FIX : Suppression de continue-on-error. Le lint doit être propre pour merger.
+        # ✅ A13 FIX : Ajout de go-version pour forcer le linter à utiliser la même version que le projet (1.25.0)
         with:
           version: latest
           args: --timeout=10m
+          go-version: ${{ env.GO_VERSION }}
 
   docker:
     name: Build, Scan & Push Docker Image
