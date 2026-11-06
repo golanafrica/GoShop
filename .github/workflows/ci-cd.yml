@@ -288,10 +288,10 @@ jobs:
       
       - name: Run gosec
         id: gosec
-        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT. Plus de continue-on-error.
+        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT + GOTOOLCHAIN=auto pour que le conteneur accepte Go 1.26.9
         run: |
           set -euo pipefail
-          docker run --rm \
+          docker run --rm -e GOTOOLCHAIN=auto \
             -v "$PWD:/src" -w /src \
             securego/gosec:2.22.1 \
             -fmt=json -out=gosec-report.json \
@@ -307,7 +307,7 @@ jobs:
           
       - name: Run govulncheck
         id: govuln
-        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT. Plus de continue-on-error.
+        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT.
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
