@@ -69,7 +69,9 @@ func (r *PlatformSettingsRepository) UpdateMany(ctx context.Context, settings ma
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	query := `
 		INSERT INTO platform_settings (key, value, updated_by, updated_at)

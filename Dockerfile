@@ -1,8 +1,7 @@
 # ==================================================================
 # STAGE 1 : BUILD
 # ==================================================================
-# CVE stdlib (net/http, http2, crypto/tls) : correctifs dès Go 1.26.9 / 1.27.2
-# Tag sans digest : Dependabot pourra ré-épingler le SHA ensuite.
+# Utilisation de Go 1.26.9 pour correspondre exactement au go.mod
 FROM golang:1.26.9-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
@@ -20,7 +19,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ./bin/api ./cmd/a
 # ==================================================================
 # STAGE 2 : RUNTIME
 # ==================================================================
-FROM alpine:3.22.0@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715
+# Alpine 3.20 : version stable, sécurisée et existante
+FROM alpine:3.20
 
 RUN apk --no-cache add ca-certificates tzdata
 
