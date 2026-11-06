@@ -323,7 +323,7 @@ jobs:
         # ✅ A13 FIX : Plus de continue-on-error. Le lint doit être propre.
         # Note : Pas de paramètre 'go-version' ici, il hérite automatiquement de setup-go
         with:
-          version: latest
+          version: v1.70.0
           args: --timeout=10m
 
   docker:
