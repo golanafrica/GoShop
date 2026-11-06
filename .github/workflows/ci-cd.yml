@@ -308,7 +308,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-  lint:
+    lint:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
@@ -318,10 +318,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - uses: golangci/golangci-lint-action@v6
-        # ✅ A13 FIX : VRAIMENT BLOQUANT. 'install-mode: go' compile le linter 
-        # avec Go 1.26.9, résolvant le conflit de version sans toucher à go.mod.
+        # ✅ A13 FIX : 'goinstall' force la compilation du linter avec Go 1.26.9 
+        # Cela résout le conflit de version et rend le lint VRAIMENT bloquant.
         with:
-          install-mode: go
+          install-mode: goinstall
           version: v1.64.6
           args: --timeout=10m
 
