@@ -376,7 +376,7 @@ func TestFreezeAccountUsecase_Success_CustomGracePeriod(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 
-	// ✅ CORRECTION : On accepte 13 ou 14 jours selon les micro-délais d'exécution et fuseaux horaires
+	// ✅ CORRECTION : On accepte 13 ou 14 jours selon les micro-délais d'exécution
 	assert.GreaterOrEqual(t, resp.DaysRemaining, 13)
 	assert.LessOrEqual(t, resp.DaysRemaining, 14)
 
