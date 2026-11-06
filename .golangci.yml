@@ -1,7 +1,7 @@
 run:
   timeout: 5m
   issues-exit-code: 1
-  go: "1.26" # ✅ Mis à jour pour correspondre à ton go.mod (1.26.9)
+  # ✅ Laisser vide : le linter détectera automatiquement la version depuis go.mod (1.26.9)
 
 linters:
   disable-all: true

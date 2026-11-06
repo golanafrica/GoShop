@@ -287,7 +287,6 @@ jobs:
       - run: go mod download && go mod verify
       - name: Run gosec
         id: gosec
-        # ✅ A13 FIX : Plus de continue-on-error. Échec bloquant si vulnérabilité.
         run: |
           set -euo pipefail
           docker run --rm \
@@ -304,13 +303,12 @@ jobs:
           retention-days: 30
       - name: Run govulncheck
         id: govuln
-        # ✅ A13 FIX : Plus de continue-on-error. Échec bloquant si vulnérabilité connue.
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-    lint:
+  lint:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
@@ -320,13 +318,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - uses: golangci/golangci-lint-action@v6
-        # ✅ A13 FIX : Non-bloquant car golangci-lint (v1.64) est compilé avec Go 1.24 
-        # et refusera d'analyser un go.mod en 1.26.9. Cela permet à la CI de passer 
-        # au vert sans toucher à go.mod, tout en gardant gosec/govulncheck bloquants.
-        continue-on-error: true
+        # ✅ A13 FIX : VRAIMENT BLOQUANT. 'install-mode: go' compile le linter 
+        # avec Go 1.26.9, résolvant le conflit de version sans toucher à go.mod.
         with:
-          version: v1.64.6 # ✅ Version stable existante (évite l'erreur 404)
+          install-mode: go
+          version: v1.64.6
           args: --timeout=10m
+
   docker:
     name: Build, Scan & Push Docker Image
     runs-on: ubuntu-latest
@@ -360,7 +358,6 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
-          # ✅ A13 FIX : exit-code '1' pour bloquer le push si CRITICAL ou HIGH
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
