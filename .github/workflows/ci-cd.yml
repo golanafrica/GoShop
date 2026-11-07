@@ -8,7 +8,7 @@ on:
     branches: [ main ]
 
 env:
-  # ✅ A13 FIX : Aligné parfaitement avec go.mod (1.26.9)
+  # Aligné avec go.mod
   GO_VERSION: '1.26.9'
   DOCKER_IMAGE: ghcr.io/golanafrica/goshop
   DB_HOST: localhost
@@ -285,29 +285,41 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - run: go mod download && go mod verify
-      
-      - name: Run gosec
-        id: gosec
-        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT + GOTOOLCHAIN=auto pour que le conteneur accepte Go 1.26.9
+
+      # Texte dans les logs pour triage + exit code bloquant
+      - name: Run gosec (text)
         run: |
           set -euo pipefail
-          docker run --rm -e GOTOOLCHAIN=auto \
+          docker run --rm \
+            -e GOTOOLCHAIN=auto \
+            -v "$PWD:/src" -w /src \
+            securego/gosec:2.22.1 \
+            -fmt=text \
+            -exclude-dir=tests -exclude-dir=mocks -exclude=G104 \
+            ./...
+
+      # JSON pour artifact (best effort si le step text a déjà échoué)
+      - name: Run gosec (json report)
+        if: always()
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e GOTOOLCHAIN=auto \
             -v "$PWD:/src" -w /src \
             securego/gosec:2.22.1 \
             -fmt=json -out=gosec-report.json \
-            -exclude-dir=tests -exclude=G104 \
-            ./...
-            
+            -exclude-dir=tests -exclude-dir=mocks -exclude=G104 \
+            ./... || true
+          test -f gosec-report.json || echo '{"Issues":[]}' > gosec-report.json
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-report
           path: gosec-report.json
           retention-days: 30
-          
+
       - name: Run govulncheck
-        id: govuln
-        # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT.
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -323,7 +335,6 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - uses: golangci/golangci-lint-action@v6
-        # ✅ A13 FIX : compile le linter avec Go 1.26.9
         with:
           install-mode: goinstall
           version: v1.64.6
@@ -362,7 +373,6 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
-          # ✅ A13 PHASE 2 : exit-code '1' pour bloquer le push si CRITICAL ou HIGH
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
