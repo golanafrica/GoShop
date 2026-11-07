@@ -17,7 +17,7 @@ import (
 // ============================================================
 // 🆕 v4.4.3 : API KEY AUTHENTICATION MIDDLEWARE
 // ============================================================
-//
+
 // 🎯 Objectif :
 //   Authentifier les requêtes via une clé API dans le header
 //   Authorization: Bearer gsk_live_... ou X-API-Key: gsk_live_...
@@ -44,11 +44,14 @@ import (
 // Context keys pour API Key
 type contextKeyAPIKey string
 
-//nolint:gosec // Faux positif : ce sont des clés de contexte, pas des identifiants réels
 const (
-	APIKeyContextKey       contextKeyAPIKey = "api_key"
-	APIKeyIDContextKey     contextKeyAPIKey = "api_key_id"
+	// #nosec G101
+	APIKeyContextKey contextKeyAPIKey = "api_key"
+	// #nosec G101
+	APIKeyIDContextKey contextKeyAPIKey = "api_key_id"
+	// #nosec G101
 	APIKeyUserIDContextKey contextKeyAPIKey = "api_key_user_id"
+	// #nosec G101
 	APIKeyScopesContextKey contextKeyAPIKey = "api_key_scopes"
 )
 
@@ -56,6 +59,22 @@ const (
 type APIKeyAuthConfig struct {
 	APIKeyRepo    repository.APIKeyRepository
 	RequiredScope entity.APIKeyScope // Scope requis (optionnel)
+}
+
+// getErrorMessageForCode retourne un message d'erreur statique basé sur le errorCode
+func getErrorMessageForCode(errorCode string) string {
+	switch errorCode {
+	case "API_KEY_REVOKED":
+		return "API key has been revoked"
+	case "API_KEY_EXPIRED":
+		return "API key has expired"
+	case "API_KEY_NOT_FOUND":
+		return "API key not found"
+	case "API_KEY_INSUFFICIENT_SCOPE":
+		return "Insufficient API key scope for this operation"
+	default:
+		return "Invalid API key"
+	}
 }
 
 // APIKeyAuth crée un middleware d'authentification par clé API
@@ -124,7 +143,7 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 
 					utils.WriteAppError(w, utils.NewAppError(
 						errorCode,
-						err.Error(),
+						getErrorMessageForCode(errorCode),
 						statusCode,
 					))
 					return
@@ -140,7 +159,7 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 
 					utils.WriteAppError(w, utils.NewAppError(
 						errorCode,
-						err.Error(),
+						getErrorMessageForCode(errorCode),
 						statusCode,
 					))
 					return
@@ -163,11 +182,10 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, APIKeyScopesContextKey, apiKeyEntity.Scopes)
 
 			// 7. Logger l'utilisation (non bloquant, en goroutine)
-			go func() {
-				bgCtx := context.Background()
-
+			// ✅ CORRECTION G118 : On passe le contexte de la requête à la goroutine
+			go func(reqCtx context.Context) {
 				// Marquer comme utilisée
-				if err := config.APIKeyRepo.MarkKeyUsed(bgCtx, keyHash); err != nil {
+				if err := config.APIKeyRepo.MarkKeyUsed(reqCtx, keyHash); err != nil {
 					logger.Debug().Err(err).Msg("⚠️ Erreur MAJ last_used_at")
 				}
 
@@ -176,16 +194,16 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 					APIKeyID:     apiKeyEntity.ID,
 					Method:       r.Method,
 					Path:         r.URL.Path,
-					StatusCode:   200, // Sera mis à jour par le response writer
+					StatusCode:   200,
 					IPAddress:    extractIPWithoutPort(r.RemoteAddr),
 					UserAgent:    r.UserAgent(),
 					ResponseTime: int(time.Since(start).Milliseconds()),
 				}
 
-				if err := config.APIKeyRepo.LogUsage(bgCtx, log); err != nil {
+				if err := config.APIKeyRepo.LogUsage(reqCtx, log); err != nil {
 					logger.Debug().Err(err).Msg("⚠️ Erreur log usage")
 				}
-			}()
+			}(ctx)
 
 			logger.Debug().
 				Str("api_key_id", apiKeyEntity.ID).
@@ -205,7 +223,6 @@ func APIKeyAuth(config APIKeyAuthConfig) func(http.Handler) http.Handler {
 // ============================================================
 
 // mapAPIKeyError convertit une erreur API Key en (statusCode, errorCode)
-// Utilise un tagged switch pour une meilleure lisibilité (fix QF1003)
 func mapAPIKeyError(err error) (int, string) {
 	switch {
 	case errors.Is(err, entity.ErrAPIKeyRevoked):
@@ -226,19 +243,8 @@ func mapAPIKeyError(err error) (int, string) {
 // ============================================================
 
 // extractAPIKey extrait la clé API du header
-// Supporte UNIQUEMENT les formats sécurisés :
-// - Authorization: Bearer gsk_live_...
-// - X-API-Key: gsk_live_...
-//
-// 🛡️ SÉCURITÉ : Le query param ?api_key= n'est PAS supporté car il expose
-// la clé dans les logs serveur, l'historique navigateur, les headers Referer,
-// et les caches CDN/proxy.
-//
-// Retourne (apiKey, usedInsecureMethod) :
-// - apiKey : la clé extraite (vide si aucune ou insecure)
-// - usedInsecureMethod : true si ?api_key= a été détecté (pour message d'erreur)
 func extractAPIKey(r *http.Request) (apiKey string, usedInsecureMethod bool) {
-	// 1. Essayer le header X-API-Key (priorité, standard industrie)
+	// 1. Essayer le header X-API-Key
 	if key := r.Header.Get("X-API-Key"); key != "" {
 		return strings.TrimSpace(key), false
 	}
@@ -250,11 +256,8 @@ func extractAPIKey(r *http.Request) (apiKey string, usedInsecureMethod bool) {
 		}
 	}
 
-	// 3. DÉTECTER (sans utiliser) le query param pour alerter le client
-	// Ceci permet d'identifier les clients qui doivent migrer vers les headers
+	// 3. Détecter le query param pour alerter le client
 	if key := r.URL.Query().Get("api_key"); key != "" {
-		// Retourner vide + flag "insecure" pour que le middleware
-		// puisse renvoyer un message d'erreur pédagogique
 		return "", true
 	}
 
@@ -267,14 +270,12 @@ func extractIPWithoutPort(addr string) string {
 		return ""
 	}
 
-	// Gérer IPv6 [::1]:port
 	if strings.HasPrefix(addr, "[") {
 		if idx := strings.LastIndex(addr, "]"); idx != -1 {
 			return addr[1:idx]
 		}
 	}
 
-	// Gérer IPv4 192.168.1.1:port
 	if idx := strings.LastIndex(addr, ":"); idx != -1 {
 		return addr[:idx]
 	}
@@ -292,19 +293,19 @@ func GetAPIKeyFromContext(ctx context.Context) (*entity.APIKey, bool) {
 	return apiKey, ok
 }
 
-// GetAPIKeyIDFromContext récupère l'ID de la clé API depuis le contexte
+// GetAPIKeyIDFromContext récupère l'ID de la clé API
 func GetAPIKeyIDFromContext(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(APIKeyIDContextKey).(string)
 	return id, ok
 }
 
-// GetAPIKeyUserIDFromContext récupère l'ID du user propriétaire de la clé
+// GetAPIKeyUserIDFromContext récupère l'ID du user
 func GetAPIKeyUserIDFromContext(ctx context.Context) (string, bool) {
 	userID, ok := ctx.Value(APIKeyUserIDContextKey).(string)
 	return userID, ok
 }
 
-// GetAPIKeyScopesFromContext récupère les scopes de la clé API
+// GetAPIKeyScopesFromContext récupère les scopes
 func GetAPIKeyScopesFromContext(ctx context.Context) ([]entity.APIKeyScope, bool) {
 	scopes, ok := ctx.Value(APIKeyScopesContextKey).([]entity.APIKeyScope)
 	return scopes, ok
@@ -316,13 +317,11 @@ func HasAPIKeyScope(ctx context.Context, requiredScope entity.APIKeyScope) bool 
 	if !ok {
 		return false
 	}
-
 	for _, scope := range scopes {
 		if scope == entity.ScopeAdmin || scope == requiredScope {
 			return true
 		}
 	}
-
 	return false
 }
 

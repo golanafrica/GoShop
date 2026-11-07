@@ -1344,7 +1344,7 @@ func (a *App) setupRouter() {
 		}
 
 		// En développement/test, on tolère le fallback (avec un warning clair)
-		//nolint:gosec // Faux positif : cette clé n'est utilisée qu'en développement/test (fail-fast en prod)
+		// #nosec G101
 		fileSecretKey = "dev-secret-key-change-in-production-32chars"
 		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY - DO NOT USE IN PRODUCTION)")
 	} else {

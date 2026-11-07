@@ -269,6 +269,7 @@ jobs:
           go build -v -ldflags="-w -s" -o goshop-api ./cmd/api
           ls -la goshop-api
       - name: Generate Swagger (best effort)
+        continue-on-error: true
         run: |
           go install github.com/swaggo/swag/cmd/swag@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
@@ -290,21 +291,12 @@ jobs:
         # ✅ A13 PHASE 2 : VRAIMENT BLOQUANT + GOTOOLCHAIN=auto pour que le conteneur accepte Go 1.26.9
         run: |
           set -euo pipefail
-          # 1. Lance gosec et capture le code de sortie sans faire planter le script immédiatement
           docker run --rm -e GOTOOLCHAIN=auto \
             -v "$PWD:/src" -w /src \
             securego/gosec:2.22.1 \
             -fmt=json -out=gosec-report.json \
             -exclude-dir=tests -exclude=G104 \
-            ./... || EXIT_CODE=$?
-          
-          # 2. Si des failles sont trouvées, on les affiche clairement dans les logs GitHub
-          if [ "${EXIT_CODE:-0}" -ne 0 ]; then
-            echo "::error::🚨 Gosec a détecté des problèmes de sécurité. Résumé :"
-            grep -E '"file"|"line"|"rule_id"|"severity"' gosec-report.json | head -n 20 || true
-            echo "::error::👉 Pour le détail complet, téléchargez l'artifact 'security-report' tout en bas de cette page."
-            exit ${EXIT_CODE}
-          fi
+            ./...
             
       - uses: actions/upload-artifact@v4
         if: always()
