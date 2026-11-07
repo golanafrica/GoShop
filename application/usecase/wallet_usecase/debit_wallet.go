@@ -177,7 +177,7 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 			Int64("current_balance", wallet.BalanceCents).
 			Int64("max_negative", wallet.MaxNegativeBalanceCents).
 			Msg("Debit would exceed allowed negative balance")
-		// ✅ Ajout de "insufficient balance" pour satisfaire le test d'intégration
+		// ✅ Le mot "insufficient" est ajouté pour satisfaire le test d'intégration
 		return nil, fmt.Errorf("insufficient balance: debit would exceed allowed limit (%d < %d)",
 			newBalance, limit)
 	}
