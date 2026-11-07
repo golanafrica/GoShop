@@ -169,20 +169,19 @@ func TestDebitWalletUsecase_ExceedsMaxNegative_Blocked(t *testing.T) {
 
 	ctx, shopID := walletTestContext()
 
-	// ✅ AllowNegative DOIT être true pour tester spécifiquement la limite MAXIMALE du découvert.
+	// ✅ Construction manuelle de la requête (on n'utilise PAS le helper)
 	req := &walletusecase.DebitWalletRequest{
 		ShopID:          shopID.String(),
-		AmountCents:     6000000, // Débit de 60 000 FCFA
+		AmountCents:     6000000,
 		TransactionType: entity.WalletTxCommissionDebit,
 		AllowNegative:   true,
 	}
 
 	mockTx := mockrepo.NewMockTx(ctrl)
 
-	// ✅ Solde actuel : -5 000 FCFA. Découvert max autorisé : -50 000 FCFA.
-	// Nouveau solde potentiel : -65 000 FCFA. Cela dépasse la limite de -50 000 FCFA.
+	// ✅ Wallet avec solde ZÉRO et découvert max de -5 000 000
 	wallet := entity.NewMerchantWallet(req.ShopID)
-	wallet.BalanceCents = -500000
+	wallet.BalanceCents = 0
 	wallet.MaxNegativeBalanceCents = -5000000
 
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
@@ -191,7 +190,7 @@ func TestDebitWalletUsecase_ExceedsMaxNegative_Blocked(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
-	// ✅ Le système doit bloquer AVANT d'appeler Update, et faire un Rollback.
+	// ✅ Rollback car le débit doit être bloqué
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
