@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -17,7 +18,9 @@ import (
 )
 
 // MoovMoneyWebhookSecret est la clé secrète pour la validation HMAC (Mock uniquement)
-const MoovMoneyWebhookSecret = "moov_money_webhook_secret_dev_only_change_in_prod" //nolint:gosec
+//
+// #nosec G101
+const MoovMoneyWebhookSecret = "moov_money_webhook_secret_dev_only_change_in_prod"
 
 // MoovMoneyProvider est un mock du provider Moov Money
 type MoovMoneyProvider struct {
@@ -109,9 +112,14 @@ func (p *MoovMoneyProvider) InitiatePayment(ctx context.Context, req *payment.Pa
 		ExpiresAt:   expiresAt,
 		Metadata: map[string]interface{}{
 			"merchant_code": "MV_MOCK_MERCHANT_001",
-			"notification":  fmt.Sprintf("Composez %s pour valider le paiement de %d FCFA via Moov Money", "#135*2*"+ref+"#", req.AmountCents),
+			"notification":  "Composez #135*2#" + ref + "# pour valider le paiement de " + formatAmount(req.AmountCents) + " FCFA via Moov Money",
 		},
 	}, nil
+}
+
+// formatAmount formate un montant en FCFA
+func formatAmount(amountCents int64) string {
+	return fmt.Sprintf("%d", amountCents)
 }
 
 // simulateCompletion simule la complétion d'un paiement
@@ -152,7 +160,7 @@ func (p *MoovMoneyProvider) CheckStatus(ctx context.Context, providerRef string)
 
 	mp, exists := p.payments[providerRef]
 	if !exists {
-		return nil, fmt.Errorf("payment %s not found", providerRef)
+		return nil, errors.New("payment not found")
 	}
 
 	var completedAt int64
@@ -177,7 +185,7 @@ func (p *MoovMoneyProvider) ValidateWebhook(ctx context.Context, payload []byte,
 	}
 
 	if signature == "" {
-		return nil, fmt.Errorf("missing webhook signature")
+		return nil, errors.New("missing webhook signature")
 	}
 
 	mac := hmac.New(sha256.New, []byte(MoovMoneyWebhookSecret))
@@ -185,7 +193,7 @@ func (p *MoovMoneyProvider) ValidateWebhook(ctx context.Context, payload []byte,
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 
 	if !hmac.Equal([]byte(signature), []byte(expectedMAC)) {
-		return nil, fmt.Errorf("invalid webhook signature")
+		return nil, errors.New("invalid webhook signature")
 	}
 
 	var webhookData struct {
@@ -201,7 +209,7 @@ func (p *MoovMoneyProvider) ValidateWebhook(ctx context.Context, payload []byte,
 	}
 
 	if webhookData.ProviderRef == "" {
-		return nil, fmt.Errorf("missing provider_ref in webhook")
+		return nil, errors.New("missing provider_ref in webhook")
 	}
 
 	status := entity.PaymentStatus(webhookData.Status)
@@ -242,22 +250,22 @@ func (p *MoovMoneyProvider) Refund(ctx context.Context, providerRef string, amou
 
 	mp, exists := p.payments[providerRef]
 	if !exists {
-		return fmt.Errorf("payment %s not found", providerRef)
+		return errors.New("payment not found")
 	}
 
 	if mp.Status != entity.PaymentStatusSuccess {
-		return fmt.Errorf("can only refund successful payments")
+		return errors.New("can only refund successful payments")
 	}
 
 	if amountCents > mp.Amount {
-		return fmt.Errorf("refund amount exceeds original payment")
+		return errors.New("refund amount exceeds original payment")
 	}
 
 	mp.Status = entity.PaymentStatusRefunded
 	now := time.Now().UTC()
 	mp.CompletedAt = &now
 	mp.Metadata["refund_amount"] = amountCents
-	mp.Metadata["refund_phone"] = customerPhone // 🆕 Enregistrement du numéro pour traçabilité
+	mp.Metadata["refund_phone"] = customerPhone
 
 	return nil
 }

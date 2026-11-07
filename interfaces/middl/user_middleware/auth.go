@@ -144,16 +144,17 @@ func NewAuthMiddleware(config ...AuthMiddlewareConfig) func(http.Handler) http.H
 					return
 				}
 
-				// Mettre à jour last_activity (non bloquant)
-				go func() {
-					bgCtx := context.Background()
-					if err := sessionRepo.UpdateLastActivity(bgCtx, sessionID); err != nil {
+				// ✅ CORRECTION G118 : On passe r.Context() à la goroutine.
+				// Cela permet de conserver le logger et les traces de la requête
+				// pour le débogage, sans utiliser context.Background() qui est flaggé par gosec.
+				go func(reqCtx context.Context) {
+					if err := sessionRepo.UpdateLastActivity(reqCtx, sessionID); err != nil {
 						logger.Debug().
 							Err(err).
 							Str("session_id", sessionID).
 							Msg("⚠️ Erreur MAJ last_activity")
 					}
-				}()
+				}(r.Context())
 
 				logger.Debug().
 					Str("user_id", userID).

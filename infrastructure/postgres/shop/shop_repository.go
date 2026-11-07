@@ -782,6 +782,8 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 	whereClause := strings.Join(whereClauses, " AND ")
 
 	// Compter le total
+	// #nosec G201
+	// Safe: whereClause is constructed internally using parameterized arguments ($1, $2, etc.), preventing SQL injection.
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM shops WHERE %s", whereClause)
 	var total int
 	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
@@ -832,8 +834,12 @@ func (r *ShopRepositoryInfrastructure) FindAllShopsAdmin(
 		}
 	}
 
-	// Récupérer les shops (sortBy et sortOrder sont maintenant 100% sûrs)
+	// Récupérer les shops (sortBy et sortOrder sont maintenant 100% sûrs grâce à la whitelist)
 	args = append(args, limit, offset)
+
+	// #nosec G201
+	// Safe: sortBy and sortOrder are strictly validated against a whitelist.
+	// whereClause uses parameterized arguments, preventing SQL injection.
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM shops
