@@ -89,7 +89,16 @@ func (uc *DownloadFileUsecase) Execute(
 		return nil, fmt.Errorf("file not found")
 	}
 
-	// 4. Ouvrir le fichier
+	// 4. 🛡️ Confinement explicite robuste avant ouverture (Anti Directory Traversal)
+	ok, err := storage.IsPathUnderBase(uc.fileStorage.GetBasePath(), fullPath)
+	if err != nil || !ok {
+		logger.Error().
+			Str("file_path", fullPath).
+			Msg("❌ Tentative de directory traversal détectée")
+		return nil, fmt.Errorf("invalid file path: outside storage root")
+	}
+
+	// #nosec G304 -- Path is strictly confined by IsPathUnderBase (Abs + Rel check, no ..)
 	file, err := os.Open(fullPath)
 	if err != nil {
 		logger.Error().Err(err).Msg("❌ Erreur ouverture fichier")

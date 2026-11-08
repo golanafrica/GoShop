@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,8 @@ type FileStorage struct {
 // NewFileStorage crée une nouvelle instance
 func NewFileStorage(basePath string) (*FileStorage, error) {
 	// Créer le dossier s'il n'existe pas
-	if err := os.MkdirAll(basePath, 0755); err != nil {
+	// Correction G301 : 0750 restreint l'accès en écriture au propriétaire et au groupe
+	if err := os.MkdirAll(basePath, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 
@@ -46,13 +48,15 @@ func (fs *FileStorage) Save(reader io.Reader, originalFilename, extension string
 	)
 
 	fullDir := filepath.Join(fs.basePath, datePath)
-	if err := os.MkdirAll(fullDir, 0755); err != nil {
+	// Correction G301 : 0750 pour restreindre les permissions
+	if err := os.MkdirAll(fullDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create date directory: %w", err)
 	}
 
 	fullPath := filepath.Join(fullDir, filename)
 
 	// Créer le fichier
+	// #nosec G304 -- fullPath is internally generated from basePath, datePath, and secure random bytes. No user input.
 	file, err := os.Create(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
@@ -90,4 +94,32 @@ func (fs *FileStorage) Exists(relativePath string) bool {
 	fullPath := filepath.Join(fs.basePath, relativePath)
 	_, err := os.Stat(fullPath)
 	return err == nil
+}
+
+// IsPathUnderBase vérifie de manière robuste que le chemin cible est strictement
+// contenu dans le répertoire de base, empêchant toute attaque de type Directory Traversal.
+// À utiliser avant d'ouvrir un fichier dont le chemin provient (directement ou indirectement) de l'utilisateur.
+func IsPathUnderBase(base, target string) (bool, error) {
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return false, fmt.Errorf("failed to get absolute base path: %w", err)
+	}
+
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false, fmt.Errorf("failed to get absolute target path: %w", err)
+	}
+
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return false, fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	// Refus si le chemin relatif tente de remonter hors de la base (ex: "../" ou "..\")
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
+}
+
+// GetBasePath retourne le chemin de base du stockage
+func (fs *FileStorage) GetBasePath() string {
+	return fs.basePath
 }

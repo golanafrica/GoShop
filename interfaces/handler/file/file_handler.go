@@ -243,8 +243,22 @@ func (h *FileHandler) DownloadFile(w http.ResponseWriter, r *http.Request) error
 		return utils.NewAppError("FILE_NOT_FOUND", "File not found", http.StatusNotFound)
 	}
 
-	// 7. Ouvrir le fichier
+	// 7. 🛡️ Confinement explicite robuste avant ouverture (Anti Directory Traversal)
 	fullPath := h.fileStorage.GetFullPath(cleanPath)
+	ok, err := storageinfra.IsPathUnderBase(h.fileStorage.GetBasePath(), fullPath)
+	if err != nil || !ok {
+		metrics.FileSecurityViolations.WithLabelValues("path_traversal").Inc()
+		metrics.FileDownloadTotal.WithLabelValues("security_violation", "unknown").Inc()
+		metrics.FileOperationDuration.WithLabelValues("download").Observe(time.Since(start).Seconds())
+		metrics.ApplicationErrorsTotal.WithLabelValues("file_download", "file_handler").Inc()
+
+		logger.Error().
+			Str("file_path", fullPath).
+			Msg("❌ Tentative de directory traversal détectée")
+		return utils.NewAppError("INVALID_PATH", "Invalid file path: outside storage root", http.StatusBadRequest)
+	}
+
+	// #nosec G304 -- Path is strictly confined by IsPathUnderBase (Abs + Rel check, no ..)
 	file, err := os.Open(fullPath)
 	if err != nil {
 		metrics.FileDownloadTotal.WithLabelValues("error", "unknown").Inc()
