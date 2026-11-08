@@ -5,10 +5,18 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"Goshop/domain/entity"
 )
+
+// ============================================================
+// ERREURS SENTINELLES (Typées pour errors.Is)
+// ============================================================
+
+var ErrWalletNotFound = errors.New("merchant wallet not found")
+var ErrWalletTransactionNotFound = errors.New("wallet transaction not found")
 
 // ============================================================
 // MERCHANT WALLET REPOSITORY
