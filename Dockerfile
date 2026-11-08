@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ./bin/api ./cmd/a
 # STAGE 2 : RUNTIME
 # ==================================================================
 # Alpine 3.20 : version stable, sécurisée et existante
-FROM alpine:3.20
+FROM alpine:3.21
 
 RUN apk --no-cache add ca-certificates tzdata
 
