@@ -92,7 +92,8 @@ func (r *MerchantWalletRepositoryInfrastructure) scanWallet(row *sql.Row) (*enti
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("merchant wallet not found")
+			// ✅ CORRECTION : Retourne l'erreur sentinelle typée
+			return nil, repository.ErrWalletNotFound
 		}
 		return nil, fmt.Errorf("failed to scan merchant wallet: %w", err)
 	}
@@ -246,7 +247,6 @@ func (r *MerchantWalletRepositoryInfrastructure) FindFrozenByShopID(ctx context.
 }
 
 func (r *MerchantWalletRepositoryInfrastructure) FindNegativeBalance(ctx context.Context) ([]*entity.MerchantWallet, error) {
-	// Legacy balance < 0 OU dette explicite
 	query := `SELECT ` + merchantWalletSelectCols + `
 		FROM merchant_wallets
 		WHERE balance_cents < 0 OR debt_cents > 0
@@ -406,7 +406,7 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateBalance(ctx context.Conte
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("merchant wallet not found")
+		return repository.ErrWalletNotFound
 	}
 	return nil
 }
@@ -432,7 +432,7 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateHeld(ctx context.Context,
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("merchant wallet not found")
+		return repository.ErrWalletNotFound
 	}
 	return nil
 }
@@ -504,7 +504,7 @@ func (r *MerchantWalletRepositoryInfrastructure) UpdateStats(ctx context.Context
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("merchant wallet not found")
+		return repository.ErrWalletNotFound
 	}
 	return nil
 }
@@ -564,7 +564,8 @@ func (r *WalletTransactionRepositoryInfrastructure) scanTransaction(row *sql.Row
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("wallet transaction not found")
+			// ✅ CORRECTION : Retourne l'erreur sentinelle typée pour les transactions
+			return nil, repository.ErrWalletTransactionNotFound
 		}
 		return nil, fmt.Errorf("failed to scan wallet transaction: %w", err)
 	}
@@ -993,7 +994,8 @@ func (r *WalletTransactionRepositoryInfrastructure) UpdateStatus(ctx context.Con
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("wallet transaction not found")
+		// ✅ CORRECTION : Retourne l'erreur sentinelle typée
+		return repository.ErrWalletTransactionNotFound
 	}
 	return nil
 }

@@ -113,8 +113,8 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	defer tx.Rollback() //nolint:errcheck
 
 	// ============================================================
-	// SÉCURITÉ : Vérifier l'état de l'escrow (orders / credit only)
-	// tontine_cycle / tontine_group : crédit held en fin de cycle — PAS de gate escrow
+	// ✅ W2 FIX : SÉCURITÉ GATE ESCROW
+	// Une erreur de lecture (findErr != nil) doit ABORTER, pas être ignorée.
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil && uc.escrowRepo != nil {
 		switch *req.ReferenceType {
@@ -131,7 +131,17 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				escrow, findErr = uc.escrowRepo.WithTX(tx).FindByID(ctx, *req.ReferenceID)
 			}
 
-			if findErr == nil && escrow != nil {
+			if findErr != nil {
+				if !isWalletTxnNotFound(findErr) {
+					logger.Error().
+						Err(findErr).
+						Str("reference_type", *req.ReferenceType).
+						Str("reference_id", *req.ReferenceID).
+						Msg("Failed to load escrow for credit gate")
+					return nil, fmt.Errorf("failed to verify escrow before credit: %w", findErr)
+				}
+				// not found : pas d'escrow lié — on laisse le crédit (chemins hors escrow)
+			} else if escrow != nil {
 				if escrow.IsBlockedFromRelease() {
 					logger.Error().
 						Str("shop_id", req.ShopID).
@@ -169,7 +179,8 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
-		if err.Error() == "merchant wallet not found" {
+		// ✅ W3 FIX : Utilisation d'un helper robuste au lieu de == "string"
+		if isMerchantWalletNotFound(err) {
 			wallet = entity.NewMerchantWallet(req.ShopID)
 			if err := uc.walletRepo.WithTX(tx).Create(ctx, wallet); err != nil {
 				logger.Error().Err(err).Msg("Failed to create wallet")
@@ -183,7 +194,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	// Frozen : CreditWithDebtSweep est autorisé pour récupérer une dette.
-	// On bloque seulement si frozen ET pas de dette ET pas un crédit "held" tontine déjà géré autrement.
 	if wallet.IsFrozen && wallet.DebtCents == 0 && req.TransactionType != entity.WalletTxUnfreezeDeposit {
 		logger.Warn().
 			Str("shop_id", req.ShopID).
@@ -193,13 +203,34 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	// ============================================================
-	// 🛡️ A01 FIX : IDEMPOTENCE STRICTE
-	// Une erreur SQL de lecture ≠ « aucune ligne ».
+	// CALCUL PRÉCOCE : Nécessaire pour la vérification d'idempotence stricte
+	// ============================================================
+	previousBalance := wallet.BalanceCents
+	grossCents := req.AmountCents
+	var netToBalance int64
+	var swept int64
+
+	if req.HoldAfterCredit {
+		if err := wallet.CreditAndHold(grossCents); err != nil {
+			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
+			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
+		}
+		netToBalance = grossCents
+		swept = 0
+	} else {
+		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
+		if err != nil {
+			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
+			return nil, fmt.Errorf("failed to credit wallet: %w", err)
+		}
+	}
+
+	// ============================================================
+	// ✅ W1 FIX : IDEMPOTENCE STRICTE AVEC VÉRIFICATION MÉTIER
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
 		if findErr != nil {
-			// Absence de ligne : continuer. Toute autre erreur : abort (pas de crédit aveugle).
 			if !isWalletTxnNotFound(findErr) {
 				logger.Error().
 					Err(findErr).
@@ -209,6 +240,17 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				return nil, fmt.Errorf("failed to check existing wallet transaction: %w", findErr)
 			}
 		} else if existing != nil && existing.Status == entity.WalletTxCompleted {
+			// Vérification stricte : Shop et Type doivent correspondre
+			if err := assertIdempotentCreditMatch(existing, req); err != nil {
+				logger.Error().
+					Err(err).
+					Str("existing_txn", existing.ID).
+					Str("ref_type", *req.ReferenceType).
+					Str("ref_id", *req.ReferenceID).
+					Msg("Idempotency key reuse with mismatched credit parameters")
+				return nil, err
+			}
+
 			logger.Info().
 				Str("ref_type", *req.ReferenceType).
 				Str("ref_id", *req.ReferenceID).
@@ -234,27 +276,9 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 	}
 
-	previousBalance := wallet.BalanceCents
-	grossCents := req.AmountCents
-	var netToBalance int64
-	var swept int64
-
-	if req.HoldAfterCredit {
-		// Tontine : crédit + hold (pas de sweep sur held — la dette reste jusqu'au release held)
-		if err := wallet.CreditAndHold(grossCents); err != nil {
-			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
-			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
-		}
-		netToBalance = grossCents
-		swept = 0
-	} else {
-		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
-		if err != nil {
-			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
-			return nil, fmt.Errorf("failed to credit wallet: %w", err)
-		}
-	}
-
+	// ============================================================
+	// MISE À JOUR ET CRÉATION DE LA TRANSACTION
+	// ============================================================
 	if err := uc.walletRepo.WithTX(tx).Update(ctx, wallet); err != nil {
 		logger.Error().Err(err).Msg("Failed to update wallet")
 		return nil, fmt.Errorf("failed to update wallet: %w", err)
@@ -274,7 +298,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		desc = &adj
 	}
 
-	// sale_credit / deposit : uniquement si net > 0 (entity refuse amount == 0)
 	if netToBalance > 0 {
 		txn := &entity.WalletTransaction{
 			ID:                txnID,
@@ -289,19 +312,41 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
-			msg := strings.ToLower(err.Error())
-			if strings.Contains(msg, "duplicate key") ||
-				strings.Contains(msg, "unique constraint") ||
-				strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
-				strings.Contains(msg, "23505") {
-				logger.Info().Msg("Unique constraint — concurrent credit, treat as success")
+			// ✅ W1 FIX (partie 2) : GESTION PROPRE DU CONFLIT UNIQUE (23505)
+			if isUniqueViolation(err) {
+				logger.Info().Msg("Unique constraint on wallet txn — reloading winner")
 				_ = tx.Rollback()
+
+				// Nouvelle lecture hors TX avortée (même tenant)
+				winner, wErr := uc.txnRepo.FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
+				if wErr != nil {
+					return nil, fmt.Errorf("concurrent credit: failed to reload existing transaction: %w", wErr)
+				}
+				if winner == nil || winner.Status != entity.WalletTxCompleted {
+					return nil, fmt.Errorf("concurrent credit: unique conflict but no completed transaction found")
+				}
+				if err := assertIdempotentCreditMatch(winner, req); err != nil {
+					return nil, err
+				}
+
+				// Recharger wallet pour soldes à jour (lecture simple)
+				w2, w2err := uc.walletRepo.FindByShopID(ctx, req.ShopID)
+				if w2err != nil {
+					return nil, fmt.Errorf("concurrent credit: reload wallet: %w", w2err)
+				}
+
 				return &CreditWalletResponse{
-					ShopID:          req.ShopID,
-					AmountCents:     netToBalance,
-					TransactionType: req.TransactionType,
-					Held:            req.HoldAfterCredit,
-					SweptCents:      swept,
+					ShopID:            w2.ShopID,
+					BalanceCents:      w2.BalanceCents,
+					HeldCents:         w2.HeldCents,
+					AvailableCents:    w2.AvailableCents(),
+					PreviousBalance:   w2.BalanceCents,
+					IsFrozen:          w2.IsFrozen,
+					TransactionID:     winner.ID,
+					TransactionType:   winner.TransactionType,
+					AmountCents:       winner.AmountCents,
+					BalanceAfterCents: winner.BalanceAfterCents,
+					Held:              req.HoldAfterCredit,
 				}, nil
 			}
 			logger.Error().Err(err).Msg("Failed to create transaction")
@@ -314,7 +359,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 	if swept > 0 {
 		sweepRefType := "debt_sweep"
-		// Référence stable pour audit (même proof/order si fourni)
 		var sweepRefID *string
 		if req.ReferenceID != nil {
 			sweepRefID = req.ReferenceID
@@ -429,7 +473,6 @@ func (uc *CreditWalletUsecase) CreditFromCOD(
 	return uc.Execute(ctx, req)
 }
 
-// CreditFromTontine crédite le NET du cycle et le met en held (non retirable).
 func (uc *CreditWalletUsecase) CreditFromTontine(
 	ctx context.Context,
 	shopID string,
@@ -510,7 +553,6 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 // ============================================================
 
 // isWalletTxnNotFound distingue « aucune transaction » d'une vraie erreur SQL.
-// Accepte sql.ErrNoRows et les messages habituels des repos Postgres du projet.
 func isWalletTxnNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -522,4 +564,45 @@ func isWalletTxnNotFound(err error) bool {
 	return strings.Contains(msg, "not found") ||
 		strings.Contains(msg, "no rows") ||
 		strings.Contains(msg, "sql: no rows")
+}
+
+// isMerchantWalletNotFound distingue « aucun wallet » d'une vraie erreur SQL.
+func isMerchantWalletNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "merchant wallet not found") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no rows")
+}
+
+// isUniqueViolation détecte une violation de contrainte unique (23505).
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "unique constraint") ||
+		strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+		strings.Contains(msg, "23505")
+}
+
+// assertIdempotentCreditMatch vérifie que la réutilisation d'une référence
+// correspond bien à la même opération métier (même shop, même type).
+func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
+	if existing.ShopID != req.ShopID {
+		return fmt.Errorf("idempotency conflict: shop_id mismatch")
+	}
+	if existing.TransactionType != req.TransactionType {
+		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
+	}
+	// Note : Le montant net peut varier légèrement en cas de debt_sweep partiel.
+	// Pour une sécurité maximale, on s'assure au moins que le type et le shop correspondent.
+	// Un durcissement sur le montant exact pourra être ajouté en Phase A14 (Réconciliation).
+	return nil
 }
