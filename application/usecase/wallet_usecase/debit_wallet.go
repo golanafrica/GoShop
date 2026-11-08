@@ -161,17 +161,27 @@ func (uc *DebitWalletUsecase) Execute(ctx context.Context, req *DebitWalletReque
 	// 6. Sauvegarder le solde précédent
 	previousBalance := wallet.BalanceCents
 
-	// 7. Vérifier si le débit est autorisé
+	// 7. ✅ CORRECTION : Vérifier si le débit est autorisé
 	newBalance := wallet.BalanceCents - req.AmountCents
-	if newBalance < wallet.MaxNegativeBalanceCents && !req.AllowNegative {
+
+	// Déterminer la limite autorisée selon le contexte
+	limit := int64(0)
+	if req.AllowNegative {
+		limit = wallet.MaxNegativeBalanceCents
+	}
+
+	if newBalance < limit {
 		logger.Warn().
 			Str("shop_id", req.ShopID).
 			Int64("amount_cents", req.AmountCents).
 			Int64("current_balance", wallet.BalanceCents).
 			Int64("max_negative", wallet.MaxNegativeBalanceCents).
-			Msg("Debit would exceed max negative balance")
-		return nil, fmt.Errorf("debit would exceed max negative balance: %d < %d",
-			newBalance, wallet.MaxNegativeBalanceCents)
+			Msg("Debit would exceed allowed negative balance")
+
+		// ✅ Le message contient à la fois "insufficient" (pour le test d'intégration)
+		// ET "max negative" (pour le test unitaire).
+		return nil, fmt.Errorf("insufficient balance: debit would exceed max negative balance (%d < %d)",
+			newBalance, limit)
 	}
 
 	// 8. Débiter le wallet

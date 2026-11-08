@@ -105,6 +105,7 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 		return utils.NewAppError("TENANT_REQUIRED", "multi-tenant context required", http.StatusUnauthorized)
 	}
 
+	// #nosec G120 -- explicitly bounded by maxUploadBytes constant (5MB + 512KB), preventing memory exhaustion
 	if err := r.ParseMultipartForm(maxUploadBytes + 512*1024); err != nil {
 		return utils.NewAppError("INVALID_MULTIPART", "invalid multipart form", http.StatusBadRequest)
 	}
@@ -172,7 +173,8 @@ func (h *MerchantKYCHandler) UploadDocument(w http.ResponseWriter, r *http.Reque
 		contentResult.MimeType,
 	)
 
-	if err := os.MkdirAll(filepath.Dir(serverPath), 0755); err != nil {
+	// Correction G301 : 0750 pour restreindre les permissions au propriétaire et au groupe
+	if err := os.MkdirAll(filepath.Dir(serverPath), 0750); err != nil {
 		logger.Error().Err(err).Msg("mkdir upload failed")
 		return utils.NewAppError("STORAGE_ERROR", "failed to prepare storage", http.StatusInternalServerError)
 	}

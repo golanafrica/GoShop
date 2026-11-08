@@ -159,6 +159,7 @@ func (uc *SubmitMerchantKYCUsecase) Execute(
 		}
 
 		// J2 : Ouvrir le fichier pour valider le magic number
+		// #nosec G304 -- cleanPath is strictly validated and confined by assertMerchantKYCPath prior to this call
 		f, err := os.Open(cleanPath)
 		if err != nil {
 			return nil, fmt.Errorf("document %d: cannot open file: %w", i+1, err)
