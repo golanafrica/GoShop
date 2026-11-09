@@ -18,16 +18,19 @@ import (
 type RefundPaymentUsecase struct {
 	paymentRepo repository.PaymentRepository
 	registry    PaymentRegistry
+	txManager   repository.TxManager // ✅ AJOUT P0-05 : Pour l'atomicité de la réservation
 }
 
 // NewRefundPaymentUsecase crée une nouvelle instance
 func NewRefundPaymentUsecase(
 	paymentRepo repository.PaymentRepository,
 	registry PaymentRegistry,
+	txManager repository.TxManager, // ✅ AJOUT P0-05
 ) *RefundPaymentUsecase {
 	return &RefundPaymentUsecase{
 		paymentRepo: paymentRepo,
 		registry:    registry,
+		txManager:   txManager,
 	}
 }
 
@@ -103,11 +106,28 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		logger.Warn().Str("payment_id", req.PaymentID).Msg("Idempotency key not provided by client, using deterministic fallback")
 	}
 
-	existing, err := uc.paymentRepo.FindPaymentRefundByIdempotency(ctx, shop.ID, idemKey)
+	// ✅ CORRECTION P0-05 : Début de transaction pour l'atomicité de la réservation
+	tx, err := uc.txManager.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	txPaymentRepo := uc.paymentRepo.WithTX(tx)
+
+	existing, err := txPaymentRepo.FindPaymentRefundByIdempotency(ctx, shop.ID, idemKey)
 	if err != nil {
 		return nil, fmt.Errorf("lookup refund idempotency: %w", err)
 	}
 	if existing != nil {
+		// ✅ CORRECTION P0-04 : Vérification stricte de tous les paramètres
+		if existing.PaymentID != paymentID {
+			return nil, fmt.Errorf("idempotency conflict: key %s is associated with payment %s, not %s", idemKey, existing.PaymentID, paymentID)
+		}
+		if existing.AmountCents != refundAmount {
+			return nil, fmt.Errorf("idempotency conflict: key %s exists with amount %d, requested %d", idemKey, existing.AmountCents, refundAmount)
+		}
+
 		switch existing.Status {
 		case entity.PaymentRefundCompleted:
 			p, err := uc.paymentRepo.FindByID(ctx, paymentID)
@@ -132,7 +152,8 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		IdempotencyKey: idemKey,
 		ProviderRef:    paymentEntity.ProviderRef,
 	}
-	if err := uc.paymentRepo.CreatePaymentRefund(ctx, refundRow); err != nil {
+
+	if err := txPaymentRepo.CreatePaymentRefund(ctx, refundRow); err != nil {
 		return nil, fmt.Errorf("create payment refund: %w", err)
 	}
 
@@ -145,24 +166,24 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	}
 
 	// 9. RÉSERVATION ATOMIQUE AVANT l'appel provider (anti-course)
-	ok, err := uc.paymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
+	ok, err := txPaymentRepo.AddRefundAmount(ctx, paymentID, refundAmount, reservedStatus)
 	if err != nil {
-		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
-			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after reserve error")
-		}
 		return nil, fmt.Errorf("reserve refund amount: %w", err)
 	}
 	if !ok {
-		if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, "concurrent or insufficient amount"); stErr != nil {
-			logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after concurrent reserve")
-		}
 		return nil, fmt.Errorf("refund amount (%d) exceeds remaining refundable amount (concurrent or insufficient)", refundAmount)
 	}
 
-	// 10. Appel provider (après réservation)
+	// Commit de la transaction de réservation
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit refund reservation: %w", err)
+	}
+
+	// 10. Appel provider (HORS de la transaction de réservation, car cela peut prendre du temps)
 	requiresProviderCall := paymentRequiresProviderRefund(paymentEntity.Provider)
 	if requiresProviderCall {
 		if paymentEntity.ProviderRef == nil || *paymentEntity.ProviderRef == "" {
+			// Rollback logique de la réservation car on ne peut pas appeler le provider
 			if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 				logger.Error().Err(revErr).
 					Str("payment_id", paymentID.String()).

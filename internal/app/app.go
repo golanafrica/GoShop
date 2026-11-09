@@ -534,6 +534,7 @@ func (a *App) setupRouter() {
 	refundPaymentUC := paymentusecase.NewRefundPaymentUsecase(
 		paymentRepo,
 		paymentRegistry,
+		txmanagerRepo,
 	)
 
 	// 🆕 v3.0.0 : WALLET USECASES
