@@ -70,6 +70,10 @@ func setupRefundTest(t *testing.T) (*mockrepo.MockPaymentRepository, *mockusecas
 	// Configuration par défaut pour la gestion des transactions
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
+	mockTx.EXPECT().Commit().Return(nil).AnyTimes() // ✅ AJOUTÉ : Le code appelle tx.Commit()
+
+	// Le repository doit se retourner lui-même quand WithTX est appelé
+	mockPaymentRepo.EXPECT().WithTX(gomock.Any()).Return(mockPaymentRepo).AnyTimes()
 
 	t.Cleanup(ctrl.Finish)
 	return mockPaymentRepo, mockRegistry, mockTxManager, mockTx
@@ -534,12 +538,12 @@ func TestRefundPaymentUsecase_ConcurrentReservationRejected(t *testing.T) {
 		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
 		Return(false, nil)
 
-	mockPaymentRepo.EXPECT().
-		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundFailed, gomock.Any()).
-		Return(nil)
+	// ✅ CORRECTION : On ne met plus à jour le statut car la transaction sera rollbackée
+	// et la ligne de remboursement n'existera pas en base. C'est le comportement atomique correct.
 
 	req := createValidRefundRequest(successPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
+
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds remaining refundable amount")
 }
