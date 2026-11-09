@@ -122,26 +122,50 @@ func tontineCycleRateBps(circleType string) int {
 	}
 }
 
+// ✅ CORRECTION PR4 : Retourne (int, error).
+// Distingue "absence confirmée" (fallback autorisé) des "vraies erreurs SQL" (propagation).
 func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	ctx context.Context,
 	shopID string,
 	circleType string,
 	logger *zerolog.Logger,
-) int {
+) (int, error) {
 	fallback := tontineCycleRateBps(circleType)
 	if uc.commissionRateRepo == nil {
-		return fallback
+		return fallback, nil
 	}
 
 	txType := tontineCircleToTransactionType(circleType)
 	rate, err := uc.commissionRateRepo.FindByShopAndType(ctx, shopID, txType)
-	if err != nil || rate == nil || !rate.IsActive {
+	if err != nil {
+		errMsg := strings.ToLower(err.Error())
+		// Absence confirmée (non trouvé) -> fallback autorisé
+		if errors.Is(err, sql.ErrNoRows) || strings.Contains(errMsg, "not found") {
+			logger.Debug().
+				Str("shop_id", shopID).
+				Str("tx_type", txType).
+				Int("fallback_bps", fallback).
+				Msg("Phase 4: commission rate not found for shop — using platform default")
+			return fallback, nil
+		}
+		// Erreur SQL réelle (ex: perte de connexion, timeout) -> on propage l'erreur
+		return 0, fmt.Errorf("failed to fetch commission rate: %w", err)
+	}
+	if rate == nil {
 		logger.Debug().
 			Str("shop_id", shopID).
 			Str("tx_type", txType).
 			Int("fallback_bps", fallback).
 			Msg("Phase 4: no active shop commission rate — using platform default")
-		return fallback
+		return fallback, nil
+	}
+	if !rate.IsActive {
+		logger.Debug().
+			Str("shop_id", shopID).
+			Str("tx_type", txType).
+			Int("fallback_bps", fallback).
+			Msg("Phase 4: shop commission rate is inactive — using platform default")
+		return fallback, nil
 	}
 
 	logger.Info().
@@ -149,7 +173,7 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 		Str("tx_type", txType).
 		Int("rate_bps", rate.RateBps).
 		Msg("Phase 4: using shop-specific commission rate")
-	return rate.RateBps
+	return rate.RateBps, nil
 }
 
 // Execute traite un webhook tontine avec protection anti-race condition et récupérabilité
@@ -331,7 +355,12 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 			Msg("Cycle voucher already exists — ensuring wallet credit then group advancement")
 
 		grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
-		rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+
+		rateBps, err := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+		if err != nil {
+			return fmt.Errorf("failed to resolve tontine rate on recovery: %w", err)
+		}
+
 		commissionCents := entity.CalculateCommission(grossCents, rateBps)
 		netCents := grossCents - commissionCents
 		if netCents < 0 {
@@ -352,7 +381,6 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 				Msg("💰 Merchant wallet credit ensured (idempotent recovery)")
 		}
 
-		// 🛡️ A02 FIX : Propagation stricte de l'erreur de marquage des commissions
 		if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
 			logger.Error().Err(err).Msg("Failed to mark cycle commissions collected on recovery path")
 			return fmt.Errorf("failed to mark cycle commissions collected (recovery): %w", err)
@@ -369,7 +397,12 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	}
 
 	grossCents := group.AmountPerCycleCents * int64(group.TotalCycles)
-	rateBps := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+
+	rateBps, err := uc.resolveTontineRateBps(ctx, group.ShopID, group.CircleType, logger)
+	if err != nil {
+		return fmt.Errorf("failed to resolve tontine rate: %w", err)
+	}
+
 	commissionCents := entity.CalculateCommission(grossCents, rateBps)
 	netCents := grossCents - commissionCents
 	if netCents < 0 {
@@ -397,9 +430,22 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 	voucher.HeldAmountCents = netCents
 
 	if err := uc.tontineVoucherRepo.Create(ctx, voucher); err != nil {
-		// Course concurrente : un autre worker a créé le bon
-		existingList, findErr := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
-		if findErr == nil && len(existingList) > 0 {
+		// ✅ CORRECTION PR4 : Ne traiter comme course concurrente que si c'est une violation d'unicité
+		if isUniqueViolation(err) {
+			existingList, findErr := uc.tontineVoucherRepo.FindByGroupAndCycle(ctx, groupID, cycleNumber)
+			if findErr != nil {
+				return fmt.Errorf("failed to check existing vouchers after unique violation: %w", findErr)
+			}
+			if len(existingList) == 0 {
+				return fmt.Errorf("unique violation but no existing voucher found: %w", err)
+			}
+
+			existingVoucher := existingList[0]
+			// Vérification stricte du voucher existant
+			if existingVoucher.GroupID != groupID || existingVoucher.CycleNumber != cycleNumber {
+				return fmt.Errorf("voucher collision mismatch: group or cycle mismatch")
+			}
+
 			logger.Warn().
 				Str("group_id", groupID).
 				Int("cycle", cycleNumber).
@@ -411,7 +457,6 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 				}
 			}
 
-			// 🛡️ A02 FIX : Propagation stricte de l'erreur
 			if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
 				return fmt.Errorf("failed to mark cycle commissions collected after voucher race: %w", err)
 			}
@@ -443,7 +488,6 @@ func (uc *ProcessTontineWebhookUsecase) ensureCycleSettled(
 			Msg("💰 Merchant wallet credited NET from tontine cycle (held until redeem)")
 	}
 
-	// 🛡️ A02 FIX : Propagation stricte de l'erreur de marquage des commissions
 	if err := uc.markCycleCommissionsCollected(ctx, groupID, cycleNumber); err != nil {
 		logger.Error().Err(err).Msg("Failed to mark cycle commissions collected on nominal path")
 		return fmt.Errorf("failed to mark cycle commissions collected: %w", err)
@@ -486,7 +530,6 @@ func (uc *ProcessTontineWebhookUsecase) advanceGroupCycle(ctx context.Context, g
 }
 
 // 🛡️ A02 FIX : markCycleCommissionsCollected retourne désormais une erreur.
-// Si la lecture ou la mise à jour échoue, l'erreur est propagée pour empêcher l'avancement du cycle.
 func (uc *ProcessTontineWebhookUsecase) markCycleCommissionsCollected(
 	ctx context.Context,
 	groupID string,
@@ -555,4 +598,15 @@ func generateVoucherCode(length int) (string, error) {
 		return "", err
 	}
 	return strings.ToUpper(hex.EncodeToString(bytes))[:length], nil
+}
+
+// isUniqueViolation détecte une violation de contrainte unique PostgreSQL (23505)
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "unique constraint") ||
+		strings.Contains(msg, "23505")
 }
