@@ -131,6 +131,11 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 		Int("duration_ms", int(duration.Milliseconds())).
 		Msg("Escrow auto-release completed")
 
+	// ✅ CORRECTION : Remonter une erreur si des échecs ont eu lieu pour la supervision
+	if failedCount > 0 {
+		return fmt.Errorf("auto-release completed with %d failures", failedCount)
+	}
+
 	return nil
 }
 
@@ -145,8 +150,8 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	}
 
 	var shopID string
-	var err error
 
+	// 1. Déterminer le shopID
 	if proof.OrderID != nil {
 		order, err := s.orderRepo.FindByIDAdmin(ctx, *proof.OrderID)
 		if err != nil {
@@ -158,6 +163,9 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		if err != nil {
 			return 0, fmt.Errorf("failed to find tontine voucher: %w", err)
 		}
+		if voucher == nil {
+			return 0, fmt.Errorf("tontine voucher not found")
+		}
 		shopID = voucher.ShopID
 	} else {
 		return 0, fmt.Errorf("proof has no valid reference (order or tontine voucher)")
@@ -165,22 +173,37 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger = itemLogger.With().Str("shop_id", shopID).Logger()
 
+	// 2. Récupérer l'escrow associé (avec propagation d'erreur stricte pour éviter ineffassign)
 	var escrow *entity.EscrowAccount
+	var err error
+
 	if proof.OrderID != nil {
 		escrow, err = s.escrowRepo.FindByOrderID(ctx, *proof.OrderID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find escrow by order: %w", err)
+		}
 	} else if proof.TontineVoucherID != nil {
-		voucher, _ := s.tontineVoucherRepo.FindByIDAdmin(ctx, *proof.TontineVoucherID)
-		if voucher != nil {
-			group, gErr := s.findTontineGroupByVoucher(ctx, voucher)
-			if gErr != nil {
-				return 0, fmt.Errorf("failed to find tontine group: %w", gErr)
-			}
-			escrow, err = s.escrowRepo.FindByTontineGroupID(ctx, group.ID)
+		voucher, err := s.tontineVoucherRepo.FindByIDAdmin(ctx, *proof.TontineVoucherID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find tontine voucher for escrow lookup: %w", err)
+		}
+		if voucher == nil {
+			return 0, fmt.Errorf("tontine voucher not found for escrow lookup")
+		}
+
+		group, err := s.findTontineGroupByVoucher(ctx, voucher)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find tontine group: %w", err)
+		}
+
+		escrow, err = s.escrowRepo.FindByTontineGroupID(ctx, group.ID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to find escrow by tontine group: %w", err)
 		}
 	}
 
-	if err != nil || escrow == nil {
-		return 0, fmt.Errorf("failed to find escrow account: %w", err)
+	if escrow == nil {
+		return 0, fmt.Errorf("failed to find escrow account")
 	}
 
 	itemLogger = itemLogger.With().
@@ -343,7 +366,8 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 
 	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
 	if err != nil {
-		if err.Error() == "merchant wallet not found" {
+		// ✅ CORRECTION (Cohérence PR1) : Utilisation de l'erreur sentinelle typée
+		if errors.Is(err, repository.ErrWalletNotFound) {
 			wallet = entity.NewMerchantWallet(shopID)
 			if err := s.walletRepo.WithTX(tx).Create(shopCtx, wallet); err != nil {
 				return fmt.Errorf("failed to create merchant wallet: %w", err)
