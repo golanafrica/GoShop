@@ -241,9 +241,17 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	// 🛡️ CAS ORDER : ClaimRelease + crédit dans la même TX (PR 2 Audit).
 	var lastErr error
+	var isIdempotentConflict bool
+
 	for attempt := 1; attempt <= s.maxRetries; attempt++ {
 		err := s.creditMerchantWallet(ctx, shopID, merchantAmount, escrow.CommissionCents, proof.ID, escrow.ID, escrow.Status)
 		if err != nil {
+			if strings.Contains(err.Error(), "unique constraint violation on marker") {
+				isIdempotentConflict = true
+				lastErr = err
+				break // On sort de la boucle pour vérifier le gagnant hors TX
+			}
+
 			lastErr = err
 			itemLogger.Warn().
 				Err(err).
@@ -256,6 +264,26 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		}
 		lastErr = nil
 		break
+	}
+
+	// ✅ CORRECTION P0-03 : Vérification du gagnant en cas de conflit d'unicité
+	if isIdempotentConflict {
+		itemLogger.Info().Msg("Verifying winning transaction after unique constraint conflict")
+		winner, wErr := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, "escrow_auto_release", proof.ID)
+		if wErr != nil {
+			return 0, fmt.Errorf("failed to verify winning transaction after conflict: %w", wErr)
+		}
+		if winner == nil || winner.Status != entity.WalletTxCompleted {
+			return 0, fmt.Errorf("unique conflict but no valid completed transaction found")
+		}
+
+		// Vérifier que le montant correspond (sécurité supplémentaire)
+		if winner.AmountCents != merchantAmount {
+			return 0, fmt.Errorf("unique conflict but amount mismatch (winner=%d, expected=%d)", winner.AmountCents, merchantAmount)
+		}
+
+		itemLogger.Info().Str("winner_txn_id", winner.ID).Msg("Idempotent success verified")
+		lastErr = nil // On considère que c'est un succès
 	}
 
 	if lastErr != nil {
@@ -401,10 +429,9 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 
 	if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, markerTxn); err != nil {
 		if isUniqueViolation(err) {
-			s.logger.Info().
-				Str("proof_id", proofID).
-				Msg("Unique constraint hit — wallet already credited concurrently")
-			return nil
+			// ✅ CORRECTION P0-03 : On retourne une erreur spécifique pour que le caller
+			// puisse rollback et vérifier la transaction gagnante hors de cette TX.
+			return fmt.Errorf("unique constraint violation on marker: %w", err)
 		}
 		return fmt.Errorf("failed to create wallet transaction marker: %w", err)
 	}

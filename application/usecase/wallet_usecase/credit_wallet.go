@@ -240,7 +240,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				return nil, fmt.Errorf("failed to check existing wallet transaction: %w", findErr)
 			}
 		} else if existing != nil && existing.Status == entity.WalletTxCompleted {
-			// Vérification stricte : Shop et Type doivent correspondre
+			// Vérification stricte : Shop, Type et Montant doivent correspondre
 			if err := assertIdempotentCreditMatch(existing, req); err != nil {
 				logger.Error().
 					Err(err).
@@ -353,8 +353,30 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
 	} else {
-		// Full sweep : pas de ligne credit ; l'idempotence repose sur debt_sweep + ref
-		txnID = ""
+		// ✅ CORRECTION P0-01 : Full sweep. On DOIT créer un marqueur idempotent
+		// avec la référence d'origine pour empêcher un double crédit lors d'un replay.
+		markerDesc := fmt.Sprintf("Crédit de %d FCFA intégralement absorbé par la dette", grossCents)
+		markerTxn := &entity.WalletTransaction{
+			ID:                uuid.New().String(),
+			ShopID:            req.ShopID,
+			TransactionType:   req.TransactionType,
+			AmountCents:       0, // Le net crédité au solde est de 0
+			BalanceAfterCents: wallet.BalanceCents,
+			ReferenceType:     req.ReferenceType,
+			ReferenceID:       req.ReferenceID,
+			Description:       &markerDesc,
+			Status:            entity.WalletTxCompleted,
+		}
+
+		if err := uc.txnRepo.WithTX(tx).Create(ctx, markerTxn); err != nil {
+			if isUniqueViolation(err) {
+				logger.Info().Msg("Unique constraint hit on debt sweep marker — already processed")
+			} else {
+				logger.Error().Err(err).Msg("Failed to create debt sweep marker transaction")
+				return nil, fmt.Errorf("failed to create debt sweep marker: %w", err)
+			}
+		}
+		txnID = markerTxn.ID
 	}
 
 	if swept > 0 {
@@ -388,10 +410,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				logger.Error().Err(err).Msg("Failed to create debt_sweep transaction")
 				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
 			}
-		}
-
-		if txnID == "" {
-			txnID = sweepTxn.ID
 		}
 	}
 
@@ -593,7 +611,7 @@ func isUniqueViolation(err error) bool {
 }
 
 // assertIdempotentCreditMatch vérifie que la réutilisation d'une référence
-// correspond bien à la même opération métier (même shop, même type).
+// correspond bien à la même opération métier (même shop, même type, même montant).
 func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
 	if existing.ShopID != req.ShopID {
 		return fmt.Errorf("idempotency conflict: shop_id mismatch")
@@ -601,8 +619,9 @@ func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *Credit
 	if existing.TransactionType != req.TransactionType {
 		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
 	}
-	// Note : Le montant net peut varier légèrement en cas de debt_sweep partiel.
-	// Pour une sécurité maximale, on s'assure au moins que le type et le shop correspondent.
-	// Un durcissement sur le montant exact pourra être ajouté en Phase A14 (Réconciliation).
+	// ✅ CORRECTION P0-02 : Vérification stricte du montant
+	if existing.AmountCents != req.AmountCents {
+		return fmt.Errorf("idempotency conflict: amount mismatch (existing=%d, requested=%d)", existing.AmountCents, req.AmountCents)
+	}
 	return nil
 }
