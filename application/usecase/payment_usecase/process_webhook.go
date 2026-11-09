@@ -100,7 +100,7 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	// 🛡️ A05 FIX : Defer robuste qui gère la finalisation ou l'échec en fonction de l'état de 'err'
 	defer func() {
 		if err != nil {
-			// Le traitement métier a échoué. On tente de marquer l'inbox comme échouée.
+			// Le traitement métier a échoué. On tente de marquer l'inbox comme échouée pour libérer le claim.
 			if event != nil && claimID != "" {
 				if markErr := uc.markWebhookFailed(ctx, providerCode, event, err.Error(), claimID); markErr != nil {
 					logger.Error().Err(markErr).Str("external_id", event.ExternalID).
@@ -518,7 +518,7 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
-// 🛡️ PR 3 AUDIT : Claim atomique avec propriété stricte. Retourne le claimID généré.
+// 🛡️ PR 5 AUDIT : Claim atomique avec propriété stricte et mise à jour du bail (claimed_at).
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -553,6 +553,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 			processing_error = 'PROCESSING',
 			processed = false,
 			claim_id = $7,
+			claimed_at = NOW(), -- ✅ CORRECTION : Réinitialise le bail pour le nouveau worker
 			payload = EXCLUDED.payload,
 			signature = EXCLUDED.signature,
 			signature_validated = EXCLUDED.signature_validated
@@ -580,7 +581,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	return claimID, nil
 }
 
-// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de finaliser.
+// 🛡️ PR 5 AUDIT : Vérifie que le claimID correspond toujours avant de finaliser.
 func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
@@ -606,7 +607,7 @@ func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provi
 	return nil
 }
 
-// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de libérer.
+// 🛡️ PR 5 AUDIT : Vérifie que le claimID correspond toujours avant de libérer en cas d'échec.
 func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, errMsg string, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
@@ -645,6 +646,3 @@ func truncateErr(s string, max int) string {
 	}
 	return s[:max]
 }
-
-// NOTE: La fonction metaString a été supprimée d'ici car elle est déjà définie
-// dans apply_payin_channel.go dans le même package.
