@@ -68,20 +68,34 @@ func (s *WalletGraceExpiryScheduler) Run() {
 		return
 	}
 
-	policy, _ := s.getConfigString(ctx, configKeyPolicy)
+	// ✅ CORRECTION PR7 : Vérifier les erreurs de configuration au lieu de les ignorer silencieusement
+	policy, err := s.getConfigString(ctx, configKeyPolicy)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read policy config from DB, skipping")
+		return
+	}
 	if policy == "" {
 		policy = "alert_only"
 	}
-	maxPerRun, _ := s.getConfigInt(ctx, configKeyMaxPerRun)
+
+	maxPerRun, err := s.getConfigInt(ctx, configKeyMaxPerRun)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read max_per_run config from DB, skipping")
+		return
+	}
 	if maxPerRun <= 0 {
 		maxPerRun = defaultMaxPerRun
 	}
-	pageSize, _ := s.getConfigInt(ctx, configKeyBatchSize)
+
+	pageSize, err := s.getConfigInt(ctx, configKeyBatchSize)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read batch_size config from DB, skipping")
+		return
+	}
 	if pageSize <= 0 {
 		pageSize = defaultPageSize
 	}
 
-	// 🛡️ A07 FIX : Ajout de l'acteur "system_cron"
 	runID, err := s.createJobRun(ctx, "scheduled", "live", "system_cron")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create job run record")
@@ -112,7 +126,7 @@ func (s *WalletGraceExpiryScheduler) Run() {
 	s.executeJobRun(ctx, runID, "live", policy, maxPerRun, pageSize)
 }
 
-// 🛡️ A07 FIX : Retourne le runID et lance l'exécution en arrière-plan avec un contexte limité dans le temps.
+// RunManual retourne le runID et lance l'exécution en arrière-plan avec un contexte limité dans le temps.
 func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string, actor string) (string, error) {
 	log := s.logger.With().Str("mode", mode).Str("actor", actor).Logger()
 	log.Info().Msg("🔧 Starting MANUAL wallet grace expiry job")
@@ -133,15 +147,33 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string,
 	go func() {
 		defer cancel()
 
-		policy, _ := s.getConfigString(workCtx, configKeyPolicy)
+		// ✅ CORRECTION PR7 : Vérifier les erreurs de configuration en mode manuel aussi
+		policy, err := s.getConfigString(workCtx, configKeyPolicy)
+		if err != nil {
+			s.logger.Error().Err(err).Msg("Failed to read policy config from DB for manual run")
+			s.finishJobRun(workCtx, runID, 0, 0, 0, err.Error())
+			return
+		}
 		if policy == "" {
 			policy = "alert_only"
 		}
-		maxPerRun, _ := s.getConfigInt(workCtx, configKeyMaxPerRun)
+
+		maxPerRun, err := s.getConfigInt(workCtx, configKeyMaxPerRun)
+		if err != nil {
+			s.logger.Error().Err(err).Msg("Failed to read max_per_run config from DB for manual run")
+			s.finishJobRun(workCtx, runID, 0, 0, 0, err.Error())
+			return
+		}
 		if maxPerRun <= 0 {
 			maxPerRun = defaultMaxPerRun
 		}
-		pageSize, _ := s.getConfigInt(workCtx, configKeyBatchSize)
+
+		pageSize, err := s.getConfigInt(workCtx, configKeyBatchSize)
+		if err != nil {
+			s.logger.Error().Err(err).Msg("Failed to read batch_size config from DB for manual run")
+			s.finishJobRun(workCtx, runID, 0, 0, 0, err.Error())
+			return
+		}
 		if pageSize <= 0 {
 			pageSize = defaultPageSize
 		}
@@ -152,7 +184,7 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string,
 	return runID, nil
 }
 
-// executeJobRun contient la logique réelle d'exécution (extraite pour être réutilisée par Run et RunManual)
+// executeJobRun contient la logique réelle d'exécution
 func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID string, mode string, policy string, maxPerRun int, pageSize int) {
 	log := s.logger.With().Str("run_id", runID).Str("mode", mode).Logger()
 
@@ -235,6 +267,15 @@ func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID st
 func (s *WalletGraceExpiryScheduler) processExpiredWallet(ctx context.Context, runID string, wallet *entity.MerchantWallet, policy string) error {
 	log := s.logger.With().Str("shop_id", wallet.ShopID).Logger()
 
+	// ✅ CORRECTION PR7 CRITIQUE : Envoyer la notification AVANT d'enregistrer l'action.
+	// Si la notification échoue, on retourne une erreur pour que le job réessaie au prochain run.
+	// Cela évite qu'une notification perdue ne soit jamais retracée à cause de l'idempotence (isAlreadyProcessed).
+	if policy == "alert_only" {
+		if err := s.notifyAdmin(ctx, wallet); err != nil {
+			return fmt.Errorf("failed to notify admin, aborting action recording to allow retry: %w", err)
+		}
+	}
+
 	if err := s.insertJobAction(ctx, runID, wallet.ShopID, wallet.FrozenUntil, "grace_expired_detected", policy); err != nil {
 		return fmt.Errorf("failed to insert job action: %w", err)
 	}
@@ -243,19 +284,15 @@ func (s *WalletGraceExpiryScheduler) processExpiredWallet(ctx context.Context, r
 		Interface("frozen_until", wallet.FrozenUntil).
 		Int64("debt_cents", wallet.DebtCents).
 		Str("policy", policy).
-		Msg("🚨 Wallet grace period expired")
-
-	if policy == "alert_only" {
-		s.notifyAdmin(ctx, wallet)
-	}
+		Msg("🚨 Wallet grace period expired and processed")
 
 	return nil
 }
 
-func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *entity.MerchantWallet) {
+func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *entity.MerchantWallet) error {
 	if s.notifService == nil {
 		s.logger.Warn().Msg("Notification service not available, skipping admin notification")
-		return
+		return nil
 	}
 
 	frozenUntilStr := "unknown"
@@ -282,9 +319,11 @@ func (s *WalletGraceExpiryScheduler) notifyAdmin(ctx context.Context, wallet *en
 
 	if err := s.notifService.SendNotification(ctx, req); err != nil {
 		s.logger.Error().Err(err).Str("shop_id", wallet.ShopID).Msg("Failed to send admin notification for expired grace period")
-	} else {
-		s.logger.Info().Str("shop_id", wallet.ShopID).Msg("📧 Admin notification sent successfully for expired grace period")
+		return fmt.Errorf("failed to send notification: %w", err)
 	}
+
+	s.logger.Info().Str("shop_id", wallet.ShopID).Msg("📧 Admin notification sent successfully for expired grace period")
+	return nil
 }
 
 func (s *WalletGraceExpiryScheduler) getConfigBool(ctx context.Context, key string) (bool, error) {
@@ -338,9 +377,6 @@ func (s *WalletGraceExpiryScheduler) getConfigInt(ctx context.Context, key strin
 	return num, nil
 }
 
-// 🛡️ A07 FIX : Ajout du paramètre 'actor' pour la traçabilité.
-// NOTE: Si ta table n'a pas encore la colonne 'triggered_by', exécute :
-// ALTER TABLE wallet_freeze_job_runs ADD COLUMN triggered_by VARCHAR(255);
 func (s *WalletGraceExpiryScheduler) createJobRun(ctx context.Context, runType, mode, actor string) (string, error) {
 	query := `
 		INSERT INTO wallet_freeze_job_runs (run_type, mode, triggered_by, started_at) 
