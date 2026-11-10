@@ -177,8 +177,11 @@ func (h *SchedulerHandler) TriggerCompensationPending(w http.ResponseWriter, r *
 		Str("executed_by", executedBy).
 		Msg("Manual compensation_pending job triggered")
 
-	// Exécution synchrone pour le E2E et le debug admin
-	h.compensationPendingSched.Run()
+	// ✅ CORRECTION : Passage du contexte à la méthode Run
+	if err := h.compensationPendingSched.Run(ctx); err != nil {
+		logger.Error().Err(err).Msg("Compensation pending job failed")
+		return utils.NewAppError("COMPENSATION_JOB_FAILED", err.Error(), http.StatusInternalServerError)
+	}
 
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"success":     true,
