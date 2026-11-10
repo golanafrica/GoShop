@@ -203,30 +203,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	// ============================================================
-	// CALCUL PRÉCOCE : Nécessaire pour la vérification d'idempotence stricte
-	// ============================================================
-	previousBalance := wallet.BalanceCents
-	grossCents := req.AmountCents
-	var netToBalance int64
-	var swept int64
-
-	if req.HoldAfterCredit {
-		if err := wallet.CreditAndHold(grossCents); err != nil {
-			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
-			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
-		}
-		netToBalance = grossCents
-		swept = 0
-	} else {
-		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
-		if err != nil {
-			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
-			return nil, fmt.Errorf("failed to credit wallet: %w", err)
-		}
-	}
-
-	// ============================================================
-	// ✅ W1 FIX : IDEMPOTENCE STRICTE AVEC VÉRIFICATION MÉTIER
+	// ✅ W1 FIX : IDEMPOTENCE STRICTE AVANT toute mutation mémoire
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
@@ -240,7 +217,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				return nil, fmt.Errorf("failed to check existing wallet transaction: %w", findErr)
 			}
 		} else if existing != nil && existing.Status == entity.WalletTxCompleted {
-			// Vérification stricte : Shop, Type et Montant doivent correspondre
 			if err := assertIdempotentCreditMatch(existing, req); err != nil {
 				logger.Error().
 					Err(err).
@@ -260,6 +236,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				_ = tx.Rollback()
 				return nil, fmt.Errorf("failed to commit after idempotent skip: %w", err)
 			}
+			// Soldes du wallet chargé (non muté) + txn existante
 			return &CreditWalletResponse{
 				ShopID:            wallet.ShopID,
 				BalanceCents:      wallet.BalanceCents,
@@ -273,6 +250,29 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 				BalanceAfterCents: existing.BalanceAfterCents,
 				Held:              req.HoldAfterCredit,
 			}, nil
+		}
+	}
+
+	// ============================================================
+	// CRÉDIT MÉMOIRE (uniquement si pas de skip idempotent)
+	// ============================================================
+	previousBalance := wallet.BalanceCents
+	grossCents := req.AmountCents
+	var netToBalance int64
+	var swept int64
+
+	if req.HoldAfterCredit {
+		if err := wallet.CreditAndHold(grossCents); err != nil {
+			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
+			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
+		}
+		netToBalance = grossCents
+		swept = 0
+	} else {
+		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
+		if err != nil {
+			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
+			return nil, fmt.Errorf("failed to credit wallet: %w", err)
 		}
 	}
 
