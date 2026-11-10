@@ -21,11 +21,11 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 //
-// Anti race multi-instance & Atomicité (PR 2 Audit) :
+// Anti race multi-instance & Atomicité (PR 2 Audit & PR-A) :
 //  1. Pour les Tontines : ClaimRelease immédiat (le crédit wallet est géré ailleurs et est idempotent).
 //  2. Pour les Orders : ClaimRelease + Commission + Ledger + Wallet.Update dans UNE SEULE transaction SQL.
 //     → Plus de divergence comptable en cas de panne. Si le crédit échoue, le claim est rollbacké.
-//  3. FindByReferenceIDAdmin avant crédit pour l'idempotence.
+//  3. FindByReferenceIDAdmin avant crédit pour l'idempotence (Fail-closed sur erreur SQL).
 //  4. Si claim déjà fait ailleurs mais ledger absent → reprise du crédit uniquement (orphan recovery).
 //  5. Échec de Update(delivery_proof) après claim/crédit → erreur visible (pas de faux succès).
 // ============================================================
@@ -131,7 +131,6 @@ func (s *EscrowAutoReleaseScheduler) RunAutoRelease(ctx context.Context) error {
 		Int("duration_ms", int(duration.Milliseconds())).
 		Msg("Escrow auto-release completed")
 
-	// ✅ CORRECTION : Remonter une erreur si des échecs ont eu lieu pour la supervision
 	if failedCount > 0 {
 		return fmt.Errorf("auto-release completed with %d failures", failedCount)
 	}
@@ -151,7 +150,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	var shopID string
 
-	// 1. Déterminer le shopID
 	if proof.OrderID != nil {
 		order, err := s.orderRepo.FindByIDAdmin(ctx, *proof.OrderID)
 		if err != nil {
@@ -173,7 +171,6 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	itemLogger = itemLogger.With().Str("shop_id", shopID).Logger()
 
-	// 2. Récupérer l'escrow associé (avec propagation d'erreur stricte pour éviter ineffassign)
 	var escrow *entity.EscrowAccount
 	var err error
 
@@ -239,7 +236,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return merchantAmount, nil
 	}
 
-	// 🛡️ CAS ORDER : ClaimRelease + crédit dans la même TX (PR 2 Audit).
+	// 🛡️ CAS ORDER : ClaimRelease + crédit dans la même TX.
 	var lastErr error
 	var isIdempotentConflict bool
 
@@ -249,7 +246,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 			if strings.Contains(err.Error(), "unique constraint violation on marker") {
 				isIdempotentConflict = true
 				lastErr = err
-				break // On sort de la boucle pour vérifier le gagnant hors TX
+				break
 			}
 
 			lastErr = err
@@ -266,24 +263,26 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		break
 	}
 
-	// ✅ CORRECTION P0-03 : Vérification du gagnant en cas de conflit d'unicité
 	if isIdempotentConflict {
 		itemLogger.Info().Msg("Verifying winning transaction after unique constraint conflict")
 		winner, wErr := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, "escrow_auto_release", proof.ID)
 		if wErr != nil {
-			return 0, fmt.Errorf("failed to verify winning transaction after conflict: %w", wErr)
+			// Fail-closed sur la relecture du gagnant
+			if !errors.Is(wErr, repository.ErrWalletTransactionNotFound) {
+				return 0, fmt.Errorf("failed to verify winning transaction after conflict (DB error): %w", wErr)
+			}
+			return 0, fmt.Errorf("unique conflict but winning transaction not found: %w", wErr)
 		}
 		if winner == nil || winner.Status != entity.WalletTxCompleted {
 			return 0, fmt.Errorf("unique conflict but no valid completed transaction found")
 		}
 
-		// Vérifier que le montant correspond (sécurité supplémentaire)
 		if winner.AmountCents != merchantAmount {
 			return 0, fmt.Errorf("unique conflict but amount mismatch (winner=%d, expected=%d)", winner.AmountCents, merchantAmount)
 		}
 
 		itemLogger.Info().Str("winner_txn_id", winner.ID).Msg("Idempotent success verified")
-		lastErr = nil // On considère que c'est un succès
+		lastErr = nil
 	}
 
 	if lastErr != nil {
@@ -308,8 +307,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 	return merchantAmount, nil
 }
 
-// creditMerchantWallet exécute ClaimRelease + commission + crédit wallet dans une TX.
-// Si claim déjà fait ailleurs mais ledger absent → reprise crédit uniquement (orphan recovery).
+// creditMerchantWallet exécute ClaimRelease + commission + crédit wallet dans UNE SEULE TX.
 func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	ctx context.Context,
 	shopID string,
@@ -325,8 +323,15 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		return fmt.Errorf("txManager is required for atomic escrow wallet credit (proof=%s)", proofID)
 	}
 
+	// ✅ A1 FIX : Fail-closed sur la relecture initiale.
+	// Une erreur SQL (timeout, perte de connexion) ne doit JAMAIS être interprétée comme une absence de transaction.
 	existing, err := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
-	if err == nil && existing != nil {
+	if err != nil {
+		if !errors.Is(err, repository.ErrWalletTransactionNotFound) {
+			return fmt.Errorf("failed to check existing wallet transaction (DB error): %w", err)
+		}
+		// ErrWalletTransactionNotFound confirmé : pas de transaction existante, on peut continuer.
+	} else if existing != nil {
 		s.logger.Info().
 			Str("proof_id", proofID).
 			Str("existing_txn_id", existing.ID).
@@ -359,9 +364,15 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	if err != nil {
 		return fmt.Errorf("claim release failed in tx: %w", err)
 	}
+
 	if !claimed {
+		// ✅ A2 FIX : Fail-closed sur la relecture après échec de claim.
 		existingRetry, errRetry := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
-		if errRetry == nil && existingRetry != nil {
+		if errRetry != nil {
+			if !errors.Is(errRetry, repository.ErrWalletTransactionNotFound) {
+				return fmt.Errorf("failed to re-check wallet transaction after claim failure (DB error): %w", errRetry)
+			}
+		} else if existingRetry != nil {
 			s.logger.Info().
 				Str("proof_id", proofID).
 				Msg("Escrow already claimed and wallet already credited — skip")
@@ -370,22 +381,26 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		s.logger.Warn().
 			Str("proof_id", proofID).
 			Str("escrow_id", escrowID).
-			Msg("Escrow already claimed but wallet NOT credited — recovering credit only")
+			Msg("Escrow already claimed but wallet NOT credited — recovering credit only (orphan recovery)")
 	}
 
+	// ✅ A3 FIX : Atomicité stricte de la commission.
+	// La commission DOIT être créditée dans la même transaction que le wallet.
 	if commissionCents > 0 && s.platformRevenueRepo != nil {
 		const commRefType = "escrow_auto_release_commission"
-		if txRepo, ok := s.platformRevenueRepo.(interface {
+
+		txRepo, ok := s.platformRevenueRepo.(interface {
 			WithTx(repository.Tx) repository.PlatformRevenueRepository
-		}); ok {
-			if err := txRepo.WithTx(tx).CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
-				return fmt.Errorf("failed to credit platform commission: %w", err)
-			}
-		} else {
-			if err := s.platformRevenueRepo.CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
-				return fmt.Errorf("failed to credit platform commission: %w", err)
-			}
+		})
+		if !ok {
+			// Échec explicite pour éviter une divergence comptable (crédit hors TX)
+			return fmt.Errorf("platform revenue repository does not support WithTx, aborting to prevent accounting divergence (proof=%s)", proofID)
 		}
+
+		if err := txRepo.WithTx(tx).CreditRevenue(ctx, commissionCents, commRefType, proofID); err != nil {
+			return fmt.Errorf("failed to credit platform commission in tx: %w", err)
+		}
+
 		s.logger.Info().
 			Str("proof_id", proofID).
 			Int64("commission_cents", commissionCents).
@@ -394,7 +409,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 
 	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
 	if err != nil {
-		// ✅ CORRECTION (Cohérence PR1) : Utilisation de l'erreur sentinelle typée
 		if errors.Is(err, repository.ErrWalletNotFound) {
 			wallet = entity.NewMerchantWallet(shopID)
 			if err := s.walletRepo.WithTX(tx).Create(shopCtx, wallet); err != nil {
@@ -429,8 +443,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 
 	if err := s.walletTxnRepo.WithTX(tx).Create(shopCtx, markerTxn); err != nil {
 		if isUniqueViolation(err) {
-			// ✅ CORRECTION P0-03 : On retourne une erreur spécifique pour que le caller
-			// puisse rollback et vérifier la transaction gagnante hors de cette TX.
 			return fmt.Errorf("unique constraint violation on marker: %w", err)
 		}
 		return fmt.Errorf("failed to create wallet transaction marker: %w", err)
