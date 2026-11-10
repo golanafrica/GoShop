@@ -57,51 +57,52 @@ func NewCompensationPendingScheduler(
 }
 
 // Run - point d'entree cron.
-func (s *CompensationPendingScheduler) Run() {
-	ctx := context.Background()
+func (s *CompensationPendingScheduler) Run(ctx context.Context) error {
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
 	log.Info().Msg("Starting compensation_pending retry job")
 
 	if os.Getenv("COMPENSATION_JOB_HARD_DISABLED") == "true" {
 		log.Warn().Msg("Job hard disabled via COMPENSATION_JOB_HARD_DISABLED=true, skipping")
-		return
+		return nil
 	}
 	if s.creditWalletUC == nil {
 		log.Error().Msg("creditWalletUC not configured, aborting")
-		return
+		return fmt.Errorf("creditWalletUC not configured")
 	}
 	if s.withdrawalRepo == nil {
 		log.Error().Msg("withdrawalRepo not configured, aborting")
-		return
+		return fmt.Errorf("withdrawalRepo not configured")
 	}
 
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to acquire DB conn for advisory lock")
-		return
+		return fmt.Errorf("failed to acquire DB conn: %w", err)
 	}
 	defer conn.Close()
 
 	acquired, err := s.tryLock(ctx, conn)
 	if err != nil {
 		log.Error().Err(err).Msg("Advisory lock error")
-		return
+		return fmt.Errorf("advisory lock error: %w", err)
 	}
 	if !acquired {
 		log.Info().Msg("Another instance holds the lock, skipping")
-		return
+		return nil
 	}
 	defer s.unlock(ctx, conn)
 
 	items, err := s.withdrawalRepo.FindCompensationPending(ctx, s.maxPerRun, s.maxAttempts)
 	if err != nil {
 		log.Error().Err(err).Msg("FindCompensationPending failed")
-		return
+		return fmt.Errorf("FindCompensationPending failed: %w", err)
 	}
 
 	log.Info().Int("count", len(items)).Msg("Loaded compensation_pending withdrawals")
 
 	resolved, failed, skipped := 0, 0, 0
+	var jobErrs []error
+
 	for _, w := range items {
 		if s.tooRecent(w) {
 			skipped++
@@ -115,6 +116,7 @@ func (s *CompensationPendingScheduler) Run() {
 				Int("attempts", w.CompensationAttempts).
 				Msg("Compensation retry failed")
 			failed++
+			jobErrs = append(jobErrs, fmt.Errorf("withdrawal %s: %w", w.ID, err))
 			continue
 		}
 		resolved++
@@ -125,6 +127,13 @@ func (s *CompensationPendingScheduler) Run() {
 		Int("failed", failed).
 		Int("skipped", skipped).
 		Msg("Compensation_pending job completed")
+
+	// ✅ CORRECTION P1 : Remonter une erreur agrégée si des échecs de persistance ou de traitement ont eu lieu
+	if len(jobErrs) > 0 {
+		return fmt.Errorf("compensation job completed with %d failures", len(jobErrs))
+	}
+
+	return nil
 }
 
 func (s *CompensationPendingScheduler) tooRecent(w *entity.Withdrawal) bool {
@@ -140,14 +149,11 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		Str("shop_id", w.ShopID.String()).
 		Logger()
 
-	// 🛡️ CORRECTION CRITIQUE : Le CreditWalletUsecase exige un contexte avec un tenant.
-	// Nous devons reconstruire un contexte valide à partir du ShopID du retrait.
 	shopUUID, err := uuid.Parse(w.ShopID.String())
 	if err != nil {
 		return fmt.Errorf("invalid shop UUID in withdrawal: %w", err)
 	}
 
-	// On crée un objet Shop minimal juste pour satisfaire le middleware de tenant
 	shop := &entity.Shop{ID: shopUUID}
 	shopCtx := tenant.WithTenant(ctx, shop)
 
@@ -155,7 +161,6 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	refID := w.ID.String()
 	desc := fmt.Sprintf("Compensation retry reverse for withdrawal %s", w.ID.String())
 
-	// 🛡️ On utilise shopCtx au lieu de ctx pour que le repository accepte la requête
 	_, err = s.creditWalletUC.Execute(shopCtx, &walletusecase.CreditWalletRequest{
 		ShopID:          w.ShopID.String(),
 		AmountCents:     w.AmountCents,
@@ -167,29 +172,28 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	})
 
 	if err != nil {
-		// Si la méthode RecordCompensationAttempt n'existe pas sur ton entité,
-		// remplace ces 2 lignes par :
-		// w.CompensationAttempts++
-		// now := time.Now().UTC()
-		// w.LastCompensationAt = &now
-		// reason := fmt.Sprintf("Retry failed: %v", err)
-		// w.FailureReason = &reason
+		// Enregistrer la tentative d'échec
+		w.RecordCompensationAttempt(err.Error())
 
-		w.RecordCompensationAttempt(err.Error()) // (Si cette méthode existe dans ton entity/withdrawal.go)
-
+		// ✅ CORRECTION P1 CRITIQUE : Si la persistance échoue, on DOIT retourner une erreur.
+		// Sinon, le compteur de tentatives en base ne s'incrémente pas, et l'alerte maxAttempts
+		// ne se déclenchera jamais, créant une boucle infinie silencieuse.
 		if updErr := s.withdrawalRepo.Update(ctx, w); updErr != nil {
-			log.Error().Err(updErr).Msg("Failed to persist compensation attempt")
+			log.Error().Err(updErr).Msg("CRITICAL: Failed to persist compensation attempt")
+			return fmt.Errorf("failed to persist compensation attempt for %s: %w", w.ID, updErr)
 		}
+
 		if w.CompensationAttempts >= s.maxAttempts {
 			s.alertAdmin(ctx, w, err)
 		}
-		return fmt.Errorf("credit reverse: %w", err)
+		return fmt.Errorf("credit reverse failed: %w", err)
 	}
 
 	msg := "compensation resolved by retry job (payout reverse applied)"
 	if markErr := w.MarkFailed(msg); markErr != nil {
 		return fmt.Errorf("mark failed after reverse: %w", markErr)
 	}
+
 	if updErr := s.withdrawalRepo.Update(ctx, w); updErr != nil {
 		return fmt.Errorf("update after resolve: %w", updErr)
 	}

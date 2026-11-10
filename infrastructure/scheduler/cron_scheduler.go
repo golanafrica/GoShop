@@ -204,6 +204,7 @@ func (s *CronScheduler) Start() error {
 	if s.walletGraceExpirySched != nil {
 		_, err = s.cron.AddFunc(s.walletGraceExpirySchedule, func() {
 			s.logger.Info().Msg("Cron trigger: Wallet grace expiry check")
+			// ✅ CORRECTION : Run() ne prend pas d'argument et ne retourne pas d'erreur ici
 			s.walletGraceExpirySched.Run()
 		})
 		if err != nil {
@@ -215,7 +216,10 @@ func (s *CronScheduler) Start() error {
 	if s.compensationPendingSched != nil {
 		_, err = s.cron.AddFunc(s.compensationPendingSchedule, func() {
 			s.logger.Info().Msg("Cron trigger: Compensation pending retry")
-			s.compensationPendingSched.Run()
+			ctx := context.Background()
+			if err := s.compensationPendingSched.Run(ctx); err != nil {
+				s.logger.Error().Err(err).Msg("Compensation pending retry failed")
+			}
 		})
 		if err != nil {
 			return err
@@ -283,5 +287,8 @@ func (s *CronScheduler) RunCompensationPendingNow() {
 		s.logger.Warn().Msg("compensationPendingSched is nil, skip")
 		return
 	}
-	s.compensationPendingSched.Run()
+	ctx := context.Background()
+	if err := s.compensationPendingSched.Run(ctx); err != nil {
+		s.logger.Error().Err(err).Msg("Compensation pending manual run failed")
+	}
 }

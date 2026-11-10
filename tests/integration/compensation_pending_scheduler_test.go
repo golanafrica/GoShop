@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 
 	"Goshop/application/scheduler"
@@ -114,9 +115,11 @@ func TestCompensationScheduler_IdempotenceOnCrash(t *testing.T) {
 	`, withdrawalID, shopID, withdrawalAmount)
 	require.NoError(t, err, "seed withdrawal compensation_pending")
 
+	ctx := context.Background()
+
 	// --- Run 1 : crédit reverse ---
 	t.Log("🔄 Exécution 1 du scheduler (crédit réussi)")
-	compSched.Run()
+	_ = compSched.Run(ctx)
 
 	var balanceAfterFirstRun int64
 	err = server.DB.QueryRow(
@@ -158,7 +161,7 @@ func TestCompensationScheduler_IdempotenceOnCrash(t *testing.T) {
 
 	// --- Run 2 : retry idempotent ---
 	t.Log("🔄 Exécution 2 du scheduler (retry après crash)")
-	compSched.Run()
+	_ = compSched.Run(ctx)
 
 	var balanceAfterSecondRun int64
 	err = server.DB.QueryRow(

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"Goshop/domain/repository"
@@ -39,10 +40,13 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 	stuckWithdrawals, err := s.withdrawalRepo.FindStuckPendingWithdrawals(ctx, s.maxPerRun, s.minAgeMinutes)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to find stuck withdrawals")
-		return err
+		return fmt.Errorf("failed to find stuck withdrawals: %w", err)
 	}
 
 	log.Info().Int("count", len(stuckWithdrawals)).Msg("Found stuck pending withdrawals")
+
+	var jobErrs []error
+	successCount := 0
 
 	for _, w := range stuckWithdrawals {
 		log.Warn().
@@ -51,8 +55,6 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 			Msg("CRITICAL: Withdrawal is stuck. Flagging for manual reconciliation (NO AUTO REVERSE).")
 
 		// 🛡️ Transition atomique : pending|processing → reconciliation_required
-		// Ignore si le statut a déjà changé (webhook concurrent / autre job).
-		// Aucun reverse automatique — vérification manuelle uniquement.
 		reason := "stuck_pending_manual_review"
 		ok, err := s.withdrawalRepo.TransitionToReconciliationRequired(ctx, w.ID, reason)
 		if err != nil {
@@ -60,6 +62,7 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 				Err(err).
 				Str("withdrawal_id", w.ID.String()).
 				Msg("Failed to transition withdrawal to reconciliation_required")
+			jobErrs = append(jobErrs, fmt.Errorf("withdrawal %s transition failed: %w", w.ID, err))
 			continue
 		}
 		if !ok {
@@ -68,6 +71,7 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 				Msg("Skipped: status already changed (webhook or concurrent job)")
 			continue
 		}
+		successCount++
 
 		// Alerte Admin pour vérification manuelle du dashboard prestataire
 		if s.notifService != nil {
@@ -82,10 +86,20 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 			}
 			if sendErr := s.notifService.SendNotification(ctx, req); sendErr != nil {
 				log.Error().Err(sendErr).Msg("Failed to send admin reconciliation alert")
+				// On n'ajoute pas sendErr aux jobErrs critiques car la transition DB a réussi
 			}
 		}
 	}
 
-	log.Info().Msg("Withdrawal reconciliation job completed")
+	log.Info().
+		Int("processed", successCount).
+		Int("errors", len(jobErrs)).
+		Msg("Withdrawal reconciliation job completed")
+
+	// ✅ CORRECTION P1 : Remonter une erreur si des échecs ont eu lieu pour la supervision
+	if len(jobErrs) > 0 {
+		return fmt.Errorf("withdrawal reconciliation job completed with %d errors", len(jobErrs))
+	}
+
 	return nil
 }
