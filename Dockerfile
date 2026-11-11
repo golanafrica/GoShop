@@ -2,7 +2,7 @@
 # STAGE 1 : BUILD
 # ==================================================================
 # Utilisation de Go 1.26.9 pour correspondre exactement au go.mod
-FROM golang:1.26.10-alpine AS builder
+FROM golang:1.26.11-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
