@@ -97,10 +97,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	var event *payment.WebhookEvent
 	var claimID string
 
-	// 🛡️ A05 FIX : Defer robuste qui gère la finalisation ou l'échec en fonction de l'état de 'err'
 	defer func() {
 		if err != nil {
-			// Le traitement métier a échoué. On tente de marquer l'inbox comme échouée pour libérer le claim.
 			if event != nil && claimID != "" {
 				if markErr := uc.markWebhookFailed(ctx, providerCode, event, err.Error(), claimID); markErr != nil {
 					logger.Error().Err(markErr).Str("external_id", event.ExternalID).
@@ -110,13 +108,10 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			return
 		}
 
-		// Le traitement métier a réussi (err == nil). On tente de marquer l'inbox comme traitée.
 		if event != nil && claimID != "" {
 			if markErr := uc.markWebhookProcessed(ctx, providerCode, event, claimID); markErr != nil {
 				logger.Error().Err(markErr).Str("external_id", event.ExternalID).
 					Msg("CRITICAL: webhook business OK but markWebhookProcessed failed — returning error to trigger provider retry")
-				// On modifie la valeur de retour pour forcer un code HTTP 500, incitant le fournisseur à rejouer.
-				// La rejoue sera gérée en toute sécurité grâce aux vérifications d'idempotence (IsTerminal, escrowAlreadyCreated).
 				err = fmt.Errorf("webhook business OK but markWebhookProcessed failed: %w", markErr)
 			}
 		}
@@ -159,7 +154,8 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	paymentEntity, matchedBy, findErr := uc.resolvePaymentFromWebhookEvent(ctx, providerCode, event, logger)
+	// ✅ CORRECTION : Suppression du paramètre logger inutile ici
+	paymentEntity, matchedBy, findErr := uc.resolvePaymentFromWebhookEvent(ctx, providerCode, event)
 	if findErr != nil || paymentEntity == nil {
 		logger.Warn().
 			Err(findErr).
@@ -359,64 +355,76 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	return nil
 }
 
+// ✅ PR-B FIX : Matching fail-closed. Propage les erreurs DB, ne fallback que sur "not found" confirmé.
+// ✅ CORRECTION : Paramètre logger supprimé car non utilisé (l'erreur est loguée par l'appelant).
 func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	ctx context.Context,
 	providerCode entity.PaymentProvider,
 	event *payment.WebhookEvent,
-	logger *zerolog.Logger,
 ) (*entity.Payment, string, error) {
+
+	// Helper interne qui propage les erreurs DB réelles.
 	tryRef := func(ref, label string) (*entity.Payment, string, error) {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
 			return nil, "", nil
 		}
 		p, err := uc.paymentRepo.FindByProviderRef(ctx, providerCode, ref)
-		if err == nil && p != nil {
+		if err != nil {
+			// Si c'est une vraie erreur DB (pas juste "not found"), on propage pour fail-closed
+			if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+				return nil, "", fmt.Errorf("DB error looking up %s: %w", label, err)
+			}
+			return nil, "", nil // Not found confirmé, autorise le fallback
+		}
+		if p != nil {
 			return p, label, nil
 		}
-		return nil, "", err
+		return nil, "", nil
 	}
 
-	if p, label, _ := tryRef(event.ProviderRef, "provider_ref"); p != nil {
+	// 1. Essayer la référence principale du provider (FAIL-CLOSED sur erreur DB)
+	if p, label, err := tryRef(event.ProviderRef, "provider_ref"); err != nil {
+		return nil, "", err
+	} else if p != nil {
 		return p, label, nil
 	}
 
+	// 2. Fallback sur les identifiants de métadonnées (uniquement si pas trouvé ci-dessus)
 	intentKeys := []string{
 		"payment_intent_id", "paymentIntentId", "paymentIntentID",
 		"payment_intent", "intent_id", "intentId",
 		"transId", "transaction_id", "transactionId",
 		"id",
 	}
-	seen := map[string]struct{}{}
-	if event.ProviderRef != "" {
-		seen[strings.TrimSpace(event.ProviderRef)] = struct{}{}
-	}
+
 	for _, k := range intentKeys {
 		v := metaString(event.Metadata, k)
 		if v == "" {
 			continue
 		}
-		if _, ok := seen[v]; ok {
-			continue
-		}
-		seen[v] = struct{}{}
-		if p, label, _ := tryRef(v, "metadata."+k); p != nil {
+		if p, label, err := tryRef(v, "metadata."+k); err != nil {
+			return nil, "", err // FAIL-CLOSED
+		} else if p != nil {
 			return p, label, nil
 		}
 	}
 
+	// 3. Fallback sur la référence en tant qu'UUID de paiement
 	if ref := metaString(event.Metadata, "reference"); ref != "" {
 		if pid, err := uuid.Parse(ref); err == nil {
 			p, err := uc.paymentRepo.FindByID(ctx, pid)
-			if err == nil && p != nil {
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+					return nil, "", fmt.Errorf("DB error looking up payment by ID: %w", err)
+				}
+			} else if p != nil {
 				return p, "reference_as_payment_id", nil
-			}
-			if logger != nil {
-				logger.Debug().Err(err).Str("reference", ref).Msg("FindByID(payment) via reference failed")
 			}
 		}
 	}
 
+	// 4. Fallback sur l'Order ID (avec protection anti-ambiguïté)
 	orderIDStr := metaString(event.Metadata, "order_id")
 	if orderIDStr == "" {
 		if ref := metaString(event.Metadata, "reference"); strings.HasPrefix(ref, "ORDER-") {
@@ -426,15 +434,16 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	if orderIDStr != "" {
 		if orderUUID, err := uuid.Parse(orderIDStr); err == nil {
 			payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
-			if searchErr == nil && len(payments) > 0 {
+			if searchErr != nil {
+				if !errors.Is(searchErr, sql.ErrNoRows) && !strings.Contains(strings.ToLower(searchErr.Error()), "not found") {
+					return nil, "", fmt.Errorf("DB error looking up payments by order ID: %w", searchErr)
+				}
+			} else if len(payments) > 0 {
 				chosen, err := pickBestPaymentForOrder(payments)
 				if err != nil {
-					return nil, "", err
+					return nil, "", err // Refuse l'ambiguïté (ex: plusieurs paiements pour la même commande)
 				}
 				return chosen, "order_id_fallback", nil
-			}
-			if logger != nil && searchErr != nil {
-				logger.Debug().Err(searchErr).Msg("FindByOrderIDUnscoped failed")
 			}
 		}
 	}
@@ -518,7 +527,7 @@ func (uc *ProcessWebhookUsecase) ensureOrderConfirmed(ctx context.Context, payme
 	return nil
 }
 
-// 🛡️ PR 5 AUDIT : Claim atomique avec propriété stricte et mise à jour du bail (claimed_at).
+// 🛡️ PR 3 AUDIT : Claim atomique avec propriété stricte. Retourne le claimID généré.
 func (uc *ProcessWebhookUsecase) recordWebhook(
 	ctx context.Context,
 	provider entity.PaymentProvider,
@@ -553,7 +562,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 			processing_error = 'PROCESSING',
 			processed = false,
 			claim_id = $7,
-			claimed_at = NOW(), -- ✅ CORRECTION : Réinitialise le bail pour le nouveau worker
+			claimed_at = NOW(),
 			payload = EXCLUDED.payload,
 			signature = EXCLUDED.signature,
 			signature_validated = EXCLUDED.signature_validated
@@ -581,7 +590,7 @@ func (uc *ProcessWebhookUsecase) recordWebhook(
 	return claimID, nil
 }
 
-// 🛡️ PR 5 AUDIT : Vérifie que le claimID correspond toujours avant de finaliser.
+// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de finaliser.
 func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
@@ -607,7 +616,7 @@ func (uc *ProcessWebhookUsecase) markWebhookProcessed(ctx context.Context, provi
 	return nil
 }
 
-// 🛡️ PR 5 AUDIT : Vérifie que le claimID correspond toujours avant de libérer en cas d'échec.
+// 🛡️ PR 3 AUDIT : Vérifie que le claimID correspond toujours avant de libérer.
 func (uc *ProcessWebhookUsecase) markWebhookFailed(ctx context.Context, provider entity.PaymentProvider, event *payment.WebhookEvent, errMsg string, claimID string) error {
 	if uc.db == nil || event == nil || strings.TrimSpace(event.ExternalID) == "" {
 		return nil
