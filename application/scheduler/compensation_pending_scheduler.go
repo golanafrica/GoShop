@@ -18,13 +18,12 @@ import (
 )
 
 const (
-	compensationJobAdvisoryLockID = 99998 // distinct du freeze job (99999)
+	compensationJobAdvisoryLockID = 99998
 	defaultCompMaxPerRun          = 50
 	defaultCompMaxAttempts        = 10
 	defaultCompMinAgeSeconds      = 60
 )
 
-// CompensationPendingScheduler retente le reverse des retraits en compensation_pending.
 type CompensationPendingScheduler struct {
 	db             *sql.DB
 	withdrawalRepo repository.WithdrawalRepository
@@ -56,7 +55,6 @@ func NewCompensationPendingScheduler(
 	}
 }
 
-// Run - point d'entree cron.
 func (s *CompensationPendingScheduler) Run(ctx context.Context) error {
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
 	log.Info().Msg("Starting compensation_pending retry job")
@@ -128,7 +126,6 @@ func (s *CompensationPendingScheduler) Run(ctx context.Context) error {
 		Int("skipped", skipped).
 		Msg("Compensation_pending job completed")
 
-	// ✅ CORRECTION P1 : Remonter une erreur agrégée si des échecs de persistance ou de traitement ont eu lieu
 	if len(jobErrs) > 0 {
 		return fmt.Errorf("compensation job completed with %d failures", len(jobErrs))
 	}
@@ -148,6 +145,17 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		Str("withdrawal_id", w.ID.String()).
 		Str("shop_id", w.ShopID.String()).
 		Logger()
+
+	// 🛡️ PR-E FIX : Contrôle du statut avant toute compensation pour éviter de compenser
+	// un retrait qui aurait été résolu manuellement ou par webhook entre-temps.
+	currentW, err := s.withdrawalRepo.FindByID(ctx, w.ID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch current withdrawal state: %w", err)
+	}
+	if currentW.Status != "compensation_pending" {
+		log.Info().Str("current_status", string(currentW.Status)).Msg("Withdrawal status changed, skipping compensation")
+		return nil
+	}
 
 	shopUUID, err := uuid.Parse(w.ShopID.String())
 	if err != nil {
@@ -172,19 +180,20 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	})
 
 	if err != nil {
-		// Enregistrer la tentative d'échec
 		w.RecordCompensationAttempt(err.Error())
 
-		// ✅ CORRECTION P1 CRITIQUE : Si la persistance échoue, on DOIT retourner une erreur.
-		// Sinon, le compteur de tentatives en base ne s'incrémente pas, et l'alerte maxAttempts
-		// ne se déclenchera jamais, créant une boucle infinie silencieuse.
 		if updErr := s.withdrawalRepo.Update(ctx, w); updErr != nil {
 			log.Error().Err(updErr).Msg("CRITICAL: Failed to persist compensation attempt")
 			return fmt.Errorf("failed to persist compensation attempt for %s: %w", w.ID, updErr)
 		}
 
 		if w.CompensationAttempts >= s.maxAttempts {
-			s.alertAdmin(ctx, w, err)
+			// 🛡️ PR-E FIX : Retourner une erreur si l'alerte échoue, pour permettre au job
+			// de réessayer l'alerte au prochain run (le statut reste 'compensation_pending').
+			if alertErr := s.alertAdmin(ctx, w, err); alertErr != nil {
+				log.Error().Err(alertErr).Msg("CRITICAL: Failed to alert admin after max attempts. Will retry on next job run.")
+				return fmt.Errorf("failed to alert admin after max attempts: %w", alertErr)
+			}
 		}
 		return fmt.Errorf("credit reverse failed: %w", err)
 	}
@@ -205,17 +214,18 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	return nil
 }
 
-func (s *CompensationPendingScheduler) alertAdmin(ctx context.Context, w *entity.Withdrawal, lastErr error) {
+// 🛡️ PR-E FIX : Retourne désormais une error pour permettre la réessai durable par le scheduler.
+func (s *CompensationPendingScheduler) alertAdmin(ctx context.Context, w *entity.Withdrawal, lastErr error) error {
+	if s.notifService == nil {
+		return fmt.Errorf("notification service not configured, cannot alert admin")
+	}
+
 	s.logger.Error().
 		Str("withdrawal_id", w.ID.String()).
 		Str("shop_id", w.ShopID.String()).
 		Int("attempts", w.CompensationAttempts).
 		Err(lastErr).
 		Msg("CRITICAL: compensation_pending max attempts reached - manual intervention required")
-
-	if s.notifService == nil {
-		return
-	}
 
 	req := &service.NotificationRequest{
 		Type:   "admin_compensation_pending_exhausted",
@@ -227,9 +237,13 @@ func (s *CompensationPendingScheduler) alertAdmin(ctx context.Context, w *entity
 			"last_error":            lastErr.Error(),
 		},
 	}
+
 	if sendErr := s.notifService.SendNotification(ctx, req); sendErr != nil {
-		s.logger.Error().Err(sendErr).Msg("Failed to send admin compensation alert")
+		return fmt.Errorf("failed to send admin compensation alert: %w", sendErr)
 	}
+
+	s.logger.Info().Str("withdrawal_id", w.ID.String()).Msg("Admin compensation alert sent successfully")
+	return nil
 }
 
 func (s *CompensationPendingScheduler) tryLock(ctx context.Context, conn *sql.Conn) (bool, error) {
