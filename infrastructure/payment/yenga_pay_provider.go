@@ -1080,7 +1080,6 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 	}
 
 	cashoutMethod := mapOperatorToCashoutMethod(operator)
-
 	logger.Info().Str("operator_in", operator).Str("cashout_method", cashoutMethod).Msg("Mapped pay-in operator to Yenga cashoutMethod")
 
 	doCashOut := func(method string) (int, []byte, error) {
@@ -1118,13 +1117,14 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 
 		resp, err := p.httpClient.Do(httpReq)
 		if err != nil {
-			return 0, nil, fmt.Errorf("failed to send refund request: %w", err)
+			// Erreur réseau (timeout, etc.) -> sera wrapée en ErrRefundUncertain
+			return 0, nil, err
 		}
 		defer resp.Body.Close()
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return 0, nil, fmt.Errorf("failed to read refund response: %w", err)
+			return resp.StatusCode, nil, fmt.Errorf("failed to read refund response: %w", err)
 		}
 
 		return resp.StatusCode, respBody, nil
@@ -1132,23 +1132,47 @@ func (p *YengaPayProvider) Refund(ctx context.Context, providerRef string, amoun
 
 	statusCode, respBody, err := doCashOut(cashoutMethod)
 	if err != nil {
-		return err
+		// ✅ PR-D FIX : Erreur réseau ou de marshaling = RÉSULTAT INCERTAIN
+		return &ErrRefundUncertain{Cause: err}
 	}
 
+	// Fallback Orange Money si la méthode initiale n'est pas disponible
 	if statusCode == http.StatusForbidden && cashoutMethod != "ORANGE_MONEY" && strings.Contains(string(respBody), "n'est pas disponible") {
 		logger.Warn().Str("failed_method", cashoutMethod).Str("response", string(respBody)).Msg("Cashout method unavailable on project — retry ORANGE_MONEY")
 		statusCode, respBody, err = doCashOut("ORANGE_MONEY")
 		if err != nil {
-			return err
+			return &ErrRefundUncertain{Cause: err}
 		}
 		cashoutMethod = "ORANGE_MONEY"
 	}
 
 	switch statusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+		// Succès
 	default:
 		logger.Error().Int("status_code", statusCode).Str("response", string(respBody)).Str("cashout_method", cashoutMethod).Msg("Yenga Pay refund API error")
-		return fmt.Errorf("Yenga Pay refund error (status %d): %s", statusCode, string(respBody))
+
+		// ✅ PR-D FIX : 5xx ou Timeout = INCERTAIN (le serveur a peut-être traité la demande)
+		if statusCode >= 500 || statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout {
+			return &ErrRefundUncertain{
+				HTTPStatus: statusCode,
+				Cause:      fmt.Errorf("Yenga Pay refund error: %s", string(respBody)),
+			}
+		}
+
+		// ✅ PR-D FIX : 4xx = DÉFINITIF (rejet métier explicite)
+		if statusCode >= 400 && statusCode < 500 {
+			return &ErrRefundDefinitive{
+				HTTPStatus: statusCode,
+				Message:    string(respBody),
+			}
+		}
+
+		// Fallback de sécurité : inconnu = incertain
+		return &ErrRefundUncertain{
+			HTTPStatus: statusCode,
+			Cause:      fmt.Errorf("Yenga Pay refund error: %s", string(respBody)),
+		}
 	}
 
 	logger.Info().Str("provider_ref", providerRef).Str("cashout_method", cashoutMethod).Msg("Refund (cash-out) initiated successfully via Yenga Pay")

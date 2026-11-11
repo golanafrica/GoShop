@@ -2,13 +2,14 @@ package paymentusecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+	"Goshop/infrastructure/payment"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -221,8 +222,14 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			}
 		}
 
+		// 🛡️ PR-D FIX : Appel au provider avec gestion typée des erreurs
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
-			if isDefinitiveRefundRejection(err) {
+			var errDefinitive *payment.ErrRefundDefinitive
+			var errUncertain *payment.ErrRefundUncertain
+
+			if errors.As(err, &errDefinitive) {
+				// Échec confirmé : on annule la réservation locale immédiatement
+				logger.Warn().Err(err).Msg("Refund definitively rejected by provider, reversing local reservation")
 				if _, revErr := uc.paymentRepo.ReverseRefundAmountAndRecompute(ctx, paymentID, refundAmount); revErr != nil {
 					logger.Error().Err(revErr).
 						Str("payment_id", paymentID.String()).
@@ -233,24 +240,36 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 					}
 					return nil, fmt.Errorf("refund rejected by provider and reverse failed: %w", err)
 				}
-				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
+				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, errDefinitive.Message); stErr != nil {
 					logger.Error().Err(stErr).Msg("CRITICAL: reverse OK but failed to mark payment_refund failed")
 				}
 				return nil, fmt.Errorf("refund rejected by provider: %w", err)
 			}
 
+			if errors.As(err, &errUncertain) {
+				// Résultat incertain : ON NE TOUCHE PAS À LA RÉSERVATION LOCALE.
+				// On marque comme nécessitant une réconciliation manuelle ou via API de vérification.
+				logger.Error().Err(err).
+					Str("payment_id", paymentID.String()).
+					Int64("amount", refundAmount).
+					Str("provider_ref", *paymentEntity.ProviderRef).
+					Msg("CRITICAL: provider refund outcome UNKNOWN — reservation kept")
+				if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, errUncertain.Error()); stErr != nil {
+					logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required")
+				}
+				return nil, fmt.Errorf("refund outcome uncertain, flagged for reconciliation: %w", err)
+			}
+
+			// Pour les erreurs inconnues, on garde aussi la réservation par sécurité
 			logger.Error().Err(err).
 				Str("payment_id", paymentID.String()).
 				Int64("amount", refundAmount).
 				Str("provider_ref", *paymentEntity.ProviderRef).
-				Msg("CRITICAL: provider refund outcome UNKNOWN — reservation kept")
-			if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error()); stErr != nil {
-				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required")
+				Msg("CRITICAL: provider refund failed with unknown error — reservation kept")
+			if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
+				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after unknown error")
 			}
-			return nil, fmt.Errorf(
-				"refund outcome uncertain at provider (reservation kept, manual reconciliation required): %w",
-				err,
-			)
+			return nil, fmt.Errorf("refund failed: %w", err)
 		}
 	}
 
@@ -305,34 +324,4 @@ func paymentRequiresProviderRefund(p entity.PaymentProvider) bool {
 	default:
 		return false
 	}
-}
-
-// isDefinitiveRefundRejection distingue les erreurs définitives des erreurs temporaires (timeout, etc.)
-func isDefinitiveRefundRejection(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	definitiveHints := []string{
-		"status 400", "status 401", "status 403", "status 404", "status 422",
-		"invalid", "rejected", "not allowed", "insufficient", "already refunded",
-		"does not support", "unsupported",
-	}
-	ambiguousHints := []string{
-		"timeout", "deadline", "temporar", "unavailable", "status 500",
-		"status 502", "status 503", "status 504", "connection", "reset by peer",
-		"eof", "context canceled", "context deadline",
-	}
-
-	for _, h := range ambiguousHints {
-		if strings.Contains(msg, h) {
-			return false
-		}
-	}
-	for _, h := range definitiveHints {
-		if strings.Contains(msg, h) {
-			return true
-		}
-	}
-	return false
 }
