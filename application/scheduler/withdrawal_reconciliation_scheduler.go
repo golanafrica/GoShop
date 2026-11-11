@@ -29,7 +29,7 @@ func NewWithdrawalReconciliationScheduler(
 		notifService:   notifService,
 		logger:         logger.With().Str("scheduler", "withdrawal_reconciliation").Logger(),
 		maxPerRun:      50,
-		minAgeMinutes:  15, // Attendre 15 min avant de considérer un retrait comme "coincé"
+		minAgeMinutes:  15,
 	}
 }
 
@@ -54,7 +54,6 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 			Str("shop_id", w.ShopID.String()).
 			Msg("CRITICAL: Withdrawal is stuck. Flagging for manual reconciliation (NO AUTO REVERSE).")
 
-		// 🛡️ Transition atomique : pending|processing → reconciliation_required
 		reason := "stuck_pending_manual_review"
 		ok, err := s.withdrawalRepo.TransitionToReconciliationRequired(ctx, w.ID, reason)
 		if err != nil {
@@ -73,8 +72,10 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 		}
 		successCount++
 
-		// Alerte Admin pour vérification manuelle du dashboard prestataire
-		if s.notifService != nil {
+		// 🛡️ PR-E FIX : Gestion robuste des alertes admin avec reprise durable visible.
+		if s.notifService == nil {
+			log.Error().Str("withdrawal_id", w.ID.String()).Msg("CRITICAL: Notification service is nil. Admin will NOT be alerted.")
+		} else {
 			req := &service.NotificationRequest{
 				Type:   "admin_withdrawal_reconciliation_required",
 				ShopID: w.ShopID.String(),
@@ -85,8 +86,9 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 				},
 			}
 			if sendErr := s.notifService.SendNotification(ctx, req); sendErr != nil {
-				log.Error().Err(sendErr).Msg("Failed to send admin reconciliation alert")
-				// On n'ajoute pas sendErr aux jobErrs critiques car la transition DB a réussi
+				// La reprise durable est assurée par le notification_dispatcher qui enregistre
+				// automatiquement les échecs dans la table 'failed_notifications' (outbox).
+				log.Error().Err(sendErr).Str("withdrawal_id", w.ID.String()).Msg("Failed to send admin reconciliation alert. Durable retry will be handled by notification dispatcher outbox.")
 			}
 		}
 	}
@@ -96,7 +98,6 @@ func (s *WithdrawalReconciliationScheduler) Run(ctx context.Context) error {
 		Int("errors", len(jobErrs)).
 		Msg("Withdrawal reconciliation job completed")
 
-	// ✅ CORRECTION P1 : Remonter une erreur si des échecs ont eu lieu pour la supervision
 	if len(jobErrs) > 0 {
 		return fmt.Errorf("withdrawal reconciliation job completed with %d errors", len(jobErrs))
 	}
