@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"Goshop/domain/repository"
@@ -11,7 +13,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// NotificationRetryScheduler gère la réexpédition des notifications en échec
 type NotificationRetryScheduler struct {
 	failedNotifRepo repository.FailedNotificationRepository
 	notifService    service.NotificationService
@@ -19,7 +20,6 @@ type NotificationRetryScheduler struct {
 	maxPerRun       int
 }
 
-// NewNotificationRetryScheduler crée une nouvelle instance du scheduler de retry
 func NewNotificationRetryScheduler(
 	failedNotifRepo repository.FailedNotificationRepository,
 	notifService service.NotificationService,
@@ -33,52 +33,56 @@ func NewNotificationRetryScheduler(
 	}
 }
 
-// Run exécute le job de retry des notifications
 func (s *NotificationRetryScheduler) Run(ctx context.Context) error {
 	log := s.logger.With().Time("started_at", time.Now().UTC()).Logger()
 	log.Info().Msg("Starting notification retry job")
 
-	// 1. Récupérer ET verrouiller atomiquement les notifications (lease de 1h)
 	notifications, err := s.failedNotifRepo.FetchAndClaimRetryableNotifications(ctx, s.maxPerRun)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to find and claim retryable notifications")
-		return err
+		return fmt.Errorf("failed to find and claim retryable notifications: %w", err)
 	}
 
 	log.Info().Int("count", len(notifications)).Msg("Found and claimed retryable notifications")
+
+	var jobErrs []error
 
 	for _, notif := range notifications {
 		var req service.NotificationRequest
 		if err := json.Unmarshal(notif.Payload, &req); err != nil {
 			s.logger.Error().Err(err).Str("notification_id", notif.ID).Msg("Failed to unmarshal payload")
 
-			// 🛡️ P1 FIX : Ne plus ignorer l'erreur de persistance
 			if markErr := s.failedNotifRepo.MarkAsPermanentFailure(ctx, notif.ID); markErr != nil {
-				s.logger.Error().Err(markErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to mark malformed notification as permanent failure")
+				errMsg := fmt.Sprintf("failed to mark malformed notification %s as permanent failure: %v", notif.ID, markErr)
+				s.logger.Error().Err(markErr).Str("notification_id", notif.ID).Msg("CRITICAL: " + errMsg)
+				jobErrs = append(jobErrs, errors.New(errMsg))
 			}
 			continue
 		}
 
-		// 2. Tenter d'envoyer la notification
 		err := s.notifService.SendNotification(ctx, &req)
 
 		if err != nil {
-			// 3a. Échec : on met à jour le compteur et on recalcule le prochain retry (backoff)
-			// 🛡️ P1 FIX : Logger l'échec de persistance du retry
 			if retryErr := s.failedNotifRepo.IncrementRetryCount(ctx, notif.ID, err.Error()); retryErr != nil {
-				s.logger.Error().Err(retryErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to increment retry count, notification state may be desynchronized")
+				errMsg := fmt.Sprintf("failed to increment retry count for %s: %v", notif.ID, retryErr)
+				s.logger.Error().Err(retryErr).Str("notification_id", notif.ID).Msg("CRITICAL: " + errMsg)
+				jobErrs = append(jobErrs, errors.New(errMsg))
 			} else {
 				s.logger.Warn().Err(err).Str("notification_id", notif.ID).Msg("Notification retry failed, will retry later")
 			}
 		} else {
-			// 3b. Succès : on supprime l'entrée de la file d'attente
-			// 🛡️ P1 FIX : Logger l'échec de persistance du succès
 			if successErr := s.failedNotifRepo.MarkAsSuccess(ctx, notif.ID); successErr != nil {
-				s.logger.Error().Err(successErr).Str("notification_id", notif.ID).Msg("CRITICAL: Failed to mark notification as success, it may be retried unnecessarily")
+				errMsg := fmt.Sprintf("failed to mark notification %s as success: %v", notif.ID, successErr)
+				s.logger.Error().Err(successErr).Str("notification_id", notif.ID).Msg("CRITICAL: " + errMsg)
+				jobErrs = append(jobErrs, errors.New(errMsg))
 			} else {
 				s.logger.Info().Str("notification_id", notif.ID).Msg("Notification retry dispatched successfully")
 			}
 		}
+	}
+
+	if len(jobErrs) > 0 {
+		return fmt.Errorf("notification retry job completed with %d persistence errors", len(jobErrs))
 	}
 
 	log.Info().Msg("Notification retry job completed")
