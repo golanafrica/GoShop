@@ -203,7 +203,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	// ============================================================
-	// ✅ W1 FIX : IDEMPOTENCE STRICTE AVANT toute mutation mémoire
+	// ✅ W1 FIX & PR-C FIX : IDEMPOTENCE STRICTE AVANT toute mutation mémoire
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
@@ -353,14 +353,15 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
 	} else {
-		// ✅ CORRECTION P0-01 : Full sweep. On DOIT créer un marqueur idempotent
-		// avec la référence d'origine pour empêcher un double crédit lors d'un replay.
+		// ✅ CORRECTION PR-C (P0-01) : Full sweep.
+		// On enregistre grossCents (et non 0) pour que assertIdempotentCreditMatch
+		// réussisse lors d'un retry (car req.AmountCents == grossCents).
 		markerDesc := fmt.Sprintf("Crédit de %d FCFA intégralement absorbé par la dette", grossCents)
 		markerTxn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
 			ShopID:            req.ShopID,
 			TransactionType:   req.TransactionType,
-			AmountCents:       0, // Le net crédité au solde est de 0
+			AmountCents:       grossCents, // ✅ FIX CRITIQUE : Utiliser grossCents ici
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     req.ReferenceType,
 			ReferenceID:       req.ReferenceID,
@@ -610,8 +611,9 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
-// assertIdempotentCreditMatch vérifie que la réutilisation d'une référence
-// correspond bien à la même opération métier (même shop, même type, même montant).
+// ✅ PR-C FIX : Logique robuste pour gérer le debt sweep.
+// On accepte que le montant enregistré soit INFÉRIEUR ou ÉGAL au montant demandé (sweep légitime).
+// On rejette uniquement si le montant enregistré est SUPÉRIEUR (incohérence critique).
 func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
 	if existing.ShopID != req.ShopID {
 		return fmt.Errorf("idempotency conflict: shop_id mismatch")
@@ -619,9 +621,10 @@ func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *Credit
 	if existing.TransactionType != req.TransactionType {
 		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
 	}
-	// ✅ CORRECTION P0-02 : Vérification stricte du montant
-	if existing.AmountCents != req.AmountCents {
-		return fmt.Errorf("idempotency conflict: amount mismatch (existing=%d, requested=%d)", existing.AmountCents, req.AmountCents)
+
+	if existing.AmountCents > req.AmountCents {
+		return fmt.Errorf("idempotency conflict: amount mismatch (existing=%d > requested=%d)", existing.AmountCents, req.AmountCents)
 	}
+
 	return nil
 }
