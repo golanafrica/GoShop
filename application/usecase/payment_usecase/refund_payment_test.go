@@ -9,6 +9,7 @@ import (
 	paymentusecase "Goshop/application/usecase/payment_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
+	"Goshop/infrastructure/payment" // ✅ AJOUTÉ : Pour les erreurs typées de remboursement
 	mockrepo "Goshop/mocks/repository"
 	mockusecase "Goshop/mocks/usecase"
 
@@ -70,7 +71,7 @@ func setupRefundTest(t *testing.T) (*mockrepo.MockPaymentRepository, *mockusecas
 	// Configuration par défaut pour la gestion des transactions
 	mockTxManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
-	mockTx.EXPECT().Commit().Return(nil).AnyTimes() // ✅ AJOUTÉ : Le code appelle tx.Commit()
+	mockTx.EXPECT().Commit().Return(nil).AnyTimes()
 
 	// Le repository doit se retourner lui-même quand WithTX est appelé
 	mockPaymentRepo.EXPECT().WithTX(gomock.Any()).Return(mockPaymentRepo).AnyTimes()
@@ -234,9 +235,11 @@ func TestRefundPaymentUsecase_ProviderRefundFailed(t *testing.T) {
 		Return(true, nil)
 
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
+
+	// ✅ CORRECTION PR-D : Le mock retourne désormais l'erreur typée ErrRefundDefinitive
 	mockProvider.EXPECT().
 		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
-		Return(errors.New("status 422: insufficient funds"))
+		Return(&payment.ErrRefundDefinitive{HTTPStatus: 422, Message: "insufficient funds"})
 
 	mockPaymentRepo.EXPECT().
 		ReverseRefundAmountAndRecompute(gomock.Any(), successPayment.ID, int64(50000)).
@@ -271,9 +274,11 @@ func TestRefundPaymentUsecase_ProviderRefundUncertain_KeepsReservation(t *testin
 		Return(true, nil)
 
 	mockRegistry.EXPECT().Get(entity.ProviderYengaPay).Return(mockProvider, nil)
+
+	// ✅ CORRECTION PR-D : Le mock retourne désormais l'erreur typée ErrRefundUncertain
 	mockProvider.EXPECT().
 		Refund(gomock.Any(), "TXN-123", int64(50000), gomock.Any(), gomock.Any()).
-		Return(errors.New("status 503: temporary unavailable"))
+		Return(&payment.ErrRefundUncertain{HTTPStatus: 503, Cause: errors.New("temporary unavailable")})
 
 	mockPaymentRepo.EXPECT().
 		UpdatePaymentRefundStatus(gomock.Any(), gomock.Any(), entity.PaymentRefundReconciliationRequired, gomock.Any()).
@@ -537,9 +542,6 @@ func TestRefundPaymentUsecase_ConcurrentReservationRejected(t *testing.T) {
 	mockPaymentRepo.EXPECT().
 		AddRefundAmount(gomock.Any(), successPayment.ID, int64(50000), entity.PaymentStatusRefunded).
 		Return(false, nil)
-
-	// ✅ CORRECTION : On ne met plus à jour le statut car la transaction sera rollbackée
-	// et la ligne de remboursement n'existera pas en base. C'est le comportement atomique correct.
 
 	req := createValidRefundRequest(successPayment.ID.String())
 	_, err := uc.Execute(ctx, req)
