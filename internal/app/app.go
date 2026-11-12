@@ -84,6 +84,7 @@ import (
 
 	wsinfra "Goshop/infrastructure/websocket"
 
+	// 🆕 PR-H : Reconciliation Usecase & Handler
 	reconciliationusecase "Goshop/application/usecase/reconciliation_usecase"
 	reconciliationhandler "Goshop/interfaces/handler/reconciliation_handler"
 
@@ -563,6 +564,7 @@ func (a *App) setupRouter() {
 
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
+	// 🆕 PR-H : Reconciliation Usecase & Handler
 	reconciliationUC := reconciliationusecase.NewReconciliationUsecase(walletRepo, shopRepo)
 	reconciliationHandler := reconciliationhandler.NewReconciliationHandler(reconciliationUC)
 	a.Logger.Info().Msg("✅ PR-H Reconciliation usecase & handler initialized")
@@ -1230,7 +1232,8 @@ func (a *App) setupRouter() {
 		if os.Getenv("APP_ENV") == "production" || os.Getenv("APP_ENV") == "prod" {
 			a.Logger.Fatal().Msg("❌ FATAL: FILE_SIGNING_SECRET is required in production environment. Refusing to start with default dev secret.")
 		}
-		fileSecretKey = "dev-secret-key-change-in-production-32chars"
+		// ✅ CORRECTION GOSEC : Le commentaire #nosec doit être sur la même ligne que l'assignation
+		fileSecretKey = "dev-secret-key-change-in-production-32chars" // #nosec G101
 		a.Logger.Warn().Msg("⚠️ FILE_SIGNING_SECRET not set, using default (DEV ONLY - DO NOT USE IN PRODUCTION)")
 	} else {
 		a.Logger.Info().Msg("✅ v4.10.0 File signing secret initialized")
@@ -1658,7 +1661,7 @@ func (a *App) setupRouter() {
 	duration := time.Since(startTime)
 	a.Logger.Info().
 		Dur("setup_duration_ms", duration).
-		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API + PR6 Notification Retry + PR4 Payment Reconciliation)")
+		Msg("✅ Router configuré avec succès (v5.2.0: Customer Reliability Score integrated + P2.3 Freeze Job API + PR6 Notification Retry + PR4 Payment Reconciliation + PR-H Financial Reconciliation)")
 }
 
 func maskEmail(email string) string {

@@ -295,6 +295,21 @@ func (mr *MockMerchantWalletRepositoryMockRecorder) FindPositiveBalance(ctx any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindPositiveBalance", reflect.TypeOf((*MockMerchantWalletRepository)(nil).FindPositiveBalance), ctx)
 }
 
+// GetLedgerSum mocks base method.
+func (m *MockMerchantWalletRepository) GetLedgerSum(ctx context.Context, shopID string) (*repository.LedgerSum, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLedgerSum", ctx, shopID)
+	ret0, _ := ret[0].(*repository.LedgerSum)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLedgerSum indicates an expected call of GetLedgerSum.
+func (mr *MockMerchantWalletRepositoryMockRecorder) GetLedgerSum(ctx, shopID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLedgerSum", reflect.TypeOf((*MockMerchantWalletRepository)(nil).GetLedgerSum), ctx, shopID)
+}
+
 // SumFrozenBalance mocks base method.
 func (m *MockMerchantWalletRepository) SumFrozenBalance(ctx context.Context) (int64, error) {
 	m.ctrl.T.Helper()
