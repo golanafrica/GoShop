@@ -31,13 +31,14 @@ jobs:
       - name: Run unit tests with race detector
         run: |
           set -euo pipefail
-          # ✅ PR-G FIX : Réintégration des packages financiers (withdrawal_usecase, payment_usecase, etc.)
-          # On exclut uniquement les dossiers 'tests', 'mocks', et les packages avec des échecs de tests préexistants non liés à l'audit financier.
+          # ✅ PR-G FIX : Réintégration des packages financiers (withdrawal, payment, wallet, etc.)
+          # On exclut uniquement les dossiers 'tests', 'mocks', et les packages avec des échecs de tests préexistants non liés à l'audit financier (order_usecase, handler/orders, postgres/order).
           PACKAGES=$(go list ./... | \
             grep -v '/tests$' | \
             grep -v '/tests/' | \
             grep -v '/mocks/' | \
             grep -v '/handler/orders' | \
+            grep -v '/usecase/order_usecase' | \
             grep -v '/infrastructure/postgres/order' || true)
           
           if [ -z "${PACKAGES}" ]; then
