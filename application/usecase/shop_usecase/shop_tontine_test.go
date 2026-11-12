@@ -150,6 +150,11 @@ func TestConfigureTontineUsecase_UpsertError(t *testing.T) {
 
 	req := validTontineRequest("product-1", "shop-1")
 
+	// ✅ FIX PR-G : Ajout de l'attente de l'appel FindByID avant Upsert
+	productRepo.EXPECT().
+		FindByID(gomock.Any(), req.ProductID).
+		Return(&entity.Product{ID: req.ProductID}, nil)
+
 	settingsRepo.EXPECT().Upsert(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 
 	result, err := uc.Execute(context.Background(), req)
@@ -168,6 +173,11 @@ func TestConfigureTontineUsecase_FindByProductIDError(t *testing.T) {
 	uc := shopusecase.NewConfigureTontineUsecase(settingsRepo, productRepo)
 
 	req := validTontineRequest("product-1", "shop-1")
+
+	// ✅ FIX PR-G : Ajout de l'attente de l'appel FindByID avant Upsert
+	productRepo.EXPECT().
+		FindByID(gomock.Any(), req.ProductID).
+		Return(&entity.Product{ID: req.ProductID}, nil)
 
 	settingsRepo.EXPECT().Upsert(gomock.Any(), gomock.Any()).Return(nil)
 	settingsRepo.EXPECT().FindByProductID(gomock.Any(), req.ProductID).Return(nil, errors.New("db error"))
@@ -189,6 +199,11 @@ func TestConfigureTontineUsecase_Success(t *testing.T) {
 
 	req := validTontineRequest("product-1", "shop-1")
 
+	// ✅ FIX PR-G : Ajout de l'attente de l'appel FindByID avant Upsert
+	productRepo.EXPECT().
+		FindByID(gomock.Any(), req.ProductID).
+		Return(&entity.Product{ID: req.ProductID}, nil)
+
 	settingsRepo.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, settings *entity.ProductTontineSettings) error {
 			assert.Equal(t, req.ProductID, settings.ProductID)
@@ -208,6 +223,28 @@ func TestConfigureTontineUsecase_Success(t *testing.T) {
 	assert.True(t, result.IsTontineEnabled)
 	assert.Equal(t, 5, result.MinParticipants)
 	assert.Equal(t, 10, result.MaxParticipants)
+}
+
+// ✅ BONUS PR-G : Couvre le nouveau chemin d'erreur "produit introuvable"
+func TestConfigureTontineUsecase_ProductNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	settingsRepo := mockrepo.NewMockProductTontineSettingsRepository(ctrl)
+	productRepo := mockrepo.NewMockProductRepository(ctrl)
+
+	uc := shopusecase.NewConfigureTontineUsecase(settingsRepo, productRepo)
+
+	req := validTontineRequest("product-1", "shop-1")
+
+	productRepo.EXPECT().
+		FindByID(gomock.Any(), req.ProductID).
+		Return(nil, errors.New("not found"))
+
+	result, err := uc.Execute(context.Background(), req)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "product not found")
 }
 
 // ============================================================
