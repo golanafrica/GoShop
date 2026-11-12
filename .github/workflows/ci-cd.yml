@@ -40,12 +40,12 @@ jobs:
             grep -v '/handler/orders' | \
             grep -v '/usecase/order_usecase' | \
             grep -v '/infrastructure/postgres/order' || true)
-          
+
           if [ -z "${PACKAGES}" ]; then
             echo "No packages selected"
             exit 1
           fi
-          
+
           echo "Testing packages: ${PACKAGES}"
           # ✅ PR-G FIX : Ajout de l'indicateur -race pour détecter les conditions de course aux données.
           go test -v -count=1 -race -coverprofile=coverage.out ${PACKAGES}
@@ -326,7 +326,7 @@ jobs:
       - name: Run govulncheck
         run: |
           set -euo pipefail
-          # ✅ PR-G FIX : Retour à @latest pour govulncheck afin d'éviter les bugs de compatibilité 
+          # ✅ PR-G FIX : Retour à @latest pour govulncheck afin d'éviter les bugs de compatibilité
           # des anciennes versions de golang.org/x/tools avec les compilateurs Go récents.
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
@@ -376,9 +376,9 @@ jobs:
           tags: ${{ env.DOCKER_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      
-      # ✅ PR-G FIX : Version stable et existante de trivy-action (0.16.1 ou 0.28.0)
-      - uses: aquasecurity/trivy-action@0.16.1
+
+      # ✅ FIX : version existante (latest stable). 0.18.0 / 0.16.1 n'existent pas.
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
@@ -386,7 +386,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-      
+
       - uses: docker/build-push-action@v5.3.0
         with:
           context: .
