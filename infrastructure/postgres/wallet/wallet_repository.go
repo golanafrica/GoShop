@@ -339,6 +339,24 @@ func (r *MerchantWalletRepositoryInfrastructure) CountNegativeBalance(ctx contex
 	return count, nil
 }
 
+// ✅ PR-H FIX : Ajout de la méthode GetLedgerSum pour calculer le solde réel du ledger
+func (r *MerchantWalletRepositoryInfrastructure) GetLedgerSum(ctx context.Context, shopID string) (*repository.LedgerSum, error) {
+	query := `
+		SELECT 
+			COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END), 0) as total_credits,
+			COALESCE(SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0) as total_debits
+		FROM wallet_transactions
+		WHERE shop_id = $1 AND status = 'completed'
+	`
+	sum := &repository.LedgerSum{}
+	err := r.queryRowContext(ctx, query, shopID).Scan(&sum.TotalCredits, &sum.TotalDebits)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ledger sum: %w", err)
+	}
+	sum.NetBalance = sum.TotalCredits + sum.TotalDebits
+	return sum, nil
+}
+
 func (r *MerchantWalletRepositoryInfrastructure) Update(ctx context.Context, wallet *entity.MerchantWallet) error {
 	shopID, err := r.getShopID(ctx)
 	if err != nil {

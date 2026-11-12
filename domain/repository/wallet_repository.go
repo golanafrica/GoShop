@@ -19,6 +19,17 @@ var ErrWalletNotFound = errors.New("merchant wallet not found")
 var ErrWalletTransactionNotFound = errors.New("wallet transaction not found")
 
 // ============================================================
+// TYPES DE DONNÉES AGRÉGÉES
+// ============================================================
+
+// LedgerSum représente l'agrégat des transactions d'un shop
+type LedgerSum struct {
+	TotalCredits int64
+	TotalDebits  int64
+	NetBalance   int64
+}
+
+// ============================================================
 // MERCHANT WALLET REPOSITORY
 // ============================================================
 
@@ -80,6 +91,9 @@ type MerchantWalletRepository interface {
 
 	// CountNegativeBalance compte les portefeuilles avec solde négatif
 	CountNegativeBalance(ctx context.Context) (int, error)
+
+	// GetLedgerSum calcule la somme des transactions complétées pour un shop
+	GetLedgerSum(ctx context.Context, shopID string) (*LedgerSum, error)
 
 	// Update met à jour un portefeuille
 	Update(ctx context.Context, wallet *entity.MerchantWallet) error
