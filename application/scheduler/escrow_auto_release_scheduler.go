@@ -28,6 +28,7 @@ import (
 //  3. FindByReferenceIDAdmin avant crédit pour l'idempotence (Fail-closed sur erreur SQL).
 //  4. Si claim déjà fait ailleurs mais ledger absent → reprise du crédit uniquement (orphan recovery).
 //  5. Échec de Update(delivery_proof) après claim/crédit → erreur visible (pas de faux succès).
+//  6. 🆕 PR-A : Validation stricte de toute transaction existante (statut, shop, montant brut, référence).
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -273,12 +274,10 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 			}
 			return 0, fmt.Errorf("unique conflict but winning transaction not found: %w", wErr)
 		}
-		if winner == nil || winner.Status != entity.WalletTxCompleted {
-			return 0, fmt.Errorf("unique conflict but no valid completed transaction found")
-		}
 
-		if winner.AmountCents != merchantAmount {
-			return 0, fmt.Errorf("unique conflict but amount mismatch (winner=%d, expected=%d)", winner.AmountCents, merchantAmount)
+		// ✅ PR-A FIX : Validation stricte du gagnant (statut, shop, montant brut, référence)
+		if err := validateEscrowReleaseTxn(winner, shopID, merchantAmount, "escrow_auto_release", proof.ID); err != nil {
+			return 0, fmt.Errorf("unique conflict but winning transaction validation failed: %w", err)
 		}
 
 		itemLogger.Info().Str("winner_txn_id", winner.ID).Msg("Idempotent success verified")
@@ -332,10 +331,14 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		}
 		// ErrWalletTransactionNotFound confirmé : pas de transaction existante, on peut continuer.
 	} else if existing != nil {
+		// ✅ PR-A FIX : Validation stricte avant skip idempotent
+		if err := validateEscrowReleaseTxn(existing, shopID, merchantAmountCents, refType, proofID); err != nil {
+			return fmt.Errorf("existing wallet transaction validation failed: %w", err)
+		}
 		s.logger.Info().
 			Str("proof_id", proofID).
 			Str("existing_txn_id", existing.ID).
-			Msg("Wallet already credited for this proof — skip")
+			Msg("Wallet already credited for this proof — verified idempotent skip")
 		return nil
 	}
 
@@ -373,9 +376,13 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 				return fmt.Errorf("failed to re-check wallet transaction after claim failure (DB error): %w", errRetry)
 			}
 		} else if existingRetry != nil {
+			// ✅ PR-A FIX : Validation stricte avant skip idempotent
+			if err := validateEscrowReleaseTxn(existingRetry, shopID, merchantAmountCents, refType, proofID); err != nil {
+				return fmt.Errorf("existing wallet transaction validation failed after claim failure: %w", err)
+			}
 			s.logger.Info().
 				Str("proof_id", proofID).
-				Msg("Escrow already claimed and wallet already credited — skip")
+				Msg("Escrow already claimed and wallet already credited — verified idempotent skip")
 			return nil
 		}
 		s.logger.Warn().
@@ -433,6 +440,7 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		ShopID:            shopID,
 		TransactionType:   entity.WalletTxSaleCredit,
 		AmountCents:       netToBalance,
+		GrossAmountCents:  &merchantAmountCents, // 🆕 PR-A FIX : Tracer le montant brut
 		BalanceAfterCents: wallet.BalanceCents,
 		ReferenceType:     &refTypeCopy,
 		ReferenceID:       &proofID,
@@ -489,6 +497,49 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 		Int64("balance_cents", wallet.BalanceCents).
 		Msg("Commission + Wallet credited atomically with debt sweep")
 
+	return nil
+}
+
+// ============================================================
+// 🆕 PR-A FIX : VALIDATION STRICTE DE L'IDEMPOTENCE
+// ============================================================
+
+// validateEscrowReleaseTxn vérifie de manière stricte qu'une transaction existante
+// correspond bien à l'opération de libération d'escrow attendue.
+// Elle empêche de masquer une incohérence (mauvais shop, mauvais montant, statut non complété).
+func validateEscrowReleaseTxn(
+	txn *entity.WalletTransaction,
+	expectedShopID string,
+	expectedAmountCents int64,
+	expectedRefType string,
+	expectedRefID string,
+) error {
+	if txn == nil {
+		return fmt.Errorf("transaction is nil")
+	}
+	if txn.Status != entity.WalletTxCompleted {
+		return fmt.Errorf("transaction status is not completed (status=%s)", txn.Status)
+	}
+	if txn.ShopID != expectedShopID {
+		return fmt.Errorf("shop_id mismatch (existing=%s, expected=%s)", txn.ShopID, expectedShopID)
+	}
+
+	// Vérification du montant : on utilise GrossAmountCents si disponible (PR-C),
+	// sinon on fallback sur AmountCents pour les transactions legacy.
+	actualAmount := txn.AmountCents
+	if txn.GrossAmountCents != nil {
+		actualAmount = *txn.GrossAmountCents
+	}
+	if actualAmount != expectedAmountCents {
+		return fmt.Errorf("amount mismatch (existing=%d, expected=%d)", actualAmount, expectedAmountCents)
+	}
+
+	if txn.ReferenceType == nil || *txn.ReferenceType != expectedRefType {
+		return fmt.Errorf("reference_type mismatch")
+	}
+	if txn.ReferenceID == nil || *txn.ReferenceID != expectedRefID {
+		return fmt.Errorf("reference_id mismatch")
+	}
 	return nil
 }
 
