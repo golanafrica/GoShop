@@ -17,6 +17,7 @@ import (
 
 var ErrWalletNotFound = errors.New("merchant wallet not found")
 var ErrWalletTransactionNotFound = errors.New("wallet transaction not found")
+var ErrLegacyIdempotencyAmbiguous = errors.New("idempotency conflict: legacy transaction without gross amount, requires manual reconciliation") // 🆕 PR-C FIX
 
 // ============================================================
 // TYPES DE DONNÉES AGRÉGÉES

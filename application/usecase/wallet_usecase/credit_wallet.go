@@ -2,7 +2,6 @@ package walletusecase
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"Goshop/domain/tenant"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 )
 
@@ -132,7 +132,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			}
 
 			if findErr != nil {
-				if !isWalletTxnNotFound(findErr) {
+				if !errors.Is(findErr, repository.ErrWalletTransactionNotFound) {
 					logger.Error().
 						Err(findErr).
 						Str("reference_type", *req.ReferenceType).
@@ -180,7 +180,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
 		// ✅ W3 FIX : Utilisation d'un helper robuste au lieu de == "string"
-		if isMerchantWalletNotFound(err) {
+		if errors.Is(err, repository.ErrWalletNotFound) {
 			wallet = entity.NewMerchantWallet(req.ShopID)
 			if err := uc.walletRepo.WithTX(tx).Create(ctx, wallet); err != nil {
 				logger.Error().Err(err).Msg("Failed to create wallet")
@@ -208,7 +208,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
 		if findErr != nil {
-			if !isWalletTxnNotFound(findErr) {
+			if !errors.Is(findErr, repository.ErrWalletTransactionNotFound) {
 				logger.Error().
 					Err(findErr).
 					Str("ref_type", *req.ReferenceType).
@@ -304,6 +304,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			ShopID:            req.ShopID,
 			TransactionType:   req.TransactionType,
 			AmountCents:       netToBalance,
+			GrossAmountCents:  &grossCents, // 🆕 PR-C FIX
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     req.ReferenceType,
 			ReferenceID:       req.ReferenceID,
@@ -361,7 +362,8 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			ID:                uuid.New().String(),
 			ShopID:            req.ShopID,
 			TransactionType:   req.TransactionType,
-			AmountCents:       grossCents, // ✅ FIX CRITIQUE : Utiliser grossCents ici
+			AmountCents:       grossCents,
+			GrossAmountCents:  &grossCents, // 🆕 PR-C FIX
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     req.ReferenceType,
 			ReferenceID:       req.ReferenceID,
@@ -571,39 +573,16 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 // HELPERS
 // ============================================================
 
-// isWalletTxnNotFound distingue « aucune transaction » d'une vraie erreur SQL.
-func isWalletTxnNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "no rows") ||
-		strings.Contains(msg, "sql: no rows")
-}
-
-// isMerchantWalletNotFound distingue « aucun wallet » d'une vraie erreur SQL.
-func isMerchantWalletNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "merchant wallet not found") ||
-		strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "no rows")
-}
-
-// isUniqueViolation détecte une violation de contrainte unique (23505).
+// isUniqueViolation détecte une violation de contrainte unique (23505) de manière robuste.
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	// Fallback de sécurité si l'erreur est enveloppée différemment
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate key") ||
 		strings.Contains(msg, "unique constraint") ||
@@ -612,8 +591,6 @@ func isUniqueViolation(err error) bool {
 }
 
 // ✅ PR-C FIX : Logique robuste pour gérer le debt sweep.
-// On accepte que le montant enregistré soit INFÉRIEUR ou ÉGAL au montant demandé (sweep légitime).
-// On rejette uniquement si le montant enregistré est SUPÉRIEUR (incohérence critique).
 func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
 	if existing.ShopID != req.ShopID {
 		return fmt.Errorf("idempotency conflict: shop_id mismatch")
@@ -622,8 +599,15 @@ func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *Credit
 		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
 	}
 
-	if existing.AmountCents > req.AmountCents {
-		return fmt.Errorf("idempotency conflict: amount mismatch (existing=%d > requested=%d)", existing.AmountCents, req.AmountCents)
+	// 🆕 PR-C FIX : Comparaison stricte du montant brut
+	if existing.GrossAmountCents != nil {
+		if *existing.GrossAmountCents != req.AmountCents {
+			return fmt.Errorf("idempotency conflict: gross amount mismatch (existing=%d, requested=%d)", *existing.GrossAmountCents, req.AmountCents)
+		}
+	} else {
+		// Transaction legacy : nous ne pouvons pas supposer en toute sécurité que amount_cents est le montant brut.
+		// Pour éviter un double crédit ou un rejet injustifié, nous bloquons et exigeons une réconciliation manuelle.
+		return repository.ErrLegacyIdempotencyAmbiguous
 	}
 
 	return nil

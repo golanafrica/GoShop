@@ -527,6 +527,7 @@ type WalletTransaction struct {
 	ShopID            string                  `json:"shop_id" db:"shop_id"`
 	TransactionType   WalletTransactionType   `json:"transaction_type" db:"transaction_type"`
 	AmountCents       int64                   `json:"amount_cents" db:"amount_cents"`
+	GrossAmountCents  *int64                  `json:"gross_amount_cents,omitempty" db:"gross_amount_cents"` // 🆕 PR-C FIX
 	BalanceAfterCents int64                   `json:"balance_after_cents" db:"balance_after_cents"`
 	ReferenceType     *string                 `json:"reference_type,omitempty" db:"reference_type"`
 	ReferenceID       *string                 `json:"reference_id,omitempty" db:"reference_id"`

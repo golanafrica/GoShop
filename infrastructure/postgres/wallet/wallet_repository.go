@@ -3,12 +3,16 @@ package wallet
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
+
+	"github.com/lib/pq" // 🆕 PR-C FIX : Pour la détection robuste des codes d'erreur PostgreSQL
 )
 
 // ============================================================
@@ -91,8 +95,7 @@ func (r *MerchantWalletRepositoryInfrastructure) scanWallet(row *sql.Row) (*enti
 		&wallet.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			// ✅ CORRECTION : Retourne l'erreur sentinelle typée
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrWalletNotFound
 		}
 		return nil, fmt.Errorf("failed to scan merchant wallet: %w", err)
@@ -576,16 +579,21 @@ func (r *WalletTransactionRepositoryInfrastructure) getShopID(ctx context.Contex
 func (r *WalletTransactionRepositoryInfrastructure) scanTransaction(row *sql.Row) (*entity.WalletTransaction, error) {
 	txn := &entity.WalletTransaction{}
 	var referenceType, referenceID, description sql.NullString
+	var grossAmountCents sql.NullInt64 // 🆕 PR-C FIX
+
 	err := row.Scan(
-		&txn.ID, &txn.ShopID, &txn.TransactionType, &txn.AmountCents, &txn.BalanceAfterCents,
+		&txn.ID, &txn.ShopID, &txn.TransactionType, &txn.AmountCents, &grossAmountCents, &txn.BalanceAfterCents,
 		&referenceType, &referenceID, &description, &txn.Status, &txn.CreatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			// ✅ CORRECTION : Retourne l'erreur sentinelle typée pour les transactions
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrWalletTransactionNotFound
 		}
 		return nil, fmt.Errorf("failed to scan wallet transaction: %w", err)
+	}
+
+	if grossAmountCents.Valid {
+		txn.GrossAmountCents = &grossAmountCents.Int64
 	}
 	if referenceType.Valid {
 		txn.ReferenceType = &referenceType.String
@@ -609,12 +617,18 @@ func (r *WalletTransactionRepositoryInfrastructure) scanTransactions(ctx context
 	for rows.Next() {
 		txn := &entity.WalletTransaction{}
 		var referenceType, referenceID, description sql.NullString
+		var grossAmountCents sql.NullInt64 // 🆕 PR-C FIX
+
 		err := rows.Scan(
-			&txn.ID, &txn.ShopID, &txn.TransactionType, &txn.AmountCents, &txn.BalanceAfterCents,
+			&txn.ID, &txn.ShopID, &txn.TransactionType, &txn.AmountCents, &grossAmountCents, &txn.BalanceAfterCents,
 			&referenceType, &referenceID, &description, &txn.Status, &txn.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		if grossAmountCents.Valid {
+			txn.GrossAmountCents = &grossAmountCents.Int64
 		}
 		if referenceType.Valid {
 			txn.ReferenceType = &referenceType.String
@@ -641,15 +655,23 @@ func (r *WalletTransactionRepositoryInfrastructure) Create(ctx context.Context, 
 	if txn.ShopID != shopID {
 		return fmt.Errorf("access denied: transaction shop_id does not match tenant shop")
 	}
+
+	var grossAmountCents interface{}
+	if txn.GrossAmountCents != nil {
+		grossAmountCents = *txn.GrossAmountCents
+	} else {
+		grossAmountCents = nil
+	}
+
 	query := `
 		INSERT INTO wallet_transactions (
-			shop_id, transaction_type, amount_cents, balance_after_cents,
+			shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 			reference_type, reference_id, description, status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		RETURNING id, created_at
 	`
 	err = r.queryRowContext(ctx, query,
-		txn.ShopID, txn.TransactionType, txn.AmountCents, txn.BalanceAfterCents,
+		txn.ShopID, txn.TransactionType, txn.AmountCents, grossAmountCents, txn.BalanceAfterCents,
 		txn.ReferenceType, txn.ReferenceID, txn.Description, txn.Status,
 	).Scan(&txn.ID, &txn.CreatedAt)
 	if err != nil {
@@ -664,7 +686,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByID(ctx context.Context
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE id = $1 AND shop_id = $2
 	`
@@ -680,7 +702,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByShopID(ctx context.Con
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 ORDER BY created_at DESC
 	`
@@ -696,7 +718,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByShopIDPaginated(ctx co
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 	`
@@ -709,7 +731,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByType(ctx context.Conte
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND transaction_type = $2 ORDER BY created_at DESC
 	`
@@ -725,7 +747,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByShopIDAndType(ctx cont
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND transaction_type = $2 ORDER BY created_at DESC
 	`
@@ -738,7 +760,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByStatus(ctx context.Con
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND status = $2 ORDER BY created_at DESC
 	`
@@ -754,7 +776,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByDateRange(ctx context.
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions
 		WHERE shop_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY created_at DESC
@@ -768,7 +790,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByReferenceID(ctx contex
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions
 		WHERE shop_id = $1 AND reference_type = $2 AND reference_id = $3 LIMIT 1
@@ -785,7 +807,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindCreditsByShopID(ctx cont
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND amount_cents > 0 ORDER BY created_at DESC
 	`
@@ -801,7 +823,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindDebitsByShopID(ctx conte
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND amount_cents < 0 ORDER BY created_at DESC
 	`
@@ -814,7 +836,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindPendingTransactions(ctx 
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND status = 'pending' ORDER BY created_at ASC
 	`
@@ -827,7 +849,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindFailedTransactions(ctx c
 		return nil, err
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 AND status = 'failed' ORDER BY created_at DESC
 	`
@@ -843,7 +865,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindRecent(ctx context.Conte
 		return nil, fmt.Errorf("access denied: cannot query transactions of another shop")
 	}
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions WHERE shop_id = $1 ORDER BY created_at DESC LIMIT $2
 	`
@@ -1012,7 +1034,6 @@ func (r *WalletTransactionRepositoryInfrastructure) UpdateStatus(ctx context.Con
 	}
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		// ✅ CORRECTION : Retourne l'erreur sentinelle typée
 		return repository.ErrWalletTransactionNotFound
 	}
 	return nil
@@ -1098,15 +1119,22 @@ func (r *MerchantWalletRepositoryInfrastructure) CreateAdmin(ctx context.Context
 }
 
 func (r *WalletTransactionRepositoryInfrastructure) CreateAdmin(ctx context.Context, txn *entity.WalletTransaction) error {
+	var grossAmountCents interface{}
+	if txn.GrossAmountCents != nil {
+		grossAmountCents = *txn.GrossAmountCents
+	} else {
+		grossAmountCents = nil
+	}
+
 	query := `
 		INSERT INTO wallet_transactions (
-			shop_id, transaction_type, amount_cents, balance_after_cents,
+			shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 			reference_type, reference_id, description, status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 		RETURNING id, created_at
 	`
 	err := r.queryRowContext(ctx, query,
-		txn.ShopID, txn.TransactionType, txn.AmountCents, txn.BalanceAfterCents,
+		txn.ShopID, txn.TransactionType, txn.AmountCents, grossAmountCents, txn.BalanceAfterCents,
 		txn.ReferenceType, txn.ReferenceID, txn.Description, txn.Status,
 	).Scan(&txn.ID, &txn.CreatedAt)
 	if err != nil {
@@ -1122,7 +1150,7 @@ func (r *WalletTransactionRepositoryInfrastructure) FindByReferenceIDAdmin(
 	refID string,
 ) (*entity.WalletTransaction, error) {
 	query := `
-		SELECT id, shop_id, transaction_type, amount_cents, balance_after_cents,
+		SELECT id, shop_id, transaction_type, amount_cents, gross_amount_cents, balance_after_cents,
 		       reference_type, reference_id, description, status, created_at
 		FROM wallet_transactions
 		WHERE reference_type = $1 AND reference_id = $2
@@ -1176,4 +1204,25 @@ func (r *MerchantWalletRepositoryInfrastructure) FindGracePeriodExpiredPaginated
 	}
 
 	return wallets, rows.Err()
+}
+
+// ============================================================
+// HELPERS D'ERREUR
+// ============================================================
+
+// isUniqueViolation détecte une violation de contrainte unique (23505) de manière robuste.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	// Fallback de sécurité si l'erreur est enveloppée différemment
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "unique constraint") ||
+		strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
+		strings.Contains(msg, "23505")
 }
