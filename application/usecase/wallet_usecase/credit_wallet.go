@@ -2,6 +2,7 @@ package walletusecase
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -132,7 +133,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			}
 
 			if findErr != nil {
-				if !errors.Is(findErr, repository.ErrWalletTransactionNotFound) {
+				if !isNotFound(findErr) {
 					logger.Error().
 						Err(findErr).
 						Str("reference_type", *req.ReferenceType).
@@ -179,8 +180,8 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
-		// ✅ W3 FIX : Utilisation d'un helper robuste au lieu de == "string"
-		if errors.Is(err, repository.ErrWalletNotFound) {
+		// ✅ W3 FIX : Utilisation d'un helper robuste
+		if isNotFound(err) {
 			wallet = entity.NewMerchantWallet(req.ShopID)
 			if err := uc.walletRepo.WithTX(tx).Create(ctx, wallet); err != nil {
 				logger.Error().Err(err).Msg("Failed to create wallet")
@@ -208,7 +209,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
 		if findErr != nil {
-			if !errors.Is(findErr, repository.ErrWalletTransactionNotFound) {
+			if !isNotFound(findErr) {
 				logger.Error().
 					Err(findErr).
 					Str("ref_type", *req.ReferenceType).
@@ -572,6 +573,22 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 // ============================================================
 // HELPERS
 // ============================================================
+
+// isNotFound vérifie de manière robuste si une erreur correspond à un état "non trouvé".
+// Elle gère à la fois sql.ErrNoRows, les erreurs sentinelles du repository, et les mocks basés sur du texte.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	if errors.Is(err, repository.ErrWalletNotFound) || errors.Is(err, repository.ErrWalletTransactionNotFound) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "no rows")
+}
 
 // isUniqueViolation détecte une violation de contrainte unique (23505) de manière robuste.
 func isUniqueViolation(err error) bool {

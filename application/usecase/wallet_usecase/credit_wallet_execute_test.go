@@ -7,6 +7,7 @@ import (
 
 	walletusecase "Goshop/application/usecase/wallet_usecase"
 	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
 	mockrepo "Goshop/mocks/repository"
 
@@ -16,7 +17,7 @@ import (
 )
 
 // ============================================================
-// HELPERS PARTAGÉS (wallet_usecase package)
+// HELPERS PARTAGÉS
 // ============================================================
 
 func walletTestContext() (context.Context, uuid.UUID) {
@@ -142,7 +143,9 @@ func TestCreditWalletUsecase_WalletNotFound_AutoCreates_Success(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
+
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, repository.ErrWalletNotFound)
+
 	walletRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 	walletRepo.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil)
 	txnRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
@@ -171,7 +174,9 @@ func TestCreditWalletUsecase_WalletNotFound_CreateError(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
-	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("merchant wallet not found"))
+
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, repository.ErrWalletNotFound)
+
 	walletRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(errors.New("db error"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -196,6 +201,7 @@ func TestCreditWalletUsecase_FindWalletError_Other(t *testing.T) {
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(nil, errors.New("connection reset"))
 	mockTx.EXPECT().Rollback().Return(nil)
 
@@ -363,7 +369,6 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// 🛡️ FIX : Idempotence : aucune txn existante pour cette référence
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, errors.New("not found")).
@@ -404,7 +409,6 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// 🛡️ FIX : Idempotence : aucune txn existante pour cette référence
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, errors.New("not found")).
@@ -460,12 +464,11 @@ func TestCreditWalletUsecase_IdempotencyLookupError_Aborts(t *testing.T) {
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
-	// 🛡️ A01 FIX TEST : La vérification d'idempotence échoue (panne DB)
+	// 🛡️ A01 FIX TEST : la vérification d'idempotence échoue (panne DB)
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), refType, refID).
 		Return(nil, errors.New("connection reset by peer"))
 
-	// Pas de Update / Create : le crédit ne doit pas avancer
 	mockTx.EXPECT().Rollback().Return(nil)
 
 	resp, err := uc.Execute(ctx, req)
@@ -495,11 +498,14 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 	wallet := entity.NewMerchantWallet(req.ShopID)
 	wallet.BalanceCents = 25000
 
+	// 🛡️ PR-C : GrossAmountCents obligatoire pour le match d'idempotence
+	gross := int64(10000)
 	existing := &entity.WalletTransaction{
 		ID:                "txn-already",
 		ShopID:            req.ShopID,
 		TransactionType:   entity.WalletTxSaleCredit,
 		AmountCents:       10000,
+		GrossAmountCents:  &gross,
 		BalanceAfterCents: 25000,
 		Status:            entity.WalletTxCompleted,
 	}
@@ -514,10 +520,9 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
-	// 🛡️ A01 FIX TEST : La transaction existe déjà et est complétée
+	// 🛡️ A01 FIX TEST : la transaction existe déjà et est complétée
 	txnRepo.EXPECT().FindByReferenceID(gomock.Any(), refType, refID).Return(existing, nil)
 
-	// Le code doit committer proprement et retourner le succès idempotent
 	mockTx.EXPECT().Commit().Return(nil)
 	mockTx.EXPECT().Rollback().Return(nil)
 
