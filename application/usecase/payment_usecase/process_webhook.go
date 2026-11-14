@@ -23,6 +23,9 @@ var (
 	ErrWebhookProcessing       = errors.New("webhook processing failed")
 	ErrWebhookAlreadyProcessed = errors.New("webhook already processed")
 	ErrWebhookClaimLost        = errors.New("webhook claim lost to another worker")
+
+	// 🆕 PR-B : rejet explicite d'un rapprochement cross-provider.
+	ErrWebhookProviderMismatch = errors.New("webhook provider does not match payment provider")
 )
 
 // 🆕 C1 AUDIT : Durée du bail de revendication (5 minutes)
@@ -154,7 +157,6 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 		return nil
 	}
 
-	// ✅ CORRECTION : Suppression du paramètre logger inutile ici
 	paymentEntity, matchedBy, findErr := uc.resolvePaymentFromWebhookEvent(ctx, providerCode, event)
 	if findErr != nil || paymentEntity == nil {
 		logger.Warn().
@@ -164,6 +166,24 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			Msg("Payment definitively not found for webhook")
 		return fmt.Errorf("%w: payment not found for provider_ref %s", ErrWebhookProcessing, event.ProviderRef)
 	}
+
+	// ============================================================
+	// ✅ PR-B FIX : GARDE FINALE ANTI CROSS-PROVIDER
+	// Indépendante du chemin de matching : même si un futur fallback
+	// oublie le filtre, un webhook ne peut jamais muter le paiement
+	// d'un autre prestataire.
+	// ============================================================
+	if paymentEntity.Provider != providerCode {
+		logger.Error().
+			Str("payment_id", paymentEntity.ID.String()).
+			Str("payment_provider", string(paymentEntity.Provider)).
+			Str("webhook_provider", string(providerCode)).
+			Str("matched_by", matchedBy).
+			Msg("BLOCKED: webhook provider does not match payment provider")
+		return fmt.Errorf("%w: payment %s belongs to %s, webhook from %s",
+			ErrWebhookProviderMismatch, paymentEntity.ID, paymentEntity.Provider, providerCode)
+	}
+
 	logger.Info().
 		Str("payment_id", paymentEntity.ID.String()).
 		Str("matched_by", matchedBy).
@@ -272,6 +292,18 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 			paymentEntity.CommissionCents = settlement.CommissionCents
 
 			if settlement.MerchantNetCents > 0 && uc.escrowRepo != nil {
+				// ============================================================
+				// ✅ PR-B FIX : TRANSACTION OBLIGATOIRE
+				// L'ancienne branche sans TX pouvait créer l'escrow sans
+				// persister escrow_created → double escrow au retry.
+				// ============================================================
+				if uc.txManager == nil {
+					return fmt.Errorf(
+						"txManager is required for atomic escrow creation (payment=%s): refusing non-transactional path to prevent duplicate escrow",
+						paymentEntity.ID,
+					)
+				}
+
 				orderIDStr := paymentEntity.OrderID.String()
 				now := time.Now().UTC()
 
@@ -287,45 +319,32 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 					UpdatedAt:           now,
 				}
 
-				if uc.txManager != nil {
-					tx, txErr := uc.txManager.BeginTx(ctx)
-					if txErr != nil {
-						return fmt.Errorf("failed to begin tx: %w", txErr)
-					}
+				tx, txErr := uc.txManager.BeginTx(ctx)
+				if txErr != nil {
+					return fmt.Errorf("failed to begin tx: %w", txErr)
+				}
 
-					defer func() {
-						if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-							logger.Error().Err(rbErr).Msg("unexpected error during transaction rollback")
-						}
-					}()
+				defer func() {
+					if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+						logger.Error().Err(rbErr).Msg("unexpected error during transaction rollback")
+					}
+				}()
 
-					if createErr := uc.escrowRepo.WithTX(tx).Create(ctx, escrow); createErr != nil {
-						return fmt.Errorf("failed to create escrow: %w", createErr)
-					}
+				if createErr := uc.escrowRepo.WithTX(tx).Create(ctx, escrow); createErr != nil {
+					return fmt.Errorf("failed to create escrow: %w", createErr)
+				}
 
-					if paymentEntity.Metadata == nil {
-						paymentEntity.Metadata = make(map[string]interface{})
-					}
-					paymentEntity.Metadata["escrow_created"] = true
+				if paymentEntity.Metadata == nil {
+					paymentEntity.Metadata = make(map[string]interface{})
+				}
+				paymentEntity.Metadata["escrow_created"] = true
 
-					if updateErr := uc.paymentRepo.WithTX(tx).Update(ctx, paymentEntity); updateErr != nil {
-						return fmt.Errorf("failed to update payment with escrow flag: %w", updateErr)
-					}
+				if updateErr := uc.paymentRepo.WithTX(tx).Update(ctx, paymentEntity); updateErr != nil {
+					return fmt.Errorf("failed to update payment with escrow flag: %w", updateErr)
+				}
 
-					if commitErr := tx.Commit(); commitErr != nil {
-						return fmt.Errorf("failed to commit tx: %w", commitErr)
-					}
-				} else {
-					if createErr := uc.escrowRepo.Create(ctx, escrow); createErr != nil {
-						return fmt.Errorf("failed to create escrow: %w", createErr)
-					}
-					if paymentEntity.Metadata == nil {
-						paymentEntity.Metadata = make(map[string]interface{})
-					}
-					paymentEntity.Metadata["escrow_created"] = true
-					if updateErr := uc.paymentRepo.Update(ctx, paymentEntity); updateErr != nil {
-						logger.Error().Err(updateErr).Msg("Failed to update payment metadata with escrow_created flag")
-					}
+				if commitErr := tx.Commit(); commitErr != nil {
+					return fmt.Errorf("failed to commit tx: %w", commitErr)
 				}
 
 				logger.Info().
@@ -355,15 +374,28 @@ func (uc *ProcessWebhookUsecase) Execute(ctx context.Context, providerCode entit
 	return nil
 }
 
-// ✅ PR-B FIX : Matching fail-closed. Propage les erreurs DB, ne fallback que sur "not found" confirmé.
-// ✅ CORRECTION : Paramètre logger supprimé car non utilisé (l'erreur est loguée par l'appelant).
+// ============================================================
+// ✅ PR-B FIX : MATCHING FAIL-CLOSED AVEC ERREURS TYPÉES
+// ============================================================
+//
+// Changements :
+//  1. errors.Is(err, repository.ErrPaymentNotFound) remplace la détection
+//     par texte. Une erreur SQL contenant "not found" (ex: relation
+//     inexistante) n'est plus interprétée comme une absence légitime.
+//  2. Le fallback UUID n'est tenté que si un tenant est déjà présent :
+//     FindByID est scopé par shop_id et échouait systématiquement ici,
+//     bloquant le fallback order_id suivant.
+//  3. Le fallback order_id filtre explicitement par provider.
+//
+// ============================================================
 func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	ctx context.Context,
 	providerCode entity.PaymentProvider,
 	event *payment.WebhookEvent,
 ) (*entity.Payment, string, error) {
 
-	// Helper interne qui propage les erreurs DB réelles.
+	// tryRef propage toute erreur DB réelle ; seul un "not found" typé
+	// autorise la poursuite vers le fallback suivant.
 	tryRef := func(ref, label string) (*entity.Payment, string, error) {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
@@ -371,11 +403,10 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 		p, err := uc.paymentRepo.FindByProviderRef(ctx, providerCode, ref)
 		if err != nil {
-			// Si c'est une vraie erreur DB (pas juste "not found"), on propage pour fail-closed
-			if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(strings.ToLower(err.Error()), "not found") {
+			if !errors.Is(err, repository.ErrPaymentNotFound) {
 				return nil, "", fmt.Errorf("DB error looking up %s: %w", label, err)
 			}
-			return nil, "", nil // Not found confirmé, autorise le fallback
+			return nil, "", nil // absence confirmée par sentinelle
 		}
 		if p != nil {
 			return p, label, nil
@@ -383,14 +414,14 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		return nil, "", nil
 	}
 
-	// 1. Essayer la référence principale du provider (FAIL-CLOSED sur erreur DB)
+	// 1. Référence principale du provider (déjà filtrée par provider en SQL)
 	if p, label, err := tryRef(event.ProviderRef, "provider_ref"); err != nil {
 		return nil, "", err
 	} else if p != nil {
 		return p, label, nil
 	}
 
-	// 2. Fallback sur les identifiants de métadonnées (uniquement si pas trouvé ci-dessus)
+	// 2. Identifiants de métadonnées (également filtrés par provider en SQL)
 	intentKeys := []string{
 		"payment_intent_id", "paymentIntentId", "paymentIntentID",
 		"payment_intent", "intent_id", "intentId",
@@ -404,27 +435,32 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 			continue
 		}
 		if p, label, err := tryRef(v, "metadata."+k); err != nil {
-			return nil, "", err // FAIL-CLOSED
+			return nil, "", err
 		} else if p != nil {
 			return p, label, nil
 		}
 	}
 
-	// 3. Fallback sur la référence en tant qu'UUID de paiement
+	// 3. Référence interprétée comme UUID de paiement.
+	//    FindByID exige un tenant (WHERE shop_id = $2) ; or le tenant n'est
+	//    résolu qu'après cette fonction. On ne tente donc ce chemin que si
+	//    un tenant est déjà présent, sinon on passe au fallback suivant.
 	if ref := metaString(event.Metadata, "reference"); ref != "" {
-		if pid, err := uuid.Parse(ref); err == nil {
-			p, err := uc.paymentRepo.FindByID(ctx, pid)
-			if err != nil {
-				if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(strings.ToLower(err.Error()), "not found") {
-					return nil, "", fmt.Errorf("DB error looking up payment by ID: %w", err)
+		if pid, parseErr := uuid.Parse(ref); parseErr == nil {
+			if _, tenantErr := tenant.FromContext(ctx); tenantErr == nil {
+				p, err := uc.paymentRepo.FindByID(ctx, pid)
+				if err != nil {
+					if !errors.Is(err, repository.ErrPaymentNotFound) {
+						return nil, "", fmt.Errorf("DB error looking up payment by ID: %w", err)
+					}
+				} else if p != nil && p.Provider == providerCode {
+					return p, "reference_as_payment_id", nil
 				}
-			} else if p != nil {
-				return p, "reference_as_payment_id", nil
 			}
 		}
 	}
 
-	// 4. Fallback sur l'Order ID (avec protection anti-ambiguïté)
+	// 4. Fallback sur l'Order ID, avec filtrage provider et refus d'ambiguïté.
 	orderIDStr := metaString(event.Metadata, "order_id")
 	if orderIDStr == "" {
 		if ref := metaString(event.Metadata, "reference"); strings.HasPrefix(ref, "ORDER-") {
@@ -432,16 +468,25 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 		}
 	}
 	if orderIDStr != "" {
-		if orderUUID, err := uuid.Parse(orderIDStr); err == nil {
+		if orderUUID, parseErr := uuid.Parse(orderIDStr); parseErr == nil {
 			payments, searchErr := uc.paymentRepo.FindByOrderIDUnscoped(ctx, orderUUID)
 			if searchErr != nil {
-				if !errors.Is(searchErr, sql.ErrNoRows) && !strings.Contains(strings.ToLower(searchErr.Error()), "not found") {
+				if !errors.Is(searchErr, repository.ErrPaymentNotFound) {
 					return nil, "", fmt.Errorf("DB error looking up payments by order ID: %w", searchErr)
 				}
 			} else if len(payments) > 0 {
-				chosen, err := pickBestPaymentForOrder(payments)
+				// ✅ PR-B FIX : FindByOrderIDUnscoped retourne tous les providers.
+				// On restreint au prestataire émetteur du webhook.
+				sameProvider := filterPaymentsByProvider(payments, providerCode)
+				if len(sameProvider) == 0 {
+					return nil, "", fmt.Errorf(
+						"no %s payment for order %s (%d payment(s) exist for other providers)",
+						providerCode, orderUUID, len(payments),
+					)
+				}
+				chosen, err := pickBestPaymentForOrder(sameProvider)
 				if err != nil {
-					return nil, "", err // Refuse l'ambiguïté (ex: plusieurs paiements pour la même commande)
+					return nil, "", err
 				}
 				return chosen, "order_id_fallback", nil
 			}
@@ -449,6 +494,17 @@ func (uc *ProcessWebhookUsecase) resolvePaymentFromWebhookEvent(
 	}
 
 	return nil, "", fmt.Errorf("no payment matched webhook identifiers")
+}
+
+// filterPaymentsByProvider restreint une liste de paiements au prestataire donné.
+func filterPaymentsByProvider(payments []*entity.Payment, provider entity.PaymentProvider) []*entity.Payment {
+	out := make([]*entity.Payment, 0, len(payments))
+	for _, p := range payments {
+		if p != nil && p.Provider == provider {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func pickBestPaymentForOrder(payments []*entity.Payment) (*entity.Payment, error) {

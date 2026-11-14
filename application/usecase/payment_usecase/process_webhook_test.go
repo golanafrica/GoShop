@@ -137,6 +137,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal(t *testing.T) {
 	paymentEntity := &entity.Payment{
 		ID:          uuid.New(),
 		ShopID:      shop.ID,
+		Provider:    entity.ProviderOrangeMoney, // ✅ PR-B FIX : Ajout du provider pour passer la garde anti cross-provider
 		ProviderRef: &provRef,
 		Status:      entity.PaymentStatusSuccess,
 	}
@@ -193,6 +194,7 @@ func TestProcessWebhookUsecase_AlreadyTerminal_EscrowDone(t *testing.T) {
 	paymentEntity := &entity.Payment{
 		ID:          uuid.New(),
 		ShopID:      shop.ID,
+		Provider:    entity.ProviderOrangeMoney, // ✅ PR-B FIX : Ajout du provider pour passer la garde anti cross-provider
 		ProviderRef: &provRef,
 		Status:      entity.PaymentStatusSuccess,
 		Metadata:    map[string]interface{}{"escrow_created": true},
