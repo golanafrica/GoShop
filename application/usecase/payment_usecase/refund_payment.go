@@ -19,14 +19,14 @@ import (
 type RefundPaymentUsecase struct {
 	paymentRepo repository.PaymentRepository
 	registry    PaymentRegistry
-	txManager   repository.TxManager // ✅ AJOUT P0-05 : Pour l'atomicité de la réservation
+	txManager   repository.TxManager
 }
 
 // NewRefundPaymentUsecase crée une nouvelle instance
 func NewRefundPaymentUsecase(
 	paymentRepo repository.PaymentRepository,
 	registry PaymentRegistry,
-	txManager repository.TxManager, // ✅ AJOUT P0-05
+	txManager repository.TxManager,
 ) *RefundPaymentUsecase {
 	return &RefundPaymentUsecase{
 		paymentRepo: paymentRepo,
@@ -99,12 +99,15 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-	// 7. 🛡️ A03 FIX : Idempotency check avec fallback déterministe
+	// 7. 🛡️ PR-E FIX : Idempotency check avec fallback aléatoire sécurisé
 	idemKey := req.IdempotencyKey
 	if idemKey == "" {
-		// Fallback déterministe pour éviter de générer un nouvel UUID à chaque retry
-		idemKey = fmt.Sprintf("auto_refund_%s_%d", req.PaymentID, refundAmount)
-		logger.Warn().Str("payment_id", req.PaymentID).Msg("Idempotency key not provided by client, using deterministic fallback")
+		// 🛡️ PR-E FIX : Génération d'une clé aléatoire si absente.
+		// On évite le fallback déterministe (paymentID + amount) qui bloquerait
+		// de légitimes remboursements partiels multiples du même montant.
+		idemKey = fmt.Sprintf("auto_refund_%s_%s", req.PaymentID, uuid.New().String())
+		logger.Warn().Str("payment_id", req.PaymentID).
+			Msg("Idempotency key not provided, using random fallback. Client retries without key will create duplicate refunds.")
 	}
 
 	// ✅ CORRECTION P0-05 : Début de transaction pour l'atomicité de la réservation
@@ -222,7 +225,7 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 			}
 		}
 
-		// 🛡️ PR-D FIX : Appel au provider avec gestion typée des erreurs
+		// 🛡️ PR-E FIX : Appel au provider avec gestion typée des erreurs
 		if err := provider.Refund(ctx, *paymentEntity.ProviderRef, refundAmount, customerPhone, operator); err != nil {
 			var errDefinitive *payment.ErrRefundDefinitive
 			var errUncertain *payment.ErrRefundUncertain
@@ -260,16 +263,17 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 				return nil, fmt.Errorf("refund outcome uncertain, flagged for reconciliation: %w", err)
 			}
 
-			// Pour les erreurs inconnues, on garde aussi la réservation par sécurité
+			// 🛡️ PR-E FIX : Pour les erreurs inconnues, on garde la réservation par sécurité
+			// et on exige une réconciliation (pas PaymentRefundFailed qui impliquerait un rollback).
 			logger.Error().Err(err).
 				Str("payment_id", paymentID.String()).
 				Int64("amount", refundAmount).
 				Str("provider_ref", *paymentEntity.ProviderRef).
-				Msg("CRITICAL: provider refund failed with unknown error — reservation kept")
-			if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundFailed, err.Error()); stErr != nil {
-				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund failed after unknown error")
+				Msg("CRITICAL: provider refund failed with unknown error — reservation kept for reconciliation")
+			if stErr := uc.paymentRepo.UpdatePaymentRefundStatus(ctx, refundRow.ID, entity.PaymentRefundReconciliationRequired, err.Error()); stErr != nil {
+				logger.Error().Err(stErr).Msg("CRITICAL: failed to mark payment_refund reconciliation_required after unknown error")
 			}
-			return nil, fmt.Errorf("refund failed: %w", err)
+			return nil, fmt.Errorf("refund outcome unknown, flagged for reconciliation: %w", err)
 		}
 	}
 
