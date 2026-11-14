@@ -1226,3 +1226,43 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "uq_wallet_txn_ref_completed") ||
 		strings.Contains(msg, "23505")
 }
+
+// 🆕 PR-D FIX : GetReconciliationSnapshot récupère le wallet et le ledger en une seule opération cohérente
+func (r *MerchantWalletRepositoryInfrastructure) GetReconciliationSnapshot(ctx context.Context, shopID string) (*repository.ReconciliationSnapshot, error) {
+	// On utilise une requête unique avec LEFT JOIN pour garantir un instantané cohérent
+	// Si le wallet n'existe pas, COALESCE gère les valeurs par défaut à 0
+	query := `
+		SELECT 
+			COALESCE(w.balance_cents, 0) as wallet_balance,
+			COALESCE(w.held_cents, 0) as wallet_held,
+			COALESCE(w.debt_cents, 0) as wallet_debt,
+			COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) as ledger_credits,
+			COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) as ledger_debits,
+			CASE WHEN w.shop_id IS NOT NULL THEN true ELSE false END as wallet_exists
+		FROM merchant_wallets w
+		LEFT JOIN wallet_transactions t ON w.shop_id = t.shop_id AND t.status = 'completed'
+		WHERE w.shop_id = $1
+		GROUP BY w.shop_id, w.balance_cents, w.held_cents, w.debt_cents
+	`
+
+	var snapshot repository.ReconciliationSnapshot
+	var walletExists bool
+
+	err := r.queryRowContext(ctx, query, shopID).Scan(
+		&snapshot.WalletBalance,
+		&snapshot.WalletHeld,
+		&snapshot.WalletDebt,
+		&snapshot.LedgerCredits,
+		&snapshot.LedgerDebits,
+		&walletExists,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reconciliation snapshot: %w", err)
+	}
+
+	snapshot.WalletExists = walletExists
+	snapshot.LedgerNet = snapshot.LedgerCredits + snapshot.LedgerDebits
+
+	return &snapshot, nil
+}

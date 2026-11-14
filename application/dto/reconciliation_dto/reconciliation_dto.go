@@ -18,5 +18,7 @@ type GlobalReconciliationResponse struct {
 	ShopsOK           int                          `json:"shops_ok"`
 	ShopsWarning      int                          `json:"shops_warning"`
 	ShopsCritical     int                          `json:"shops_critical"`
+	ShopsFailed       int                          `json:"shops_failed"`  // 🆕 PR-D FIX : Comptabilise les shops dont la vérification a échoué
+	HasMore           bool                         `json:"has_more"`      // 🆕 PR-D FIX : Indique si d'autres pages de shops existent
 	FlaggedShops      []ShopReconciliationResponse `json:"flagged_shops"` // Uniquement ceux avec des écarts
 }

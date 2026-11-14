@@ -6,44 +6,43 @@ import (
 	"time"
 
 	"Goshop/application/dto/reconciliation_dto"
-	"Goshop/domain/entity"
 	"Goshop/domain/repository"
+
+	"github.com/rs/zerolog"
 )
 
 type ReconciliationUsecase struct {
 	walletRepo repository.MerchantWalletRepository
 	shopRepo   repository.ShopRepository
+	logger     zerolog.Logger // 🆕 PR-D FIX : Pour tracer les erreurs silencieuses
 }
 
 func NewReconciliationUsecase(
 	walletRepo repository.MerchantWalletRepository,
 	shopRepo repository.ShopRepository,
+	logger zerolog.Logger,
 ) *ReconciliationUsecase {
 	return &ReconciliationUsecase{
 		walletRepo: walletRepo,
 		shopRepo:   shopRepo,
+		logger:     logger.With().Str("component", "reconciliation_usecase").Logger(),
 	}
 }
 
-// CheckShop vérifie la cohérence financière d'un shop spécifique
+// CheckShop vérifie la cohérence financière d'un shop spécifique via un snapshot atomique
 func (uc *ReconciliationUsecase) CheckShop(ctx context.Context, shopID string) (*reconciliation_dto.ShopReconciliationResponse, error) {
-	wallet, err := uc.walletRepo.FindByShopID(ctx, shopID)
+	// 🆕 PR-D FIX : Utilisation du snapshot atomique pour éviter les race conditions
+	snapshot, err := uc.walletRepo.GetReconciliationSnapshot(ctx, shopID)
 	if err != nil {
-		// Si le wallet n'existe pas encore, on considère un état à 0 pour ne pas bloquer l'analyse
-		wallet = &entity.MerchantWallet{ShopID: shopID, BalanceCents: 0, HeldCents: 0, DebtCents: 0}
-	}
-
-	ledgerSum, err := uc.walletRepo.GetLedgerSum(ctx, shopID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get ledger sum: %w", err)
+		return nil, fmt.Errorf("failed to get reconciliation snapshot: %w", err)
 	}
 
 	resp := &reconciliation_dto.ShopReconciliationResponse{
 		ShopID:        shopID,
-		WalletBalance: wallet.BalanceCents,
-		LedgerBalance: ledgerSum.NetBalance,
-		BalanceDiff:   wallet.BalanceCents - ledgerSum.NetBalance,
-		WalletHeld:    wallet.HeldCents,
+		WalletBalance: snapshot.WalletBalance,
+		LedgerBalance: snapshot.LedgerNet,
+		BalanceDiff:   snapshot.WalletBalance - snapshot.LedgerNet,
+		WalletHeld:    snapshot.WalletHeld,
 		LastCheckedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -57,56 +56,78 @@ func (uc *ReconciliationUsecase) CheckShop(ctx context.Context, shopID string) (
 		resp.Status = "OK"
 	}
 
-	// Vérification bonus : Dette négative incohérente (si jamais une logique buguée l'a causé)
-	if wallet.DebtCents < 0 {
-		// On passe en WARNING si c'était OK, sinon on garde CRITICAL
+	// Vérification bonus : Dette négative incohérente
+	if snapshot.WalletDebt < 0 {
 		if resp.Status == "OK" {
 			resp.Status = "WARNING"
 		}
 		resp.Discrepancies = append(resp.Discrepancies,
-			fmt.Sprintf("WARNING: Negative debt value detected (%d cents)", wallet.DebtCents))
+			fmt.Sprintf("WARNING: Negative debt value detected (%d cents)", snapshot.WalletDebt))
 	}
 
 	return resp, nil
 }
 
-// CheckGlobal scanne les shops et retourne un résumé agrégé pour le tableau de bord admin
-func (uc *ReconciliationUsecase) CheckGlobal(ctx context.Context, limit int) (*reconciliation_dto.GlobalReconciliationResponse, error) {
-	// ✅ FIX : Utilisation de FindAllShopsAdmin avec une limite pour éviter de charger toute la base en mémoire
-	filters := &repository.ShopAdminFilters{
-		Limit:  limit,
-		Offset: 0,
-	}
-
-	shops, _, err := uc.shopRepo.FindAllShopsAdmin(ctx, filters)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list shops: %w", err)
+// CheckGlobal scanne les shops par pages et retourne un résumé agrégé
+func (uc *ReconciliationUsecase) CheckGlobal(ctx context.Context, pageSize int) (*reconciliation_dto.GlobalReconciliationResponse, error) {
+	if pageSize <= 0 {
+		pageSize = 100 // Défaut sécurisé
 	}
 
 	resp := &reconciliation_dto.GlobalReconciliationResponse{
-		TotalShopsChecked: len(shops),
-		FlaggedShops:      []reconciliation_dto.ShopReconciliationResponse{},
+		FlaggedShops: []reconciliation_dto.ShopReconciliationResponse{},
 	}
 
-	for _, shop := range shops {
-		check, err := uc.CheckShop(ctx, shop.ID.String())
-		if err != nil {
-			// On ignore les erreurs individuelles pour ne pas bloquer le rapport global entier
-			// (En production, il est recommandé d'ajouter un log zerolog ici)
-			continue
+	offset := 0
+	maxPages := 50 // 🆕 PR-D FIX : Protection contre les boucles infinies ou OOM (max 5000 shops par appel)
+
+	for page := 0; page < maxPages; page++ {
+		filters := &repository.ShopAdminFilters{
+			Limit:  pageSize,
+			Offset: offset,
 		}
 
-		// ✅ FIX QF1003 : Utilisation d'un switch tagué pour une meilleure lisibilité et conformité au linter
-		switch check.Status {
-		case "CRITICAL":
-			resp.ShopsCritical++
-			resp.FlaggedShops = append(resp.FlaggedShops, *check)
-		case "WARNING":
-			resp.ShopsWarning++
-			resp.FlaggedShops = append(resp.FlaggedShops, *check)
-		default:
-			resp.ShopsOK++
+		shops, total, err := uc.shopRepo.FindAllShopsAdmin(ctx, filters)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list shops (page %d): %w", page, err)
 		}
+
+		if len(shops) == 0 {
+			break // Plus de shops à traiter
+		}
+
+		for _, shop := range shops {
+			check, err := uc.CheckShop(ctx, shop.ID.String())
+			if err != nil {
+				// 🆕 PR-D FIX : Ne plus ignorer silencieusement. Comptabiliser et logger.
+				resp.ShopsFailed++
+				uc.logger.Error().Err(err).Str("shop_id", shop.ID.String()).
+					Msg("Reconciliation check failed for shop")
+				continue
+			}
+
+			resp.TotalShopsChecked++
+
+			switch check.Status {
+			case "CRITICAL":
+				resp.ShopsCritical++
+				resp.FlaggedShops = append(resp.FlaggedShops, *check)
+			case "WARNING":
+				resp.ShopsWarning++
+				resp.FlaggedShops = append(resp.FlaggedShops, *check)
+			default:
+				resp.ShopsOK++
+			}
+		}
+
+		// Si on a atteint le total, on a tout traité
+		if offset+pageSize >= total {
+			resp.HasMore = false
+			break
+		}
+
+		offset += pageSize
+		resp.HasMore = true // Il reste des pages à traiter au-delà de la limite actuelle
 	}
 
 	return resp, nil

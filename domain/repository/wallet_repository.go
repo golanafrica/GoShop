@@ -17,95 +17,61 @@ import (
 
 var ErrWalletNotFound = errors.New("merchant wallet not found")
 var ErrWalletTransactionNotFound = errors.New("wallet transaction not found")
-var ErrLegacyIdempotencyAmbiguous = errors.New("idempotency conflict: legacy transaction without gross amount, requires manual reconciliation") // 🆕 PR-C FIX
+var ErrLegacyIdempotencyAmbiguous = errors.New("idempotency conflict: legacy transaction without gross amount, requires manual reconciliation")
 
 // ============================================================
 // TYPES DE DONNÉES AGRÉGÉES
 // ============================================================
 
-// LedgerSum représente l'agrégat des transactions d'un shop
 type LedgerSum struct {
 	TotalCredits int64
 	TotalDebits  int64
 	NetBalance   int64
 }
 
+// 🆕 PR-D FIX : Snapshot atomique pour éviter les race conditions entre lecture wallet et ledger
+type ReconciliationSnapshot struct {
+	WalletExists  bool
+	WalletBalance int64
+	WalletHeld    int64
+	WalletDebt    int64
+	LedgerCredits int64
+	LedgerDebits  int64
+	LedgerNet     int64
+}
+
 // ============================================================
 // MERCHANT WALLET REPOSITORY
 // ============================================================
 
-// MerchantWalletRepository définit les opérations sur les portefeuilles marchands
 type MerchantWalletRepository interface {
-	// Create crée un nouveau portefeuille
 	Create(ctx context.Context, wallet *entity.MerchantWallet) error
-
-	// FindByShopID trouve un portefeuille par boutique
 	FindByShopID(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
-
-	// FindByShopIDForUpdate trouve un portefeuille et le verrouille pour mise à jour (SELECT ... FOR UPDATE)
 	FindByShopIDForUpdate(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
-
-	// FindByShopIDForUpdateAdmin trouve un portefeuille et le verrouille pour mise à jour, SANS vérifier le tenant.
 	FindByShopIDForUpdateAdmin(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
-
-	// FindAll retourne tous les portefeuilles
 	FindAll(ctx context.Context) ([]*entity.MerchantWallet, error)
-
-	// FindFrozen retourne les portefeuilles gelés
 	FindFrozen(ctx context.Context) ([]*entity.MerchantWallet, error)
-
-	// FindFrozenByShopID retourne les portefeuilles gelés d'une boutique spécifique
 	FindFrozenByShopID(ctx context.Context, shopID string) (*entity.MerchantWallet, error)
-
-	// FindNegativeBalance retourne les portefeuilles avec solde négatif
 	FindNegativeBalance(ctx context.Context) ([]*entity.MerchantWallet, error)
-
-	// FindPositiveBalance retourne les portefeuilles avec solde positif
 	FindPositiveBalance(ctx context.Context) ([]*entity.MerchantWallet, error)
-
-	// FindBelowThreshold retourne les portefeuilles en dessous d'un seuil
 	FindBelowThreshold(ctx context.Context, thresholdCents int64) ([]*entity.MerchantWallet, error)
-
-	// FindAboveThreshold retourne les portefeuilles au-dessus d'un seuil
 	FindAboveThreshold(ctx context.Context, thresholdCents int64) ([]*entity.MerchantWallet, error)
-
-	// FindGracePeriodExpiringSoon retourne les wallets dont la période de grâce expire bientôt
 	FindGracePeriodExpiringSoon(ctx context.Context, daysRemaining int) ([]*entity.MerchantWallet, error)
-
-	// FindGracePeriodExpired retourne les wallets dont la période de grâce est expirée
 	FindGracePeriodExpired(ctx context.Context) ([]*entity.MerchantWallet, error)
-
-	// FindGracePeriodExpiredPaginated retourne les wallets grace expirée avec pagination (évite OOM)
 	FindGracePeriodExpiredPaginated(ctx context.Context, limit, offset int) ([]*entity.MerchantWallet, error)
-
-	// SumTotalBalance somme totale de tous les soldes
 	SumTotalBalance(ctx context.Context) (int64, error)
-
-	// SumFrozenBalance somme totale des soldes gelés
 	SumFrozenBalance(ctx context.Context) (int64, error)
-
-	// SumNegativeBalance somme totale des soldes négatifs (dettes)
 	SumNegativeBalance(ctx context.Context) (int64, error)
-
-	// CountFrozen compte les portefeuilles gelés
 	CountFrozen(ctx context.Context) (int, error)
-
-	// CountNegativeBalance compte les portefeuilles avec solde négatif
 	CountNegativeBalance(ctx context.Context) (int, error)
 
-	// GetLedgerSum calcule la somme des transactions complétées pour un shop
+	// 🆕 PR-D FIX : Méthode unifiée pour une lecture cohérente (snapshot)
+	GetReconciliationSnapshot(ctx context.Context, shopID string) (*ReconciliationSnapshot, error)
+
 	GetLedgerSum(ctx context.Context, shopID string) (*LedgerSum, error)
-
-	// Update met à jour un portefeuille
 	Update(ctx context.Context, wallet *entity.MerchantWallet) error
-
-	// UpdateAdmin met à jour un portefeuille sans vérification de tenant (réservé aux admins)
 	UpdateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error
-
-	// 🆕 CreateAdmin crée un portefeuille sans vérification de tenant (réservé aux opérations système/admin)
 	CreateAdmin(ctx context.Context, wallet *entity.MerchantWallet) error
-
-	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) MerchantWalletRepository
 }
 
@@ -113,84 +79,31 @@ type MerchantWalletRepository interface {
 // WALLET TRANSACTION REPOSITORY
 // ============================================================
 
-// WalletTransactionRepository définit les opérations sur les transactions wallet
 type WalletTransactionRepository interface {
-	// Create crée une nouvelle transaction
 	Create(ctx context.Context, tx *entity.WalletTransaction) error
-
-	// CreateAdmin crée une transaction sans vérification de tenant (réservé aux opérations système/admin)
 	CreateAdmin(ctx context.Context, tx *entity.WalletTransaction) error
-
-	// FindByID trouve une transaction par ID
 	FindByID(ctx context.Context, id string) (*entity.WalletTransaction, error)
-
-	// FindByShopID retourne les transactions d'une boutique
 	FindByShopID(ctx context.Context, shopID string) ([]*entity.WalletTransaction, error)
-
-	// FindByShopIDPaginated retourne les transactions d'une boutique avec pagination
 	FindByShopIDPaginated(ctx context.Context, shopID string, limit, offset int) ([]*entity.WalletTransaction, error)
-
-	// FindByType retourne les transactions par type
 	FindByType(ctx context.Context, txType entity.WalletTransactionType) ([]*entity.WalletTransaction, error)
-
-	// FindByShopIDAndType retourne les transactions d'une boutique par type
 	FindByShopIDAndType(ctx context.Context, shopID string, txType entity.WalletTransactionType) ([]*entity.WalletTransaction, error)
-
-	// FindByStatus retourne les transactions par statut
 	FindByStatus(ctx context.Context, status entity.WalletTransactionStatus) ([]*entity.WalletTransaction, error)
-
-	// FindByDateRange retourne les transactions dans une plage de dates
 	FindByDateRange(ctx context.Context, shopID string, startDate, endDate time.Time) ([]*entity.WalletTransaction, error)
-
-	// FindByReferenceID trouve une transaction par référence
 	FindByReferenceID(ctx context.Context, refType string, refID string) (*entity.WalletTransaction, error)
-
-	// FindByReferenceIDAdmin trouve une transaction par référence SANS filtre tenant
-	// Réservé scheduler / admin / system (auto-release, disputes système)
 	FindByReferenceIDAdmin(ctx context.Context, refType string, refID string) (*entity.WalletTransaction, error)
-
-	// FindCreditsByShopID retourne uniquement les crédits d'une boutique
 	FindCreditsByShopID(ctx context.Context, shopID string) ([]*entity.WalletTransaction, error)
-
-	// FindDebitsByShopID retourne uniquement les débits d'une boutique
 	FindDebitsByShopID(ctx context.Context, shopID string) ([]*entity.WalletTransaction, error)
-
-	// FindPendingTransactions retourne les transactions en attente
 	FindPendingTransactions(ctx context.Context) ([]*entity.WalletTransaction, error)
-
-	// FindFailedTransactions retourne les transactions échouées
 	FindFailedTransactions(ctx context.Context) ([]*entity.WalletTransaction, error)
-
-	// FindRecent retourne les N transactions les plus récentes
 	FindRecent(ctx context.Context, shopID string, limit int) ([]*entity.WalletTransaction, error)
-
-	// CountByShopID compte les transactions d'une boutique
 	CountByShopID(ctx context.Context, shopID string) (int, error)
-
-	// CountByShopIDAndType compte les transactions d'une boutique par type
 	CountByShopIDAndType(ctx context.Context, shopID string, txType entity.WalletTransactionType) (int, error)
-
-	// SumCreditsByShopID somme des crédits pour une boutique
 	SumCreditsByShopID(ctx context.Context, shopID string) (int64, error)
-
-	// SumDebitsByShopID somme des débits pour une boutique
 	SumDebitsByShopID(ctx context.Context, shopID string) (int64, error)
-
-	// SumCreditsByDateRange somme des crédits dans une plage de dates
 	SumCreditsByDateRange(ctx context.Context, shopID string, startDate, endDate time.Time) (int64, error)
-
-	// SumDebitsByDateRange somme des débits dans une plage de dates
 	SumDebitsByDateRange(ctx context.Context, shopID string, startDate, endDate time.Time) (int64, error)
-
-	// SumCreditsByType somme des crédits par type pour une boutique
 	SumCreditsByType(ctx context.Context, shopID string, txType entity.WalletTransactionType) (int64, error)
-
-	// SumDebitsByType somme des débits par type pour une boutique
 	SumDebitsByType(ctx context.Context, shopID string, txType entity.WalletTransactionType) (int64, error)
-
-	// UpdateStatus met à jour le statut d'une transaction
 	UpdateStatus(ctx context.Context, id string, status entity.WalletTransactionStatus) error
-
-	// WithTX retourne le repository attaché à une transaction
 	WithTX(tx Tx) WalletTransactionRepository
 }

@@ -565,7 +565,7 @@ func (a *App) setupRouter() {
 	a.Logger.Info().Msg("✅ Cash order usecases initialized (accept, reject, out_for_delivery, deliver, cancel, sync)")
 
 	// 🆕 PR-H : Reconciliation Usecase & Handler
-	reconciliationUC := reconciliationusecase.NewReconciliationUsecase(walletRepo, shopRepo)
+	reconciliationUC := reconciliationusecase.NewReconciliationUsecase(walletRepo, shopRepo, a.Logger.Logger)
 	reconciliationHandler := reconciliationhandler.NewReconciliationHandler(reconciliationUC)
 	a.Logger.Info().Msg("✅ PR-H Reconciliation usecase & handler initialized")
 
