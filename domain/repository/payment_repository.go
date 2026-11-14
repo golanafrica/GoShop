@@ -4,11 +4,21 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"Goshop/domain/entity"
 
 	"github.com/google/uuid"
 )
+
+// ============================================================
+// ERREURS SENTINELLES (Typées pour errors.Is)
+// ============================================================
+
+// ErrPaymentNotFound signale une absence confirmée de paiement.
+// Le message est volontairement identique à l'ancien fmt.Errorf("payment not found")
+// pour ne pas casser les détections textuelles encore présentes dans le codebase.
+var ErrPaymentNotFound = errors.New("payment not found")
 
 // PaymentRepository définit les opérations sur les paiements
 type PaymentRepository interface {

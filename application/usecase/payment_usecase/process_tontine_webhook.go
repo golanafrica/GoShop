@@ -122,8 +122,9 @@ func tontineCycleRateBps(circleType string) int {
 	}
 }
 
-// ✅ CORRECTION PR4 : Retourne (int, error).
+// ✅ PR-B FIX : Retourne (int, error) avec détection typée.
 // Distingue "absence confirmée" (fallback autorisé) des "vraies erreurs SQL" (propagation).
+// Utilise errors.Is pour une détection robuste, avec fallback texte pour compatibilité mocks.
 func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	ctx context.Context,
 	shopID string,
@@ -138,9 +139,16 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 	txType := tontineCircleToTransactionType(circleType)
 	rate, err := uc.commissionRateRepo.FindByShopAndType(ctx, shopID, txType)
 	if err != nil {
-		errMsg := strings.ToLower(err.Error())
-		// Absence confirmée (non trouvé) -> fallback autorisé
-		if errors.Is(err, sql.ErrNoRows) || strings.Contains(errMsg, "not found") {
+		// ✅ PR-B FIX : détection typée en priorité
+		isNotFound := errors.Is(err, sql.ErrNoRows)
+
+		// Fallback texte pour compatibilité avec mocks et cas legacy
+		if !isNotFound {
+			errMsg := strings.ToLower(err.Error())
+			isNotFound = strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "no rows")
+		}
+
+		if isNotFound {
 			logger.Debug().
 				Str("shop_id", shopID).
 				Str("tx_type", txType).
@@ -148,6 +156,7 @@ func (uc *ProcessTontineWebhookUsecase) resolveTontineRateBps(
 				Msg("Phase 4: commission rate not found for shop — using platform default")
 			return fallback, nil
 		}
+
 		// Erreur SQL réelle (ex: perte de connexion, timeout) -> on propage l'erreur
 		return 0, fmt.Errorf("failed to fetch commission rate: %w", err)
 	}

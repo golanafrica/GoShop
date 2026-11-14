@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"Goshop/domain/entity"
@@ -289,7 +290,9 @@ func (r *PaymentRepositoryPostgres) Update(ctx context.Context, payment *entity.
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		return fmt.Errorf("payment not found or access denied")
+		// ✅ PR-B FIX : erreur typée et enveloppée. Un refus d'accès reste
+		// distinguishable d'une absence pure via le suffixe du message.
+		return fmt.Errorf("%w or access denied", repository.ErrPaymentNotFound)
 	}
 
 	return nil
@@ -333,8 +336,10 @@ func (r *PaymentRepositoryPostgres) scanPayment(row *sql.Row) (*entity.Payment, 
 		&p.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("payment not found")
+	// ✅ PR-B FIX : sentinelle typée. L'ancien fmt.Errorf("payment not found")
+	// perdait sql.ErrNoRows et n'était matchable que par comparaison de texte.
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, repository.ErrPaymentNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scan payment: %w", err)
@@ -805,7 +810,8 @@ func (r *PaymentRepositoryPostgres) FindPaymentRefundByIdempotency(
 		&rf.ID, &rf.PaymentID, &rf.ShopID, &rf.AmountCents, &rf.Status, &reason,
 		&rf.IdempotencyKey, &providerRef, &providerError, &rf.CreatedAt, &rf.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	// ✅ PR-B FIX : errors.Is au lieu de == pour rester compatible avec un wrapping futur
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
