@@ -147,6 +147,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindStuckPendingWithdrawals(ctx,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindStuckPendingWithdrawals", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindStuckPendingWithdrawals), ctx, limit, minAgeMinutes)
 }
 
+// MarkFailedIfCompensationPending mocks base method.
+func (m *MockWithdrawalRepository) MarkFailedIfCompensationPending(ctx context.Context, id uuid.UUID, errorMsg string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkFailedIfCompensationPending", ctx, id, errorMsg)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MarkFailedIfCompensationPending indicates an expected call of MarkFailedIfCompensationPending.
+func (mr *MockWithdrawalRepositoryMockRecorder) MarkFailedIfCompensationPending(ctx, id, errorMsg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkFailedIfCompensationPending", reflect.TypeOf((*MockWithdrawalRepository)(nil).MarkFailedIfCompensationPending), ctx, id, errorMsg)
+}
+
 // TransitionToReconciliationRequired mocks base method.
 func (m *MockWithdrawalRepository) TransitionToReconciliationRequired(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
 	m.ctrl.T.Helper()

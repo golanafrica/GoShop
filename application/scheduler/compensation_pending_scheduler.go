@@ -146,13 +146,13 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		Str("shop_id", w.ShopID.String()).
 		Logger()
 
-	// 🛡️ PR-E FIX : Contrôle du statut avant toute compensation pour éviter de compenser
+	// 🛡️ PR-F FIX : Contrôle du statut avant toute compensation pour éviter de compenser
 	// un retrait qui aurait été résolu manuellement ou par webhook entre-temps.
 	currentW, err := s.withdrawalRepo.FindByID(ctx, w.ID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch current withdrawal state: %w", err)
 	}
-	if currentW.Status != "compensation_pending" {
+	if currentW.Status != entity.WithdrawalStatusCompensationPending {
 		log.Info().Str("current_status", string(currentW.Status)).Msg("Withdrawal status changed, skipping compensation")
 		return nil
 	}
@@ -188,7 +188,7 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		}
 
 		if w.CompensationAttempts >= s.maxAttempts {
-			// 🛡️ PR-E FIX : Retourner une erreur si l'alerte échoue, pour permettre au job
+			// 🛡️ PR-F FIX : Retourner une erreur si l'alerte échoue, pour permettre au job
 			// de réessayer l'alerte au prochain run (le statut reste 'compensation_pending').
 			if alertErr := s.alertAdmin(ctx, w, err); alertErr != nil {
 				log.Error().Err(alertErr).Msg("CRITICAL: Failed to alert admin after max attempts. Will retry on next job run.")
@@ -198,13 +198,31 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		return fmt.Errorf("credit reverse failed: %w", err)
 	}
 
+	// 🛡️ PR-F FIX : Mise à jour atomique pour éviter d'écraser un statut 'success'
+	// qui aurait été défini par un webhook pendant l'exécution du crédit wallet.
 	msg := "compensation resolved by retry job (payout reverse applied)"
-	if markErr := w.MarkFailed(msg); markErr != nil {
-		return fmt.Errorf("mark failed after reverse: %w", markErr)
+	updated, err := s.withdrawalRepo.MarkFailedIfCompensationPending(ctx, w.ID, msg)
+	if err != nil {
+		return fmt.Errorf("failed to check/update withdrawal status after compensation: %w", err)
 	}
 
-	if updErr := s.withdrawalRepo.Update(ctx, w); updErr != nil {
-		return fmt.Errorf("update after resolve: %w", updErr)
+	if !updated {
+		// Le statut n'était plus 'compensation_pending'. Il est probablement passé à 'success' via webhook.
+		// Cela signifie un double paiement potentiel (webhook + compensation).
+		log.Error().
+			Str("withdrawal_id", w.ID.String()).
+			Str("shop_id", w.ShopID.String()).
+			Int64("amount_cents", w.AmountCents).
+			Msg("CRITICAL: Withdrawal status changed DURING compensation. Potential double payment detected. Manual reconciliation required.")
+
+		// On alerte l'admin immédiatement avec un type d'alerte spécifique
+		if alertErr := s.alertAdminDoublePayment(ctx, w); alertErr != nil {
+			log.Error().Err(alertErr).Msg("CRITICAL: Failed to alert admin about potential double payment")
+		}
+
+		// On ne force pas le statut à 'failed' car il est probablement 'success'.
+		// On laisse le statut tel quel pour que l'admin investigue.
+		return fmt.Errorf("withdrawal status changed during compensation, flagged for manual reconciliation")
 	}
 
 	log.Info().
@@ -214,7 +232,7 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	return nil
 }
 
-// 🛡️ PR-E FIX : Retourne désormais une error pour permettre la réessai durable par le scheduler.
+// 🛡️ PR-F FIX : Retourne désormais une error pour permettre la réessai durable par le scheduler.
 func (s *CompensationPendingScheduler) alertAdmin(ctx context.Context, w *entity.Withdrawal, lastErr error) error {
 	if s.notifService == nil {
 		return fmt.Errorf("notification service not configured, cannot alert admin")
@@ -243,6 +261,30 @@ func (s *CompensationPendingScheduler) alertAdmin(ctx context.Context, w *entity
 	}
 
 	s.logger.Info().Str("withdrawal_id", w.ID.String()).Msg("Admin compensation alert sent successfully")
+	return nil
+}
+
+// 🆕 PR-F FIX : Alerte spécifique pour les cas de double paiement potentiel
+func (s *CompensationPendingScheduler) alertAdminDoublePayment(ctx context.Context, w *entity.Withdrawal) error {
+	if s.notifService == nil {
+		return fmt.Errorf("notification service not configured")
+	}
+
+	req := &service.NotificationRequest{
+		Type:   "admin_compensation_double_payment_risk",
+		ShopID: w.ShopID.String(),
+		Data: map[string]interface{}{
+			"withdrawal_id": w.ID.String(),
+			"amount_cents":  w.AmountCents,
+			"message":       "CRITICAL: Withdrawal was compensated, but status changed during the process. Check if merchant was paid twice (webhook + compensation).",
+		},
+	}
+
+	if sendErr := s.notifService.SendNotification(ctx, req); sendErr != nil {
+		return fmt.Errorf("failed to send double payment risk alert: %w", sendErr)
+	}
+
+	s.logger.Info().Str("withdrawal_id", w.ID.String()).Msg("Admin double payment risk alert sent successfully")
 	return nil
 }
 

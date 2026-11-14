@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"Goshop/domain/entity"
 	"Goshop/domain/repository"
@@ -299,4 +300,25 @@ func (r *WithdrawalRepositoryPostgres) TransitionToReconciliationRequired(
 		return false, fmt.Errorf("rows affected: %w", err)
 	}
 	return n == 1, nil
+}
+
+// MarkFailedIfCompensationPending met à jour le statut de manière atomique et conditionnelle.
+// Cela empêche d'écraser un statut 'success' qui aurait été défini par un webhook pendant la compensation.
+func (r *WithdrawalRepositoryPostgres) MarkFailedIfCompensationPending(ctx context.Context, id uuid.UUID, errorMsg string) (bool, error) {
+	now := time.Now().UTC()
+	query := `
+		UPDATE withdrawals
+		SET status = 'failed', 
+		    error_message = $2, 
+		    processed_at = $3, 
+		    updated_at = $3
+		WHERE id = $1 AND status = 'compensation_pending'
+	`
+	res, err := r.execContext(ctx, query, id, errorMsg, now)
+	if err != nil {
+		return false, fmt.Errorf("failed to mark withdrawal as failed: %w", err)
+	}
+
+	rows, _ := res.RowsAffected()
+	return rows > 0, nil
 }

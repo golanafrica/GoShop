@@ -30,6 +30,11 @@ type WithdrawalRepository interface {
 	// Retourne false si le statut a déjà changé (webhook concurrent, autre job, etc.).
 	TransitionToReconciliationRequired(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 
+	// 🆕 PR-F FIX : MarkFailedIfCompensationPending met à jour le statut en 'failed' uniquement s'il est
+	// actuellement 'compensation_pending'. Retourne true si la mise à jour a réussi,
+	// false si le statut avait déjà changé (ex: webhook success entre-temps).
+	MarkFailedIfCompensationPending(ctx context.Context, id uuid.UUID, errorMsg string) (bool, error)
+
 	// WithTX retourne le repository attache a une transaction
 	WithTX(tx Tx) WithdrawalRepository
 }
