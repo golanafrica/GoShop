@@ -47,12 +47,12 @@ func TestOrderRepository_Create(t *testing.T) {
 			created_at, updated_at
 		) 
 		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-		RETURNING id, customer_id, total_cents, status, payment_method, reserved_until, created_at, updated_at
+		RETURNING id, shop_id, customer_id, total_cents, status, payment_method, reserved_until, created_at, updated_at
 	`
 
 	rows := sqlmock.NewRows([]string{
-		"id", "customer_id", "total_cents", "status", "payment_method", "reserved_until", "created_at", "updated_at",
-	}).AddRow("order-1", "1234", 50000, "PENDING", "mobile_money", nil, time.Now(), time.Now())
+		"id", "shop_id", "customer_id", "total_cents", "status", "payment_method", "reserved_until", "created_at", "updated_at",
+	}).AddRow("order-1", testShop.ID.String(), "1234", 50000, "PENDING", "mobile_money", nil, time.Now(), time.Now())
 
 	mock.ExpectQuery(regexp.QuoteMeta(expectedQuery)).
 		WithArgs(testShop.ID.String(), orderEntity.CustomerID, orderEntity.TotalCents, orderEntity.Status, "mobile_money", nil).
@@ -62,6 +62,7 @@ func TestOrderRepository_Create(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "order-1", result.ID)
+	assert.Equal(t, testShop.ID.String(), result.ShopID)
 	assert.Equal(t, int64(50000), result.TotalCents)
 	assert.Equal(t, "PENDING", result.Status)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -74,16 +75,16 @@ func TestOrderRepository_FindByID(t *testing.T) {
 	repo := order.NewOrderPostgresInfra(db)
 
 	// 1️⃣ Requête principale : orders (avec shop_id)
-	// Il faut fournir TOUTES les colonnes que le code réel essaie de scanner (14 colonnes)
+	// Il faut fournir TOUTES les colonnes que le code réel essaie de scanner (15 colonnes)
 	orderRows := sqlmock.NewRows([]string{
-		"id", "customer_id", "total_cents", "status", "created_at", "updated_at",
+		"id", "shop_id", "customer_id", "total_cents", "status", "created_at", "updated_at",
 		"payment_method", "accepted_at", "rejected_at", "delivered_at", "cancelled_at",
 		"delivery_notes", "amount_received_cents", "reserved_until",
-	}).AddRow("order-1", "cust-123", 100000, "PENDING", time.Now(), time.Now(),
+	}).AddRow("order-1", testShop.ID.String(), "cust-123", 100000, "PENDING", time.Now(), time.Now(),
 		"mobile_money", nil, nil, nil, nil, "", int64(0), nil)
 
 	expectedQuery := `
-		SELECT id, customer_id, total_cents, status, created_at, updated_at,
+		SELECT id, shop_id, customer_id, total_cents, status, created_at, updated_at,
 		       payment_method, accepted_at, rejected_at, delivered_at, cancelled_at,
 		       delivery_notes, amount_received_cents, reserved_until
 		FROM orders 
@@ -114,6 +115,7 @@ func TestOrderRepository_FindByID(t *testing.T) {
 
 	// 4️⃣ Assertions
 	assert.NoError(t, err)
+	assert.Equal(t, testShop.ID.String(), result.ShopID)
 	assert.Equal(t, "cust-123", result.CustomerID)
 	assert.Equal(t, int64(100000), result.TotalCents)
 	assert.Len(t, result.Items, 1)
@@ -132,24 +134,39 @@ func TestOrderRepository_FindAll(t *testing.T) {
 	date2 := time.Now().Add(-24 * time.Hour)
 
 	rows := sqlmock.NewRows([]string{
-		"order_id", "customer_id", "total_cents", "status", "created_at", "updated_at",
+		"order_id", "shop_id", "customer_id", "total_cents", "status", "created_at", "updated_at",
+		"payment_method", "accepted_at", "rejected_at", "delivered_at", "cancelled_at",
+		"delivery_notes", "amount_received_cents", "reserved_until", "delivery_zone_id",
 		"item_id", "product_id", "quantity", "price_cents", "subtotal_cents",
 	}).
-		AddRow("order-1", "cust-1", 200000, "PENDING", date1, date1,
+		AddRow("order-1", testShop.ID.String(), "cust-1", 200000, "PENDING", date1, date1,
+			"mobile_money", nil, nil, nil, nil, "", int64(0), nil, nil,
 			"item-1", "prod-1", 1, 100000, 100000).
-		AddRow("order-1", "cust-1", 200000, "PENDING", date1, date1,
+		AddRow("order-1", testShop.ID.String(), "cust-1", 200000, "PENDING", date1, date1,
+			"mobile_money", nil, nil, nil, nil, "", int64(0), nil, nil,
 			"item-2", "prod-2", 1, 100000, 100000).
-		AddRow("order-2", "cust-2", 50000, "PENDING", date2, date2,
+		AddRow("order-2", testShop.ID.String(), "cust-2", 50000, "PENDING", date2, date2,
+			"mobile_money", nil, nil, nil, nil, "", int64(0), nil, nil,
 			nil, nil, nil, nil, nil)
 
 	expectedQuery := `
 		SELECT 
 			o.id AS order_id,
+			o.shop_id,
 			o.customer_id,
 			o.total_cents,
 			o.status,
 			o.created_at,
 			o.updated_at,
+			o.payment_method,
+			o.accepted_at,
+			o.rejected_at,
+			o.delivered_at,
+			o.cancelled_at,
+			o.delivery_notes,
+			o.amount_received_cents,
+			o.reserved_until,
+			o.delivery_zone_id,
 			oi.id AS item_id,
 			oi.product_id,
 			oi.quantity,
@@ -169,12 +186,22 @@ func TestOrderRepository_FindAll(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, results, 2)
 
-	order1 := results[0]
-	assert.Equal(t, "order-1", order1.ID)
-	assert.Len(t, order1.Items, 2)
+	// ✅ CORRECTION PR-G : Chercher par ID au lieu d'indices fixes
+	// car l'itération sur un map en Go est aléatoire.
+	// Utilisation d'un tagged switch pour satisfaire staticcheck QF1003.
+	var order1, order2 *entity.Order
+	for _, o := range results {
+		switch o.ID {
+		case "order-1":
+			order1 = o
+		case "order-2":
+			order2 = o
+		}
+	}
 
-	order2 := results[1]
-	assert.Equal(t, "order-2", order2.ID)
+	assert.NotNil(t, order1, "order-1 should exist")
+	assert.NotNil(t, order2, "order-2 should exist")
+	assert.Len(t, order1.Items, 2)
 	assert.Len(t, order2.Items, 0)
 
 	assert.NoError(t, mock.ExpectationsWereMet())

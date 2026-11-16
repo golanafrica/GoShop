@@ -580,6 +580,9 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 	notifService.EXPECT().NotifyClientOrderDelivered(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	notifService.EXPECT().NotifyMerchantCommissionPaid(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
+	// ✅ CORRECTION PR-G : Ajouter l'expectation pour NotifyOrderStatusChange
+	notifService.EXPECT().NotifyOrderStatusChange(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
 	order, err := uc.Execute(ctx, validOrderID, req)
 
 	assert.NoError(t, err)

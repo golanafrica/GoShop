@@ -116,19 +116,25 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 	if payment.Status == entity.PaymentStatusSuccess {
 		escrow, escrowErr := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 		if escrowErr == nil && escrow != nil {
+
+			// ✅ CORRECTION ICI : On déclare une variable pour tracer si une action a eu lieu
+			synced := false
+
 			if order.Status == string(entity.OrderStatusPending) {
 				if markErr := order.MarkAccepted(); markErr == nil {
 					_ = uc.orderRepo.UpdateOrder(ctx, order)
 					logger.Info().Str("order_id", req.OrderID).Msg("✅ Order confirmed (already-success path)")
+					synced = true // ✅ On passe à true car on a bien mis à jour la commande
 				}
 			}
+
 			return &SyncOrderPaymentResponse{
 				OrderID:       req.OrderID,
 				PaymentID:     payment.ID.String(),
 				OrderStatus:   order.Status,
 				PaymentStatus: string(payment.Status),
 				EscrowStatus:  string(escrow.Status),
-				Synced:        false,
+				Synced:        synced, // ✅ On retourne la variable dynamique, plus "false" en dur
 				Message:       "Payment already confirmed, escrow exists",
 			}, nil
 		}

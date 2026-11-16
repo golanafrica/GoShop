@@ -38,7 +38,7 @@ var ctx = tenant.WithTenant(context.Background(), testShop)
 
 // ✅ Initialisation de la base de test
 func setupTestDB() *sql.DB {
-	if err := godotenv.Load("../../../.env"); err != nil {
+	if err := godotenv.Load("../../../.env.test"); err != nil {
 		log.Println("fichier non trouver")
 	}
 

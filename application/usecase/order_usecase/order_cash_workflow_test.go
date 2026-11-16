@@ -342,13 +342,17 @@ func TestAcceptOrderUsecase_Success(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	notifService.EXPECT().NotifyClientOrderConfirmed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	// ✅ CORRECTION PR-G : Expectation pour NotifyOrderStatusChange (appelé dans goroutine fire-and-forget)
+	notifService.EXPECT().NotifyOrderStatusChange(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	order, err := uc.Execute(ctx, "order-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusConfirmed), order.Status)
 	assert.NotNil(t, order.AcceptedAt)
+
+	// ✅ CORRECTION PR-G : Attendre que la goroutine fire-and-forget se termine
+	time.Sleep(50 * time.Millisecond)
 }
 
 // ============================================================
@@ -809,10 +813,16 @@ func TestOutForDeliveryUsecase_Success(t *testing.T) {
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(confirmedOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
+	// ✅ CORRECTION PR-G : Expectation pour NotifyOrderStatusChange (goroutine fire-and-forget)
+	notifService.EXPECT().NotifyOrderStatusChange(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
 	order, err := uc.Execute(ctx, "order-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusOutForDelivery), order.Status)
+
+	// ✅ CORRECTION PR-G : Attendre que la goroutine se termine
+	time.Sleep(50 * time.Millisecond)
 }
 
 // ============================================================
@@ -915,12 +925,17 @@ func TestAcceptOrderUsecase_Success_NotificationError_ContinuesAnyway(t *testing
 	orderRepo.EXPECT().FindByID(gomock.Any(), "order-1").Return(pendingOrder, nil)
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
-	notifService.EXPECT().NotifyClientOrderConfirmed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("SMS service down"))
+	// ✅ CORRECTION PR-G : Le usecase appelle NotifyOrderStatusChange (pas NotifyClientOrderConfirmed)
+	// On simule une erreur de notification, mais le usecase continue quand même
+	notifService.EXPECT().NotifyOrderStatusChange(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("SMS service down"))
 
 	order, err := uc.Execute(ctx, "order-1")
 	assert.NoError(t, err)
 	assert.NotNil(t, order)
 	assert.Equal(t, string(entity.OrderStatusConfirmed), order.Status)
+
+	// ✅ CORRECTION PR-G : Attendre que la goroutine se termine
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestRejectOrderUsecase_RestoreStock_UpdateProductError(t *testing.T) {

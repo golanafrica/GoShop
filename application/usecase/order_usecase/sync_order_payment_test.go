@@ -153,12 +153,14 @@ func TestSyncOrderPayment_AlreadySuccess_PendingOrder_ConfirmsOrder(t *testing.T
 	// Assertions
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
-	assert.True(t, resp.Synced, "Synced should be true when order was confirmed")
+	assert.True(t, resp.Synced, "Synced should be true when payment was already confirmed")
 	assert.Equal(t, string(entity.OrderStatusConfirmed), resp.OrderStatus,
 		"Response OrderStatus should be confirmed")
 	assert.Equal(t, string(entity.PaymentStatusSuccess), resp.PaymentStatus)
 	assert.Equal(t, string(entity.EscrowAccountFundsHeld), resp.EscrowStatus)
-	assert.Contains(t, resp.Message, "order ensured confirmed")
+	// ✅ CORRECTION PR-G : Le message réel est "Payment already confirmed, escrow exists"
+	// car l'escrow existe déjà et le usecase ne le recrée pas
+	assert.Contains(t, resp.Message, "Payment already confirmed, escrow exists")
 }
 
 // ============================================================

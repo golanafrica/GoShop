@@ -33,7 +33,7 @@ var testShopByID = &entity.Shop{
 
 // --- Initialisation DB ---
 func setupTestDB_Get() *sql.DB {
-	if err := godotenv.Load("../../../.env"); err != nil {
+	if err := godotenv.Load("../../../.env.test"); err != nil {
 		log.Println("??  .env non trouve (mode defaut)")
 	}
 
