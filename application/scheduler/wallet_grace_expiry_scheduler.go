@@ -64,11 +64,10 @@ func (s *WalletGraceExpiryScheduler) Run() {
 		return
 	}
 	if !enabled {
-		log.Info().Msg("ℹ️  Job disabled in DB (wallet.freeze_job.enabled=false), skipping")
+		log.Info().Msg("ℹ️ Job disabled in DB (wallet.freeze_job.enabled=false), skipping")
 		return
 	}
 
-	// ✅ CORRECTION PR7 : Vérifier les erreurs de configuration au lieu de les ignorer silencieusement
 	policy, err := s.getConfigString(ctx, configKeyPolicy)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to read policy config from DB, skipping")
@@ -102,27 +101,8 @@ func (s *WalletGraceExpiryScheduler) Run() {
 		return
 	}
 
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to acquire DB connection for advisory lock")
-		s.finishJobRun(ctx, runID, 0, 0, 0, err.Error())
-		return
-	}
-	defer conn.Close()
-
-	acquired, err := s.acquireAdvisoryLockOnConn(ctx, conn)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to acquire advisory lock")
-		s.finishJobRun(ctx, runID, 0, 0, 0, err.Error())
-		return
-	}
-	if !acquired {
-		log.Info().Msg("🔒 Another instance is running, skipping")
-		s.finishJobRun(ctx, runID, 0, 0, 0, "another instance running")
-		return
-	}
-	defer s.releaseAdvisoryLockOnConn(ctx, conn)
-
+	// ✅ PR-2 FIX : On délègue l'acquisition du verrou et de la connexion à executeJobRun
+	// pour éviter le double verrouillage qui bloquait l'exécution planifiée.
 	s.executeJobRun(ctx, runID, "live", policy, maxPerRun, pageSize)
 }
 
@@ -147,7 +127,6 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string,
 	go func() {
 		defer cancel()
 
-		// ✅ CORRECTION PR7 : Vérifier les erreurs de configuration en mode manuel aussi
 		policy, err := s.getConfigString(workCtx, configKeyPolicy)
 		if err != nil {
 			s.logger.Error().Err(err).Msg("Failed to read policy config from DB for manual run")
@@ -178,16 +157,18 @@ func (s *WalletGraceExpiryScheduler) RunManual(ctx context.Context, mode string,
 			pageSize = defaultPageSize
 		}
 
+		// ✅ PR-2 FIX : RunManual utilise désormais le même chemin sécurisé (avec verrou unique) que Run()
 		s.executeJobRun(workCtx, runID, mode, policy, maxPerRun, pageSize)
 	}()
 
 	return runID, nil
 }
 
-// executeJobRun contient la logique réelle d'exécution
+// executeJobRun contient la logique réelle d'exécution et gère le verrouillage de manière centralisée.
 func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID string, mode string, policy string, maxPerRun int, pageSize int) {
 	log := s.logger.With().Str("run_id", runID).Str("mode", mode).Logger()
 
+	// ✅ PR-2 FIX : Acquisition unique de la connexion et du verrou advisory pour TOUTES les exécutions
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to acquire DB connection for advisory lock")
@@ -207,6 +188,7 @@ func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID st
 		s.finishJobRun(ctx, runID, 0, 0, 0, "another instance running")
 		return
 	}
+	// Le verrou sera libéré automatiquement à la fin de la fonction, même en cas de panic ou d'erreur
 	defer s.releaseAdvisoryLockOnConn(ctx, conn)
 
 	processed, skipped, scanned := 0, 0, 0
@@ -267,9 +249,6 @@ func (s *WalletGraceExpiryScheduler) executeJobRun(ctx context.Context, runID st
 func (s *WalletGraceExpiryScheduler) processExpiredWallet(ctx context.Context, runID string, wallet *entity.MerchantWallet, policy string) error {
 	log := s.logger.With().Str("shop_id", wallet.ShopID).Logger()
 
-	// ✅ CORRECTION PR7 CRITIQUE : Envoyer la notification AVANT d'enregistrer l'action.
-	// Si la notification échoue, on retourne une erreur pour que le job réessaie au prochain run.
-	// Cela évite qu'une notification perdue ne soit jamais retracée à cause de l'idempotence (isAlreadyProcessed).
 	if policy == "alert_only" {
 		if err := s.notifyAdmin(ctx, wallet); err != nil {
 			return fmt.Errorf("failed to notify admin, aborting action recording to allow retry: %w", err)
@@ -379,8 +358,8 @@ func (s *WalletGraceExpiryScheduler) getConfigInt(ctx context.Context, key strin
 
 func (s *WalletGraceExpiryScheduler) createJobRun(ctx context.Context, runType, mode, actor string) (string, error) {
 	query := `
-		INSERT INTO wallet_freeze_job_runs (run_type, mode, triggered_by, started_at) 
-		VALUES ($1, $2, $3, NOW()) 
+		INSERT INTO wallet_freeze_job_runs (run_type, mode, triggered_by, started_at)
+		VALUES ($1, $2, $3, NOW())
 		RETURNING id
 	`
 	var runID string
@@ -392,11 +371,11 @@ func (s *WalletGraceExpiryScheduler) finishJobRun(ctx context.Context, runID str
 	query := `
 		UPDATE wallet_freeze_job_runs
 		SET wallets_scanned = $1,
-		    wallets_processed = $2,
-		    wallets_skipped = $3,
-		    finished_at = NOW(),
-		    duration_ms = (EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::int,
-		    error_message = NULLIF($4, '')
+			wallets_processed = $2,
+			wallets_skipped = $3,
+			finished_at = NOW(),
+			duration_ms = (EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::int,
+			error_message = NULLIF($4, '')
 		WHERE id = $5
 	`
 	_, err := s.db.ExecContext(ctx, query, scanned, processed, skipped, errorMsg, runID)
