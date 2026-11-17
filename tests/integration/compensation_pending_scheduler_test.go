@@ -45,6 +45,7 @@ func TestCompensationScheduler_IdempotenceOnCrash(t *testing.T) {
 		server.DB,
 		withdrawalRepo,
 		creditWalletUC,
+		txManager,
 		nil, // notifService optionnel
 		logger,
 	)
