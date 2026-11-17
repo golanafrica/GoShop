@@ -87,6 +87,21 @@ func (mr *MockWithdrawalRepositoryMockRecorder) FindByID(ctx, id any) *gomock.Ca
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByID", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindByID), ctx, id)
 }
 
+// FindByIDForUpdate mocks base method.
+func (m *MockWithdrawalRepository) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByIDForUpdate", ctx, id)
+	ret0, _ := ret[0].(*entity.Withdrawal)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByIDForUpdate indicates an expected call of FindByIDForUpdate.
+func (mr *MockWithdrawalRepositoryMockRecorder) FindByIDForUpdate(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIDForUpdate", reflect.TypeOf((*MockWithdrawalRepository)(nil).FindByIDForUpdate), ctx, id)
+}
+
 // FindByProviderRef mocks base method.
 func (m *MockWithdrawalRepository) FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error) {
 	m.ctrl.T.Helper()

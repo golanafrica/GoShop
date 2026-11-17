@@ -991,14 +991,16 @@ func (a *App) setupRouter() {
 	freezeJobHandler := freezejobhandler.NewFreezeJobHandler(freezeJobUC)
 	a.Logger.Info().Msg("✅ P2.3 Freeze job usecase & handler initialized")
 
+	// 🆕 PR-1 FIX : Ajout de txmanagerRepo pour l'atomicité de la compensation
 	compensationPendingSched := appscheduler.NewCompensationPendingScheduler(
 		a.DB,
 		withdrawalRepo,
 		creditWalletUC,
+		txmanagerRepo, // 🆕 PR-1 FIX : Transaction Manager pour atomicité
 		notifService,
 		a.Logger.Logger,
 	)
-	a.Logger.Info().Msg("✅ P0-A Compensation pending scheduler initialized")
+	a.Logger.Info().Msg("✅ P0-A Compensation pending scheduler initialized (with atomic transaction support)")
 
 	withdrawalReconcilSched := appscheduler.NewWithdrawalReconciliationScheduler(
 		withdrawalRepo,

@@ -14,6 +14,7 @@ import (
 type WithdrawalRepository interface {
 	Create(ctx context.Context, withdrawal *entity.Withdrawal) error
 	FindByID(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error)
+	FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error) // 🆕 PR-1 FIX
 	FindByShopID(ctx context.Context, shopID uuid.UUID, limit, offset int) ([]*entity.Withdrawal, error)
 	FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error)
 	Update(ctx context.Context, withdrawal *entity.Withdrawal) error
@@ -30,7 +31,7 @@ type WithdrawalRepository interface {
 	// Retourne false si le statut a déjà changé (webhook concurrent, autre job, etc.).
 	TransitionToReconciliationRequired(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 
-	// 🆕 PR-F FIX : MarkFailedIfCompensationPending met à jour le statut en 'failed' uniquement s'il est
+	// MarkFailedIfCompensationPending met à jour le statut en 'failed' uniquement s'il est
 	// actuellement 'compensation_pending'. Retourne true si la mise à jour a réussi,
 	// false si le statut avait déjà changé (ex: webhook success entre-temps).
 	MarkFailedIfCompensationPending(ctx context.Context, id uuid.UUID, errorMsg string) (bool, error)

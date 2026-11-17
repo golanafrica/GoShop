@@ -84,6 +84,13 @@ func (r *WithdrawalRepositoryPostgres) FindByID(ctx context.Context, id uuid.UUI
 	return r.scan(r.queryRowContext(ctx, query, id))
 }
 
+// 🆕 PR-1 FIX : Verrouille la ligne pour éviter les courses critiques avec le webhook.
+// SKIP LOCKED permet au scheduler de passer immédiatement si le webhook traite déjà ce retrait.
+func (r *WithdrawalRepositoryPostgres) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*entity.Withdrawal, error) {
+	query := `SELECT ` + withdrawalSelectCols + ` FROM withdrawals WHERE id = $1 FOR UPDATE SKIP LOCKED`
+	return r.scan(r.queryRowContext(ctx, query, id))
+}
+
 func (r *WithdrawalRepositoryPostgres) FindByProviderRef(ctx context.Context, providerRef string) (*entity.Withdrawal, error) {
 	query := `SELECT ` + withdrawalSelectCols + ` FROM withdrawals WHERE provider_ref = $1`
 	return r.scan(r.queryRowContext(ctx, query, providerRef))
@@ -114,9 +121,6 @@ func (r *WithdrawalRepositoryPostgres) FindByShopID(ctx context.Context, shopID 
 	return withdrawals, rows.Err()
 }
 
-// FindCompensationPending file d'attente du job retry (FIFO).
-// 🛡️ CORRECTION CRITIQUE P1 : Filtre STRICTEMENT sur 'compensation_pending'.
-// Ne doit JAMAIS inclure 'reconciliation_required' pour éviter un reverse automatique non désiré.
 func (r *WithdrawalRepositoryPostgres) FindCompensationPending(
 	ctx context.Context,
 	limit int,
@@ -235,8 +239,6 @@ func (r *WithdrawalRepositoryPostgres) scanFromRows(rows *sql.Rows) (*entity.Wit
 	return w, nil
 }
 
-// FindStuckPendingWithdrawals trouve les retraits 'pending' ou 'processing' avec un débit wallet vieux de X minutes
-// 🛡️ AMÉLIORATION : Vérifie aussi 'processing' au cas où le crash surviendrait après l'envoi au prestataire mais avant la réponse.
 func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.Context, limit, minAgeMinutes int) ([]*entity.Withdrawal, error) {
 	if limit <= 0 {
 		limit = 50
@@ -275,9 +277,6 @@ func (r *WithdrawalRepositoryPostgres) FindStuckPendingWithdrawals(ctx context.C
 	return out, rows.Err()
 }
 
-// TransitionToReconciliationRequired met à jour le statut de façon conditionnelle.
-// Seuls pending et processing peuvent passer en reconciliation_required.
-// Empêche une race avec un webhook success/failed concurrent.
 func (r *WithdrawalRepositoryPostgres) TransitionToReconciliationRequired(
 	ctx context.Context,
 	id uuid.UUID,
@@ -302,8 +301,7 @@ func (r *WithdrawalRepositoryPostgres) TransitionToReconciliationRequired(
 	return n == 1, nil
 }
 
-// MarkFailedIfCompensationPending met à jour le statut de manière atomique et conditionnelle.
-// Cela empêche d'écraser un statut 'success' qui aurait été défini par un webhook pendant la compensation.
+// 🆕 PR-1 FIX : Gestion correcte de l'erreur RowsAffected
 func (r *WithdrawalRepositoryPostgres) MarkFailedIfCompensationPending(ctx context.Context, id uuid.UUID, errorMsg string) (bool, error) {
 	now := time.Now().UTC()
 	query := `
@@ -319,6 +317,9 @@ func (r *WithdrawalRepositoryPostgres) MarkFailedIfCompensationPending(ctx conte
 		return false, fmt.Errorf("failed to mark withdrawal as failed: %w", err)
 	}
 
-	rows, _ := res.RowsAffected()
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	return rows > 0, nil
 }
