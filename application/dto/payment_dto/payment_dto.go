@@ -135,7 +135,12 @@ func (r *RefundPaymentRequest) Validate() error {
 		return errors.New("payment_id is required")
 	}
 	if r.AmountCents < 0 {
-		return errors.New("amount_cents must be positive")
+		return errors.New("amount_cents must be positive or zero")
+	}
+	// 🆕 PR-6 FIX : Rendre la clé d'idempotence obligatoire pour éviter les doubles remboursements
+	// en cas de retry réseau. Le client DOIT fournir une clé unique pour chaque intention de remboursement.
+	if r.IdempotencyKey == "" {
+		return errors.New("idempotency_key is required to prevent duplicate refunds")
 	}
 	return nil
 }

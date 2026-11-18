@@ -99,16 +99,8 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 		Str("reason", req.Reason).
 		Msg("Initiating refund")
 
-	// 7. 🛡️ PR-E FIX : Idempotency check avec fallback aléatoire sécurisé
+	// 7. 🛡️ PR-6 FIX : Vérification d'idempotence (la clé est désormais obligatoire au niveau du DTO)
 	idemKey := req.IdempotencyKey
-	if idemKey == "" {
-		// 🛡️ PR-E FIX : Génération d'une clé aléatoire si absente.
-		// On évite le fallback déterministe (paymentID + amount) qui bloquerait
-		// de légitimes remboursements partiels multiples du même montant.
-		idemKey = fmt.Sprintf("auto_refund_%s_%s", req.PaymentID, uuid.New().String())
-		logger.Warn().Str("payment_id", req.PaymentID).
-			Msg("Idempotency key not provided, using random fallback. Client retries without key will create duplicate refunds.")
-	}
 
 	// ✅ CORRECTION P0-05 : Début de transaction pour l'atomicité de la réservation
 	tx, err := uc.txManager.BeginTx(ctx)

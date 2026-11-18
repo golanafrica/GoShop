@@ -24,9 +24,10 @@ import (
 
 func createValidRefundRequest(paymentID string) *paymentdto.RefundPaymentRequest {
 	return &paymentdto.RefundPaymentRequest{
-		PaymentID:   paymentID,
-		AmountCents: 0, // 0 = remboursement du reste
-		Reason:      "Customer request",
+		PaymentID:      paymentID,
+		AmountCents:    0, // 0 = remboursement du reste
+		Reason:         "Customer request",
+		IdempotencyKey: "test-idempotency-key-" + uuid.New().String(), // 🆕 PR-6 FIX
 	}
 }
 
@@ -80,6 +81,9 @@ func setupRefundTest(t *testing.T) (*mockrepo.MockPaymentRepository, *mockusecas
 	return mockPaymentRepo, mockRegistry, mockTxManager, mockTx
 }
 
+// NOTE : createTestContextForPayment() est déjà défini dans list_payments_test.go,
+// donc nous ne le redéclarons pas ici pour éviter l'erreur "redeclared in this block".
+
 // ============================================================
 // TESTS : Validation & Multi-tenant
 // ============================================================
@@ -88,7 +92,12 @@ func TestRefundPaymentUsecase_Validation_InvalidPaymentID(t *testing.T) {
 	mockPaymentRepo, mockRegistry, mockTxManager, _ := setupRefundTest(t)
 	uc := paymentusecase.NewRefundPaymentUsecase(mockPaymentRepo, mockRegistry, mockTxManager)
 	ctx := createTestContextForPayment()
-	req := &paymentdto.RefundPaymentRequest{PaymentID: "invalid-uuid", AmountCents: 0, Reason: "test"}
+	req := &paymentdto.RefundPaymentRequest{
+		PaymentID:      "invalid-uuid",
+		AmountCents:    0,
+		Reason:         "test",
+		IdempotencyKey: "test-key", // 🆕 PR-6 FIX
+	}
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid payment_id")
@@ -169,9 +178,10 @@ func TestRefundPaymentUsecase_RefundAmountExceedsRemaining(t *testing.T) {
 	mockPaymentRepo.EXPECT().FindByID(gomock.Any(), partialPayment.ID).Return(partialPayment, nil)
 
 	req := &paymentdto.RefundPaymentRequest{
-		PaymentID:   partialPayment.ID.String(),
-		AmountCents: 25000,
-		Reason:      "Customer request",
+		PaymentID:      partialPayment.ID.String(),
+		AmountCents:    25000,
+		Reason:         "Customer request",
+		IdempotencyKey: "test-idempotency-key-" + uuid.New().String(), // 🆕 PR-6 FIX
 	}
 	_, err := uc.Execute(ctx, req)
 	assert.Error(t, err)
@@ -372,9 +382,10 @@ func TestRefundPaymentUsecase_Success_PartialRefund(t *testing.T) {
 		Return(nil)
 
 	req := &paymentdto.RefundPaymentRequest{
-		PaymentID:   successPayment.ID.String(),
-		AmountCents: 30000,
-		Reason:      "Partial refund",
+		PaymentID:      successPayment.ID.String(),
+		AmountCents:    30000,
+		Reason:         "Partial refund",
+		IdempotencyKey: "test-idempotency-key-" + uuid.New().String(), // 🆕 PR-6 FIX
 	}
 	response, err := uc.Execute(ctx, req)
 
@@ -421,9 +432,10 @@ func TestRefundPaymentUsecase_Success_MultiplePartialRefunds(t *testing.T) {
 		Return(nil)
 
 	req := &paymentdto.RefundPaymentRequest{
-		PaymentID:   partialPayment.ID.String(),
-		AmountCents: 15000,
-		Reason:      "Second partial refund",
+		PaymentID:      partialPayment.ID.String(),
+		AmountCents:    15000,
+		Reason:         "Second partial refund",
+		IdempotencyKey: "test-idempotency-key-" + uuid.New().String(), // 🆕 PR-6 FIX
 	}
 	response, err := uc.Execute(ctx, req)
 
@@ -469,9 +481,10 @@ func TestRefundPaymentUsecase_Success_FinalPartialRefundBecomesFull(t *testing.T
 		Return(nil)
 
 	req := &paymentdto.RefundPaymentRequest{
-		PaymentID:   partialPayment.ID.String(),
-		AmountCents: 30000,
-		Reason:      "Final partial refund",
+		PaymentID:      partialPayment.ID.String(),
+		AmountCents:    30000,
+		Reason:         "Final partial refund",
+		IdempotencyKey: "test-idempotency-key-" + uuid.New().String(), // 🆕 PR-6 FIX
 	}
 	response, err := uc.Execute(ctx, req)
 
