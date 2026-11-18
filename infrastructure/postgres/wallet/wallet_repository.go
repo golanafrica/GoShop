@@ -342,11 +342,11 @@ func (r *MerchantWalletRepositoryInfrastructure) CountNegativeBalance(ctx contex
 	return count, nil
 }
 
-// ✅ PR-H FIX : Ajout de la méthode GetLedgerSum pour calculer le solde réel du ledger
+// ✅ PR-4 FIX : Utilisation de gross_amount_cents pour éviter le double comptage du debt_sweep
 func (r *MerchantWalletRepositoryInfrastructure) GetLedgerSum(ctx context.Context, shopID string) (*repository.LedgerSum, error) {
 	query := `
-		SELECT 
-			COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END), 0) as total_credits,
+		SELECT
+			COALESCE(SUM(CASE WHEN amount_cents > 0 THEN COALESCE(gross_amount_cents, amount_cents) ELSE 0 END), 0) as total_credits,
 			COALESCE(SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0) as total_debits
 		FROM wallet_transactions
 		WHERE shop_id = $1 AND status = 'completed'
@@ -1227,16 +1227,17 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
-// 🆕 PR-D FIX : GetReconciliationSnapshot récupère le wallet et le ledger en une seule opération cohérente
+// ✅ PR-4 FIX : GetReconciliationSnapshot récupère le wallet et le ledger en une seule opération cohérente
+// et gère proprement le cas où le wallet n'existe pas encore.
 func (r *MerchantWalletRepositoryInfrastructure) GetReconciliationSnapshot(ctx context.Context, shopID string) (*repository.ReconciliationSnapshot, error) {
-	// On utilise une requête unique avec LEFT JOIN pour garantir un instantané cohérent
-	// Si le wallet n'existe pas, COALESCE gère les valeurs par défaut à 0
+	// On utilise COALESCE(gross_amount_cents, amount_cents) pour les crédits afin d'éviter
+	// que le debt_sweep ne soit compté deux fois (une fois dans le net, une fois en débit).
 	query := `
-		SELECT 
+		SELECT
 			COALESCE(w.balance_cents, 0) as wallet_balance,
 			COALESCE(w.held_cents, 0) as wallet_held,
 			COALESCE(w.debt_cents, 0) as wallet_debt,
-			COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) as ledger_credits,
+			COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN COALESCE(t.gross_amount_cents, t.amount_cents) ELSE 0 END), 0) as ledger_credits,
 			COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) as ledger_debits,
 			CASE WHEN w.shop_id IS NOT NULL THEN true ELSE false END as wallet_exists
 		FROM merchant_wallets w
@@ -1258,6 +1259,18 @@ func (r *MerchantWalletRepositoryInfrastructure) GetReconciliationSnapshot(ctx c
 	)
 
 	if err != nil {
+		// ✅ PR-4 FIX : Si le wallet n'existe pas, on retourne un snapshot à zéro au lieu d'une erreur.
+		if errors.Is(err, sql.ErrNoRows) {
+			return &repository.ReconciliationSnapshot{
+				WalletExists:  false,
+				WalletBalance: 0,
+				WalletHeld:    0,
+				WalletDebt:    0,
+				LedgerCredits: 0,
+				LedgerDebits:  0,
+				LedgerNet:     0,
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to get reconciliation snapshot: %w", err)
 	}
 
