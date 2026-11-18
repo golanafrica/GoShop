@@ -2,6 +2,7 @@ package walletusecase_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -369,13 +370,14 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows au lieu de errors.New("not found")
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("not found")).
+		Return(nil, sql.ErrNoRows).
 		AnyTimes()
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
@@ -409,13 +411,14 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("not found")).
+		Return(nil, sql.ErrNoRows).
 		AnyTimes()
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), shopID.String()).Return(wallet, nil)
@@ -460,7 +463,8 @@ func TestCreditWalletUsecase_IdempotencyLookupError_Aborts(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, errors.New("not found")).AnyTimes()
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows pour "not found"
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
@@ -516,7 +520,8 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, errors.New("not found")).AnyTimes()
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows pour "not found"
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 

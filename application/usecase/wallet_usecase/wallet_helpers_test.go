@@ -2,7 +2,7 @@ package walletusecase_test
 
 import (
 	"context"
-	"errors" // 🆕 v4.8.0 : AJOUTÉ pour les mocks escrow
+	"database/sql" // 🆕 PR-3 FIX : AJOUTÉ pour sql.ErrNoRows
 	"testing"
 
 	walletusecase "Goshop/application/usecase/wallet_usecase"
@@ -83,19 +83,20 @@ func simulateSuccessfulCredit(
 	// 🆕 v4.8.0 : Mock pour la vérification escrow
 	// Les méthodes CreditFrom* passent ReferenceType (order, credit_contract, tontine_group)
 	// donc le code de vérification escrow s'exécute.
-	// En retournant "not found", le code passe directement à l'étape suivante.
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows au lieu de errors.New("not found")
 	if escrowRepo != nil {
 		escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-		escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
-		escrowRepo.EXPECT().FindByCreditContractID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
-		escrowRepo.EXPECT().FindByTontineGroupID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
-		escrowRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(nil, errors.New("not found")).AnyTimes()
+		escrowRepo.EXPECT().FindByOrderID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
+		escrowRepo.EXPECT().FindByCreditContractID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
+		escrowRepo.EXPECT().FindByTontineGroupID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
+		escrowRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).Return(nil, sql.ErrNoRows).AnyTimes()
 	}
 
 	// 🛡️ A01 FIX : Idempotence check - aucune txn existante pour cette référence
+	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
-		Return(nil, errors.New("not found")).
+		Return(nil, sql.ErrNoRows).
 		AnyTimes()
 
 	wallet := entity.NewMerchantWallet(shopID)

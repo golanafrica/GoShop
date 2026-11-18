@@ -355,9 +355,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
 	} else {
-		// ✅ CORRECTION PR-C (P0-01) : Full sweep.
-		// On enregistre grossCents (et non 0) pour que assertIdempotentCreditMatch
-		// réussisse lors d'un retry (car req.AmountCents == grossCents).
+		// ✅ CORRECTION PR-C (P0-01) & PR-3 FIX : Full sweep avec gestion propre du conflit unique.
 		markerDesc := fmt.Sprintf("Crédit de %d FCFA intégralement absorbé par la dette", grossCents)
 		markerTxn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
@@ -374,11 +372,44 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, markerTxn); err != nil {
 			if isUniqueViolation(err) {
-				logger.Info().Msg("Unique constraint hit on debt sweep marker — already processed")
-			} else {
-				logger.Error().Err(err).Msg("Failed to create debt sweep marker transaction")
-				return nil, fmt.Errorf("failed to create debt sweep marker: %w", err)
+				logger.Info().Msg("Unique constraint hit on debt sweep marker — reloading winner")
+				_ = tx.Rollback() // 🆕 PR-3 FIX : Rollback explicite de la transaction avortée
+
+				// Nouvelle lecture hors TX
+				winner, wErr := uc.txnRepo.FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
+				if wErr != nil {
+					return nil, fmt.Errorf("concurrent credit (full sweep): failed to reload existing transaction: %w", wErr)
+				}
+				if winner == nil || winner.Status != entity.WalletTxCompleted {
+					return nil, fmt.Errorf("concurrent credit (full sweep): unique conflict but no completed transaction found")
+				}
+				if err := assertIdempotentCreditMatch(winner, req); err != nil {
+					return nil, err
+				}
+
+				// Recharger wallet pour soldes à jour
+				w2, w2err := uc.walletRepo.FindByShopID(ctx, req.ShopID)
+				if w2err != nil {
+					return nil, fmt.Errorf("concurrent credit (full sweep): reload wallet: %w", w2err)
+				}
+
+				return &CreditWalletResponse{
+					ShopID:            w2.ShopID,
+					BalanceCents:      w2.BalanceCents,
+					HeldCents:         w2.HeldCents,
+					AvailableCents:    w2.AvailableCents(),
+					PreviousBalance:   w2.BalanceCents,
+					IsFrozen:          w2.IsFrozen,
+					TransactionID:     winner.ID,
+					TransactionType:   winner.TransactionType,
+					AmountCents:       winner.AmountCents,
+					BalanceAfterCents: winner.BalanceAfterCents,
+					Held:              req.HoldAfterCredit,
+					SweptCents:        grossCents,
+				}, nil
 			}
+			logger.Error().Err(err).Msg("Failed to create debt sweep marker transaction")
+			return nil, fmt.Errorf("failed to create debt sweep marker: %w", err)
 		}
 		txnID = markerTxn.ID
 	}
@@ -575,7 +606,8 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 // ============================================================
 
 // isNotFound vérifie de manière robuste si une erreur correspond à un état "non trouvé".
-// Elle gère à la fois sql.ErrNoRows, les erreurs sentinelles du repository, et les mocks basés sur du texte.
+// ✅ PR-3 FIX : Utilisation exclusive des erreurs sentinelles pour éviter les faux positifs
+// (ex: une erreur SQL contenant "not found" dans le nom d'une table ne doit pas être interprétée comme une absence)
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -586,8 +618,7 @@ func isNotFound(err error) bool {
 	if errors.Is(err, repository.ErrWalletNotFound) || errors.Is(err, repository.ErrWalletTransactionNotFound) {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not found") || strings.Contains(msg, "no rows")
+	return false
 }
 
 // isUniqueViolation détecte une violation de contrainte unique (23505) de manière robuste.
@@ -607,13 +638,23 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
-// ✅ PR-C FIX : Logique robuste pour gérer le debt sweep.
+// ✅ PR-3 FIX : Logique robuste pour gérer le debt sweep et l'idempotence.
 func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
 	if existing.ShopID != req.ShopID {
 		return fmt.Errorf("idempotency conflict: shop_id mismatch")
 	}
 	if existing.TransactionType != req.TransactionType {
 		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
+	}
+
+	// 🆕 PR-3 FIX : Vérification de HoldAfterCredit via la description
+	// Puisque HoldAfterCredit n'est pas un champ dédié en base, on vérifie le marqueur ajouté lors de la création
+	isHeldInDB := existing.Description != nil && strings.Contains(*existing.Description, "(held until proof/redeem)")
+	if req.HoldAfterCredit && !isHeldInDB {
+		return fmt.Errorf("idempotency conflict: request requires hold, but existing transaction is not held")
+	}
+	if !req.HoldAfterCredit && isHeldInDB {
+		return fmt.Errorf("idempotency conflict: request is not held, but existing transaction is held")
 	}
 
 	// 🆕 PR-C FIX : Comparaison stricte du montant brut
