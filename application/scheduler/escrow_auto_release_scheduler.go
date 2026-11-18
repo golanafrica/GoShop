@@ -21,14 +21,15 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 //
-// Anti race multi-instance & Atomicité (PR 2 Audit & PR-A) :
-//  1. Pour les Tontines : ClaimRelease immédiat (le crédit wallet est géré ailleurs et est idempotent).
+// Anti race multi-instance & Atomicité (PR 2 Audit & PR-A & PR-5) :
+//  1. Pour les Tontines : ClaimRelease immédiat + mise à jour proof self-healing (PR-5).
 //  2. Pour les Orders : ClaimRelease + Commission + Ledger + Wallet.Update dans UNE SEULE transaction SQL.
 //     → Plus de divergence comptable en cas de panne. Si le crédit échoue, le claim est rollbacké.
 //  3. FindByReferenceIDAdmin avant crédit pour l'idempotence (Fail-closed sur erreur SQL).
 //  4. Si claim déjà fait ailleurs mais ledger absent → reprise du crédit uniquement (orphan recovery).
 //  5. Échec de Update(delivery_proof) après claim/crédit → erreur visible (pas de faux succès).
 //  6. 🆕 PR-A : Validation stricte de toute transaction existante (statut, shop, montant brut, référence).
+//  7. 🆕 PR-5 : Verrouillage FOR UPDATE du wallet pour éviter les "lost updates" concurrents.
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -214,16 +215,15 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 
 	// 🛡️ CAS TONTINE : crédit wallet géré ailleurs (idempotent). Claim ici uniquement.
 	if proof.TontineVoucherID != nil {
-		claimed, err := s.escrowRepo.ClaimRelease(ctx, escrow.ID, entity.EscrowAccountFundsHeld, merchantAmount)
+		// 🛡️ PR-5 FIX : On ignore la valeur booléenne retournée car on veut TOUJOURS
+		// tenter de mettre à jour la proof (self-healing), même si le claim a déjà été fait
+		// par une exécution précédente qui a échoué à l'étape de l'update.
+		_, err = s.escrowRepo.ClaimRelease(ctx, escrow.ID, entity.EscrowAccountFundsHeld, merchantAmount)
 		if err != nil {
 			return 0, fmt.Errorf("claim release failed: %w", err)
 		}
-		if !claimed {
-			itemLogger.Info().Msg("Escrow already claimed by another instance — skip")
-			return 0, nil
-		}
 
-		itemLogger.Info().Msg("Tontine proof: escrow claimed, wallet already credited at cycle — skip credit")
+		itemLogger.Info().Msg("Tontine proof: escrow claimed (or already claimed), ensuring proof is updated")
 		if err := proof.ReleaseFunds(); err != nil {
 			itemLogger.Warn().Err(err).Msg("proof.ReleaseFunds in-memory failed")
 		}
@@ -231,8 +231,8 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 			itemLogger.Error().Err(err).
 				Str("proof_id", proof.ID).
 				Str("escrow_id", escrow.ID).
-				Msg("CRITICAL: tontine claim OK but delivery proof update failed — no re-credit on retry")
-			return 0, fmt.Errorf("delivery proof update failed after tontine claim (no re-credit): %w", err)
+				Msg("CRITICAL: tontine claim OK but delivery proof update failed")
+			return 0, fmt.Errorf("delivery proof update failed after tontine claim: %w", err)
 		}
 		return merchantAmount, nil
 	}
@@ -414,7 +414,9 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			Msg("Platform revenue credited atomically")
 	}
 
-	wallet, err := s.walletRepo.WithTX(tx).FindByShopID(shopCtx, shopID)
+	// 🛡️ PR-5 FIX : Utilisation de FindByShopIDForUpdate pour verrouiller la ligne du wallet
+	// et éviter les "lost updates" en cas de libérations concurrentes pour le même shop.
+	wallet, err := s.walletRepo.WithTX(tx).FindByShopIDForUpdate(shopCtx, shopID)
 	if err != nil {
 		if errors.Is(err, repository.ErrWalletNotFound) {
 			wallet = entity.NewMerchantWallet(shopID)
