@@ -259,8 +259,10 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	t.Logf("  ✅ Commande passée à %s après paiement", orderStatus)
 
 	t.Log("  🔸 Test du remboursement")
+	// 🆕 PR-6 FIX : Ajout de la clé d'idempotence obligatoire pour le remboursement
 	refundReq := map[string]interface{}{
-		"reason": "Test refund for E2E",
+		"reason":          "Test refund for E2E",
+		"idempotency_key": "e2e-refund-" + uuid.New().String(),
 	}
 	resp = client.MustDoRequest(t, "POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
 	testutils.AssertStatus(t, resp, http.StatusOK)
@@ -275,6 +277,7 @@ func testPaymentFlow(t *testing.T, client *testutils.HTTPClient, orderID string,
 	t.Log("  ✅ Paiement remboursé avec succès")
 
 	t.Log("  🔸 Vérification rejet double remboursement")
+	// La même requête (avec la même idempotency_key) doit être rejetée
 	resp, _ = client.DoRequest("POST", "/api/payments/"+paymentInit.PaymentID+"/refund", refundReq)
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("❌ Double remboursement devrait être rejeté")
