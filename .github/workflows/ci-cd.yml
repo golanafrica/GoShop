@@ -373,8 +373,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ✅ PR-G FIX : Version v0.38.0 de trivy-action qui corrige définitivement le problème de dépendance supprimée 'setup-trivy'
-      - uses: aquasecurity/trivy-action@v0.38.0
+      # ✅ PR-8 FIX : Version v0.36.0 avec SHA immuable pour éviter les erreurs de résolution de tag (dépendance interne supprimée)
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
