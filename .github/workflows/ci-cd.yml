@@ -373,8 +373,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ✅ PR-G FIX : Version v0.28.0 de trivy-action qui ne dépend plus de l'action interne supprimée 'setup-trivy'
-      - uses: aquasecurity/trivy-action@v0.28.0
+      # ✅ PR-G FIX : Version v0.38.0 de trivy-action qui corrige définitivement le problème de dépendance supprimée 'setup-trivy'
+      - uses: aquasecurity/trivy-action@v0.38.0
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
