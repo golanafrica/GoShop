@@ -57,6 +57,11 @@ func setupTestDB_Get() *sql.DB {
 }
 
 func TestGetOrderByIdUsecase_Integration(t *testing.T) {
+	// ✅ PR-8 FIX : Ignorer silencieusement les tests d'intégration si le flag -short est passé (job Unit Tests CI)
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	// Setup
 	db := setupTestDB_Get()
 	defer db.Close()
@@ -80,7 +85,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	)
 
 	// --------------------------
-	// 1. Cr�ation Customer
+	// 1. Cration Customer
 	// --------------------------
 	customerEntity := &entity.Customer{
 		FirstName: "Client",
@@ -93,7 +98,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotEmpty(t, createdCustomer.ID)
 
 	// --------------------------
-	// 2. Cr�ation Produit
+	// 2. Cration Produit
 	// --------------------------
 	productEntity := &entity.Product{
 		Name:        "Produit A",
@@ -128,7 +133,7 @@ func TestGetOrderByIdUsecase_Integration(t *testing.T) {
 	assert.NotNil(t, orderFromDB)
 
 	// --------------------------
-	// 5. V�rifications
+	// 5. Vrifications
 	// --------------------------
 	assert.Equal(t, createdOrder.ID, orderFromDB.ID)
 	assert.Equal(t, createdCustomer.ID, orderFromDB.CustomerID)

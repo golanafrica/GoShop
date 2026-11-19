@@ -22,6 +22,10 @@ import (
 // ============================================================
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+// ============================================================
 // TESTS : CancelOrderUsecase
 // ============================================================
 
@@ -459,11 +463,10 @@ func TestDeliverOrderUsecase_NotSupportedPaymentMethod(t *testing.T) {
 	walletRepo.EXPECT().WithTX(mockTx).Return(walletRepo).AnyTimes()
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
-	// ✅ Le usecase appelle ExistsByOrderID AVANT de vérifier le PaymentMethod
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
 	unsupportedOrder := createCashOrder(string(entity.OrderStatusOutForDelivery))
-	unsupportedOrder.PaymentMethod = "card" // Méthode non supportée
+	unsupportedOrder.PaymentMethod = "card"
 	orderRepo.EXPECT().FindByID(gomock.Any(), validOrderID).Return(unsupportedOrder, nil)
 
 	order, err := uc.Execute(ctx, validOrderID, req)
@@ -508,7 +511,6 @@ func TestDeliverOrderUsecase_InvalidStatusTransition(t *testing.T) {
 	walletRepo.EXPECT().WithTX(mockTx).Return(walletRepo).AnyTimes()
 	walletTxnRepo.EXPECT().WithTX(mockTx).Return(walletTxnRepo).AnyTimes()
 
-	// ✅ Le usecase appelle ExistsByOrderID AVANT de vérifier la transition
 	disputeRepo.EXPECT().ExistsByOrderID(gomock.Any(), gomock.Any()).Return(false, nil)
 
 	pendingOrder := createCashOrder(string(entity.OrderStatusPending))
@@ -577,10 +579,9 @@ func TestDeliverOrderUsecase_Success(t *testing.T) {
 
 	orderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(nil)
 
+	// ✅ CORRECTION PR-G : Ajout de .AnyTimes() pour éviter les échecs si la notification est appelée plusieurs fois ou conditionnellement
 	notifService.EXPECT().NotifyClientOrderDelivered(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	notifService.EXPECT().NotifyMerchantCommissionPaid(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-	// ✅ CORRECTION PR-G : Ajouter l'expectation pour NotifyOrderStatusChange
 	notifService.EXPECT().NotifyOrderStatusChange(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	order, err := uc.Execute(ctx, validOrderID, req)

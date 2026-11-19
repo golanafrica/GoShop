@@ -78,7 +78,7 @@ func (h *WSHandler) HandleNotifications(w http.ResponseWriter, r *http.Request) 
 	// Garder la connexion ouverte et gérer la déconnexion propre
 	defer func() {
 		h.hub.Unregister(userID)
-		conn.Close()
+		_ = conn.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on disconnect
 
 		// 📊 MÉTRIQUES : Déconnexion
 		duration := time.Since(connStart).Seconds()

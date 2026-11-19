@@ -65,8 +65,8 @@ func (fs *FileStorage) Save(reader io.Reader, originalFilename, extension string
 
 	// Copier le contenu
 	if _, err := io.Copy(file, reader); err != nil {
-		// Nettoyer en cas d'erreur
-		os.Remove(fullPath)
+		// Nettoyer en cas d'erreur (best-effort)
+		_ = os.Remove(fullPath) // ✅ PR-8 FIX : Explicitly discard error for best-effort cleanup
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

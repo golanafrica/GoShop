@@ -91,7 +91,6 @@ func (s *SMTPService) SendEmail(message *service.EmailMessage) (*service.EmailRe
 	}
 
 	// Mode debug : logger au lieu d'envoyer
-	// Mode debug : logger au lieu d'envoyer
 	if s.config.DebugMode {
 		s.logEmailDebug(message)
 		return &service.EmailResult{
@@ -397,7 +396,7 @@ func (s *SMTPService) sendWithTLS(addr string, auth smtp.Auth, from, to string, 
 	host, _, _ := net.SplitHostPort(addr)
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on failure
 		return fmt.Errorf("smtp client: %w", err)
 	}
 	defer client.Close()

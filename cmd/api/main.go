@@ -96,7 +96,7 @@ func main() {
 			warmupCancel()
 			appLogger.Fatal().Err(err).Int("connexion", i+1).Msg("Échec warm-up pool")
 		}
-		conn.Close() // On ferme immédiatement, le pool garde la connexion physique ouverte
+		_ = conn.Close() // ✅ PR-8 FIX : Best-effort close, le pool gère la connexion physique
 	}
 	warmupCancel()
 	appLogger.Info().Msg("✅ Pool PostgreSQL warm-up terminé (Cold start éliminé)")
@@ -159,9 +159,9 @@ func main() {
 
 	// Fermer les dépendances dans l'ordre inverse
 	appLogger.Info().Msg("Fermeture des connexions...")
-	db.Close()
+	_ = db.Close() // ✅ PR-8 FIX : Best-effort close
 	if utils.Rdb != nil {
-		utils.Rdb.Close()
+		_ = utils.Rdb.Close() // ✅ PR-8 FIX : Best-effort close
 	}
 
 	appLogger.Info().Msg("✅ Serveur arrêté proprement")

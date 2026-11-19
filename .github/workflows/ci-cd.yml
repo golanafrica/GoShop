@@ -33,7 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           # ✅ PR-8 FIX : Réintégration des packages order_usecase et postgres/order précédemment exclus.
-          # Seuls les dossiers de tests, mocks et certains handlers spécifiques restent exclus.
+          # Ajout de -short pour ignorer les tests d'intégration qui nécessitent une DB.
           PACKAGES=$(go list ./... | tr -d '\r' | grep -vE '/tests$|/tests/|/mocks/' || true)
 
           if [ -z "${PACKAGES}" ]; then
@@ -44,8 +44,8 @@ jobs:
           echo "Testing packages:"
           echo "${PACKAGES}"
 
-          # ✅ PR-G FIX : Ajout de l'indicateur -race pour détecter les conditions de course aux données.
-          go test -v -count=1 -race -coverprofile=coverage.out ${PACKAGES}
+          # ✅ PR-8 FIX : Ajout de -short pour ignorer les tests d'intégration (qui nécessitent une DB)
+          go test -v -count=1 -race -short -coverprofile=coverage.out ${PACKAGES}
       - uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673 # v4.3.0
         if: always()
         continue-on-error: true

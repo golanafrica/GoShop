@@ -36,6 +36,17 @@ var testShop = &entity.Shop{
 // ctx est le contexte global avec le tenant pour tous les tests
 var ctx = tenant.WithTenant(context.Background(), testShop)
 
+// isShortMode vérifie manuellement si le flag -short est passé pour éviter
+// le panic "testing: Short called before Parse" dans TestMain.
+func isShortMode() bool {
+	for _, arg := range os.Args {
+		if arg == "-test.short" || arg == "-short" {
+			return true
+		}
+	}
+	return false
+}
+
 // ✅ Initialisation de la base de test
 func setupTestDB() *sql.DB {
 	if err := godotenv.Load("../../../.env.test"); err != nil {
@@ -63,6 +74,13 @@ func setupTestDB() *sql.DB {
 
 // 🔧 Setup global avant tous les tests
 func TestMain(m *testing.M) {
+	// ✅ PR-8 FIX : Ignorer silencieusement les tests d'intégration si le flag -short est passé.
+	// On utilise isShortMode() au lieu de testing.Short() pour éviter le panic.
+	if isShortMode() {
+		fmt.Println("⏭️ Skipping integration tests in short mode")
+		os.Exit(0)
+	}
+
 	db = setupTestDB()
 
 	// S'assurer que le shop de test existe en base
