@@ -324,8 +324,8 @@ jobs:
       - name: Run govulncheck
         run: |
           set -euo pipefail
-          # ✅ PR-8 FIX : Version figée de govulncheck pour la reproductibilité
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.0
+          # ✅ PR-8 FIX : Utilisation de @latest pour govulncheck afin d'éviter les erreurs de compilation des dépendances (golang.org/x/tools) avec les versions récentes de Go
+          go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
   lint:
