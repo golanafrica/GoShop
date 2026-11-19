@@ -27,6 +27,11 @@ var testShopAll = &entity.Shop{
 }
 
 func TestGetAllOrderUsecase_Integration(t *testing.T) {
+	// ✅ PR-8 FIX : Skip immédiat si mode short, AVANT tout appel à setupTestDB()
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	db := setupTestDB()
 	defer db.Close()
 
@@ -47,7 +52,7 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		txManager,
 	)
 
-	// --- 1. Cr�er un customer ---
+	// --- 1. Créer un customer ---
 	customerEntity := &entity.Customer{
 		FirstName: "Integration2",
 		LastName:  "Test2",
@@ -58,10 +63,10 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, createdCustomer.ID)
 
-	// --- 2. Cr�er un produit ---
+	// --- 2. Créer un produit ---
 	productEntity := &entity.Product{
 		Name:        "Table artisanale",
-		Description: "Fabriqu�e � la main",
+		Description: "Fabriquée à la main",
 		PriceCents:  20000,
 		Stock:       10,
 	}
@@ -70,7 +75,7 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, productEntity.ID)
 
-	// --- 3. Cr�er 2 commandes pour tester le listing ---
+	// --- 3. Créer 2 commandes pour tester le listing ---
 	for i := 0; i < 2; i++ {
 		orderEntity := &entity.Order{
 			CustomerID: createdCustomer.ID,
@@ -83,13 +88,12 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// --- 4. R�cup�rer toutes les commandes ---
+	// --- 4. Récupérer toutes les commandes ---
 	allOrders, err := getAllUsecase.Execute(ctx)
 	assert.NoError(t, err)
 	assert.True(t, len(allOrders) >= 2, "on doit avoir au moins 2 commandes")
 
-	// ? FIX : Filtrer uniquement les commandes cr��es par CE test
-	// (celles qui appartiennent au customer du test)
+	// ✅ FIX : Filtrer uniquement les commandes créées par CE test
 	testOrders := make([]*entity.Order, 0)
 	for _, o := range allOrders {
 		if o.CustomerID == createdCustomer.ID {
@@ -97,22 +101,18 @@ func TestGetAllOrderUsecase_Integration(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, len(testOrders),
-		"on doit avoir exactement 2 commandes pour ce customer")
+	assert.Equal(t, 2, len(testOrders), "on doit avoir exactement 2 commandes pour ce customer")
 
-	// --- V�rification basique sur les commandes du test uniquement ---
+	// --- Vérification basique sur les commandes du test uniquement ---
 	for _, o := range testOrders {
 		assert.NotEmpty(t, o.ID)
-		assert.Equal(t, createdCustomer.ID, o.CustomerID,
-			"la commande doit appartenir au customer du test")
-		assert.Equal(t, "pending", o.Status,
-			"la commande doit �tre en PENDING (pas encore pay�e)")
-		assert.Equal(t, int64(20000), o.TotalCents,
-			"le total doit �tre 20000")
+		assert.Equal(t, createdCustomer.ID, o.CustomerID, "la commande doit appartenir au customer du test")
+		assert.Equal(t, "pending", o.Status, "la commande doit être en PENDING (pas encore payée)")
+		assert.Equal(t, int64(20000), o.TotalCents, "le total doit être 20000")
 		assert.True(t, len(o.Items) > 0)
 	}
 
-	fmt.Printf("? GetAllOrderUsecase fonctionne\n")
+	fmt.Printf("✅ GetAllOrderUsecase fonctionne\n")
 	fmt.Printf("   - Total commandes dans le shop : %d\n", len(allOrders))
-	fmt.Printf("   - Commandes cr��es par ce test : %d\n", len(testOrders))
+	fmt.Printf("   - Commandes créées par ce test : %d\n", len(testOrders))
 }

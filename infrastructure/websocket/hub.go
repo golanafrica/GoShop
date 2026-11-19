@@ -51,7 +51,7 @@ func (h *Hub) Register(userID string, conn *websocket.Conn) {
 
 	// Fermer l'ancienne connexion si elle existe
 	if oldConn, exists := h.clients[userID]; exists {
-		oldConn.Close()
+		_ = oldConn.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on replace
 	}
 
 	h.clients[userID] = conn
@@ -64,7 +64,7 @@ func (h *Hub) Unregister(userID string) {
 	defer h.mu.Unlock()
 
 	if conn, exists := h.clients[userID]; exists {
-		conn.Close()
+		_ = conn.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on shutdown
 		delete(h.clients, userID)
 		h.logger.Info().Str("user_id", userID).Msg("Client WebSocket unregistered")
 	}
@@ -117,10 +117,10 @@ func (h *Hub) listenRedis() {
 
 // Close ferme proprement le hub
 func (h *Hub) Close() {
-	h.pubsub.Close()
+	_ = h.pubsub.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on shutdown
 	h.mu.Lock()
 	for _, conn := range h.clients {
-		conn.Close()
+		_ = conn.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on shutdown
 	}
 	h.mu.Unlock()
 }

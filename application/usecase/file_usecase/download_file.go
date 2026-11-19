@@ -108,7 +108,7 @@ func (uc *DownloadFileUsecase) Execute(
 	// 5. Obtenir les métadonnées
 	stat, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close() // ✅ PR-8 FIX : Best-effort close, ignore error on stat failure
 		logger.Error().Err(err).Msg("❌ Erreur stat fichier")
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}

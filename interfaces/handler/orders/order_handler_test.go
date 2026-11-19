@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"Goshop/domain/entity"
+	"Goshop/domain/tenant"
 	orderhandler "Goshop/interfaces/handler/orders"
 	"Goshop/interfaces/middl"
 	"Goshop/mocks/repository"
@@ -77,6 +79,16 @@ func setupChiContext(r *http.Request, id string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
+// 🆕 PR-8 FIX : Injecte un contexte multi-tenant fictif pour les tests HTTP
+func setupTenantContext(r *http.Request) *http.Request {
+	shop := &entity.Shop{
+		ID:       uuid.New(),
+		Name:     "Test Shop",
+		IsActive: true,
+	}
+	return r.WithContext(tenant.WithTenant(r.Context(), shop))
+}
+
 // ========================================
 // Tests
 // ========================================
@@ -98,7 +110,6 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 	mockOrderItemRepoWithTX := repository.NewMockOrderItemRepository(ctrl)
 
-	// Pas besoin de mock DB pour le handler
 	var db *sql.DB // placeholder
 
 	handler := orderhandler.NewOrderHandler(
@@ -127,45 +138,36 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 	product := createTestProduct("product-123", 10)
 	createdOrder := createTestOrder("order-456", "customer-123", 2000)
 
-	// CORRECTION : Mock pour l'appel direct du handler  productRepo
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
 	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
-	// WithTX calls
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX)
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX)
 	mockOrderItemRepo.EXPECT().WithTX(mockTx).Return(mockOrderItemRepoWithTX)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 
-	// Customer check
 	mockCustomerRepoWithTX.EXPECT().FindByCustomerID(gomock.Any(), "customer-123").Return(customer, nil)
 
-	// Product check and stock update (avec transaction)
 	mockProductRepoWithTX.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 	mockProductRepoWithTX.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(ctx context.Context, p *entity.Product) (*entity.Product, error) {
-			// Stock should be reduced by 2
 			assert.Equal(t, 8, p.Stock)
 			return p, nil
 		})
 
-	// Order creation
 	mockOrderRepoWithTX.EXPECT().Create(gomock.Any(), gomock.Any()).Return(createdOrder, nil)
-
-	// Order item creation
 	mockOrderItemRepoWithTX.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&entity.OrderItem{ID: "item-1"}, nil)
 
-	// Transaction commit/rollback
 	mockTx.EXPECT().Commit().Return(nil)
-	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
 	// Act
 	jsonBody, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
@@ -179,11 +181,10 @@ func TestOrderHandler_CreateOrder_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp["id"])
 	assert.Equal(t, "order-456", resp["id"])
-	assert.Equal(t, float64(2000), resp["total_cents"]) // JSON numbers are float64
+	assert.Equal(t, float64(2000), resp["total_cents"])
 }
 
 func TestOrderHandler_CreateOrder_InvalidPayload(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -193,7 +194,7 @@ func TestOrderHandler_CreateOrder_InvalidPayload(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 	handler := orderhandler.NewOrderHandler(
 		db,
 		mockTxMgr,
@@ -204,18 +205,16 @@ func TestOrderHandler_CreateOrder_InvalidPayload(t *testing.T) {
 		nil,
 	)
 
-	// Invalid JSON
 	invalidJSON := `{customer_id: "123", items: "not an array"}`
 
-	// Act
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBufferString(invalidJSON))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
 	var resp map[string]interface{}
@@ -225,7 +224,6 @@ func TestOrderHandler_CreateOrder_InvalidPayload(t *testing.T) {
 }
 
 func TestOrderHandler_CreateOrder_ValidationFailed(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -235,7 +233,7 @@ func TestOrderHandler_CreateOrder_ValidationFailed(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -247,22 +245,20 @@ func TestOrderHandler_CreateOrder_ValidationFailed(t *testing.T) {
 		nil,
 	)
 
-	// Empty items - should fail validation
 	reqBody := orderdto.OrderRequestDto{
 		CustomerID: "customer-123",
-		Items:      []*orderitemdto.OrderItemRequestDto{}, // Empty!
+		Items:      []*orderitemdto.OrderItemRequestDto{},
 	}
 
-	// Act
 	jsonBody, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
 	var resp map[string]interface{}
@@ -272,7 +268,6 @@ func TestOrderHandler_CreateOrder_ValidationFailed(t *testing.T) {
 }
 
 func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -287,7 +282,7 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 	mockOrderItemRepoWithTX := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -306,32 +301,28 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 		},
 	}
 
-	// CORRECTION : Mock pour l'appel direct du handler ? productRepo
 	product := createTestProduct("product-123", 10)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
-	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX)
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX)
 	mockOrderItemRepo.EXPECT().WithTX(mockTx).Return(mockOrderItemRepoWithTX)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 
-	// ? CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
 	mockCustomerRepoWithTX.EXPECT().FindByCustomerID(gomock.Any(), "non-existent-customer").Return(nil, sql.ErrNoRows)
 
 	mockTx.EXPECT().Rollback().Return(nil)
 
-	// Act
 	jsonBody, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 
 	var resp map[string]interface{}
@@ -341,7 +332,6 @@ func TestOrderHandler_CreateOrder_CustomerNotFound(t *testing.T) {
 }
 
 func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -356,7 +346,7 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 	mockOrderItemRepoWithTX := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -377,11 +367,8 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 
 	customer := createTestCustomer("customer-123")
 
-	// CORRECTION : Mock pour l'appel direct du handler ? productRepo (retourne nil pour produit non trouv?)
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "non-existent-product").Return(nil, sql.ErrNoRows)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appel?s car le handler retourne une erreur avant
-	// Ne pas d?finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -390,16 +377,15 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 	mockCustomerRepoWithTX.EXPECT().FindByCustomerID(gomock.Any(), "customer-123").Return(customer, nil).AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// Act
 	jsonBody, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert - CORRECTION : Attendre 404 "PRODUCT_NOT_FOUND"
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
 	var resp map[string]interface{}
@@ -409,7 +395,6 @@ func TestOrderHandler_CreateOrder_ProductNotFound(t *testing.T) {
 }
 
 func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -424,7 +409,7 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 	mockOrderItemRepoWithTX := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -439,18 +424,15 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 	reqBody := orderdto.OrderRequestDto{
 		CustomerID: "customer-123",
 		Items: []*orderitemdto.OrderItemRequestDto{
-			{ProductID: "product-123", Quantity: 10}, // Requesting 10
+			{ProductID: "product-123", Quantity: 10},
 		},
 	}
 
 	customer := createTestCustomer("customer-123")
-	product := createTestProduct("product-123", 5) // Only 5 in stock
+	product := createTestProduct("product-123", 5)
 
-	// CORRECTION : Mock pour l'appel direct du handler ? productRepo
 	mockProductRepo.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil)
 
-	// CORRECTION : Les mocks de transaction NE SERONT PAS appel?s car le handler retourne une erreur avant
-	// Ne pas d?finir d'attentes pour ces mocks OU utiliser AnyTimes()
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil).AnyTimes()
 	mockProductRepo.EXPECT().WithTX(mockTx).Return(mockProductRepoWithTX).AnyTimes()
 	mockCustomerRepo.EXPECT().WithTX(mockTx).Return(mockCustomerRepoWithTX).AnyTimes()
@@ -460,16 +442,15 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 	mockProductRepoWithTX.EXPECT().FindByID(gomock.Any(), "product-123").Return(product, nil).AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// Act
 	jsonBody, _ := json.Marshal(reqBody)
 	req := httptest.NewRequest("POST", "/orders", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.CreateOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert - CORRECTION : Attendre 400 "PRODUCT_OUT_OF_STOCK"
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
 	var resp map[string]interface{}
@@ -479,7 +460,6 @@ func TestOrderHandler_CreateOrder_InsufficientStock(t *testing.T) {
 }
 
 func TestOrderHandler_GetOrderById_Success(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -491,7 +471,7 @@ func TestOrderHandler_GetOrderById_Success(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -505,23 +485,20 @@ func TestOrderHandler_GetOrderById_Success(t *testing.T) {
 
 	order := createTestOrder("order-123", "customer-123", 2000)
 
-	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindByID(gomock.Any(), "order-123").Return(order, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// Act
 	req := httptest.NewRequest("GET", "/orders/order-123", nil)
 	req = setupChiContext(req, "order-123")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.GetOrderByIdHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp map[string]interface{}
@@ -533,7 +510,6 @@ func TestOrderHandler_GetOrderById_Success(t *testing.T) {
 }
 
 func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -545,7 +521,7 @@ func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -557,22 +533,19 @@ func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
 		nil,
 	)
 
-	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
-	// ? CORRECTION : Utilisation de sql.ErrNoRows pour "not found"
 	mockOrderRepoWithTX.EXPECT().FindByID(gomock.Any(), "non-existent-order").Return(nil, sql.ErrNoRows)
 	mockTx.EXPECT().Rollback().Return(nil)
 
-	// Act
 	req := httptest.NewRequest("GET", "/orders/non-existent-order", nil)
 	req = setupChiContext(req, "non-existent-order")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.GetOrderByIdHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
 	var resp map[string]interface{}
@@ -582,7 +555,6 @@ func TestOrderHandler_GetOrderById_NotFound(t *testing.T) {
 }
 
 func TestOrderHandler_GetOrderById_EmptyID(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -592,7 +564,7 @@ func TestOrderHandler_GetOrderById_EmptyID(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -604,15 +576,14 @@ func TestOrderHandler_GetOrderById_EmptyID(t *testing.T) {
 		nil,
 	)
 
-	// Empty ID in URL param
 	req := httptest.NewRequest("GET", "/orders/", nil)
-	req = setupChiContext(req, "") // Empty ID
+	req = setupChiContext(req, "")
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.GetOrderByIdHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusNotFound, w.Code)
 
 	var resp map[string]interface{}
@@ -622,7 +593,6 @@ func TestOrderHandler_GetOrderById_EmptyID(t *testing.T) {
 }
 
 func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -634,7 +604,7 @@ func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -651,22 +621,19 @@ func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
 		createTestOrder("order-2", "customer-2", 2000),
 	}
 
-	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindAll(gomock.Any()).Return(orders, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// Act
 	req := httptest.NewRequest("GET", "/orders", nil)
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.GetAllOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp []map[string]interface{}
@@ -678,7 +645,6 @@ func TestOrderHandler_GetAllOrders_Success(t *testing.T) {
 }
 
 func TestOrderHandler_GetAllOrders_Empty(t *testing.T) {
-	// Arrange
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -690,7 +656,7 @@ func TestOrderHandler_GetAllOrders_Empty(t *testing.T) {
 	mockCustomerRepo := repository.NewMockCustomerRepositoryInterface(ctrl)
 	mockOrderItemRepo := repository.NewMockOrderItemRepository(ctrl)
 
-	var db *sql.DB // placeholder
+	var db *sql.DB
 
 	handler := orderhandler.NewOrderHandler(
 		db,
@@ -702,22 +668,19 @@ func TestOrderHandler_GetAllOrders_Empty(t *testing.T) {
 		nil,
 	)
 
-	// Mock expectations
 	mockTxMgr.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 	mockOrderRepo.EXPECT().WithTX(mockTx).Return(mockOrderRepoWithTX)
 	mockOrderRepoWithTX.EXPECT().FindAll(gomock.Any()).Return([]*entity.Order{}, nil)
 	mockTx.EXPECT().Commit().Return(nil)
-	// ? CORRECTION : Ajout de Rollback().AnyTimes()
 	mockTx.EXPECT().Rollback().Return(nil).AnyTimes()
 
-	// Act
 	req := httptest.NewRequest("GET", "/orders", nil)
+	req = setupTenantContext(req) // 🆕 PR-8 FIX
 	w := httptest.NewRecorder()
 
 	httpHandler := middl.ErrorHandler(handler.GetAllOrderHandler)
 	httpHandler.ServeHTTP(w, req)
 
-	// Assert
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp []interface{}

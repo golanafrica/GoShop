@@ -1,6 +1,15 @@
 package orderusecase_test
 
 import (
+	"context"
+	"database/sql"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"testing"
+	"time"
+
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/domain/entity"
 	"Goshop/domain/tenant"
@@ -9,13 +18,6 @@ import (
 	"Goshop/infrastructure/postgres/order"
 	"Goshop/infrastructure/postgres/product"
 	txmanager "Goshop/infrastructure/postgres/tx_manager"
-	"context"
-	"database/sql"
-	"fmt"
-	"log"
-	"os"
-	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -39,7 +41,7 @@ var ctx = tenant.WithTenant(context.Background(), testShop)
 // ✅ Initialisation de la base de test
 func setupTestDB() *sql.DB {
 	if err := godotenv.Load("../../../.env.test"); err != nil {
-		log.Println("fichier non trouver")
+		log.Println("⚠️ fichier .env.test non trouvé, utilisation des variables d'environnement")
 	}
 
 	connStr := fmt.Sprintf(
@@ -54,7 +56,7 @@ func setupTestDB() *sql.DB {
 
 	db, err := postgres.Connect(connStr)
 	if err != nil {
-		log.Fatalf("erreur de connexion la base de test : %v", err)
+		log.Fatalf("❌ erreur de connexion à la base de test : %v", err)
 	}
 
 	log.Println("✅ Connexion PostgreSQL réussie")
@@ -63,12 +65,17 @@ func setupTestDB() *sql.DB {
 
 // 🔧 Setup global avant tous les tests
 func TestMain(m *testing.M) {
-	db = setupTestDB()
+	// ✅ PR-8 FIX : flag.Parse() est OBLIGATOIRE avant d'appeler testing.Short()
+	flag.Parse()
 
-	// S'assurer que le shop de test existe en base
-	ensureTestShopExists()
+	if !testing.Short() {
+		db = setupTestDB()
+		ensureTestShopExists()
+		defer db.Close()
+	}
 
-	defer db.Close()
+	// m.Run() exécute les tests unitaires + intégrations.
+	// Les tests d'intégration feront t.Skip() en mode short.
 	os.Exit(m.Run())
 }
 
@@ -101,6 +108,11 @@ func ensureTestShopExists() {
 
 // 🚀 Test d'intégration complet du usecase CreateOrderUsecase
 func TestCreateOrderUsecase_Integration(t *testing.T) {
+	// Double sécurité : skip immédiat si mode short
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	// --- Initialisation des repositories ---
 	productRepo := product.NewProductRepositoryInfrastructure(db)
 	customerRepo := customer.NewCustomerRepoInfrastructurePostgres(db)

@@ -286,7 +286,7 @@ func (p *MoovMoneyProvider) SetAvailable(available bool) {
 
 func generateMoovMockRef(prefix string) string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes) //nolint:errcheck
+	_, _ = rand.Read(bytes) // ✅ PR-8 FIX : Best-effort read, ignore both return values for mock reference generation
 	return prefix + "-" + hex.EncodeToString(bytes)
 }
 
