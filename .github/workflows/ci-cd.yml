@@ -22,8 +22,9 @@ jobs:
     name: Run Unit Tests (with Race Detector)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      # ✅ PR-8 FIX : Utilisation du SHA pour la sécurité
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -31,22 +32,21 @@ jobs:
       - name: Run unit tests with race detector
         run: |
           set -euo pipefail
-          # ✅ PR-G FIX : Réintégration des packages financiers.
-          # tr -d '\r' est ajouté pour neutraliser les artefacts CRLF (Windows) dans l'environnement Linux de GitHub Actions.
-          # grep -vE permet d'exclure plusieurs motifs de manière fiable en une seule passe.
-          PACKAGES=$(go list ./... | tr -d '\r' | grep -vE '/tests$|/tests/|/mocks/|/handler/orders|/usecase/order_usecase|/infrastructure/postgres/order' || true)
-          
+          # ✅ PR-8 FIX : Réintégration des packages order_usecase et postgres/order précédemment exclus.
+          # Seuls les dossiers de tests, mocks et certains handlers spécifiques restent exclus.
+          PACKAGES=$(go list ./... | tr -d '\r' | grep -vE '/tests$|/tests/|/mocks/' || true)
+
           if [ -z "${PACKAGES}" ]; then
             echo "No packages selected"
             exit 1
           fi
-          
+
           echo "Testing packages:"
           echo "${PACKAGES}"
-          
+
           # ✅ PR-G FIX : Ajout de l'indicateur -race pour détecter les conditions de course aux données.
           go test -v -count=1 -race -coverprofile=coverage.out ${PACKAGES}
-      - uses: codecov/codecov-action@v4.3.0
+      - uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673 # v4.3.0
         if: always()
         continue-on-error: true
         with:
@@ -82,8 +82,8 @@ jobs:
         ports:
           - 6379:6379
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -174,8 +174,8 @@ jobs:
         ports:
           - 6379:6379
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -248,8 +248,8 @@ jobs:
     name: Build API
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -280,8 +280,8 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -291,12 +291,13 @@ jobs:
       - name: Run gosec (text)
         run: |
           set -euo pipefail
+          # ✅ PR-8 FIX : Suppression de l'exclusion G104 non justifiée pour un scan plus strict
           docker run --rm \
             -e GOTOOLCHAIN=auto \
             -v "$PWD:/src" -w /src \
             securego/gosec:2.22.1 \
             -fmt=text \
-            -exclude-dir=tests -exclude-dir=mocks -exclude=G104 \
+            -exclude-dir=tests -exclude-dir=mocks \
             ./...
 
       # JSON pour artifact (best effort si le step text a déjà échoué)
@@ -309,11 +310,11 @@ jobs:
             -v "$PWD:/src" -w /src \
             securego/gosec:2.22.1 \
             -fmt=json -out=gosec-report.json \
-            -exclude-dir=tests -exclude-dir=mocks -exclude=G104 \
+            -exclude-dir=tests -exclude-dir=mocks \
             ./... || true
           test -f gosec-report.json || echo '{"Issues":[]}' > gosec-report.json
 
-      - uses: actions/upload-artifact@v4.3.3
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         if: always()
         with:
           name: security-report
@@ -323,20 +324,20 @@ jobs:
       - name: Run govulncheck
         run: |
           set -euo pipefail
-          # ✅ PR-G FIX : Retour à @latest pour govulncheck afin d'éviter les bugs de compatibilité 
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # ✅ PR-8 FIX : Version figée de govulncheck pour la reproductibilité
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.0
           govulncheck ./...
 
   lint:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: actions/setup-go@v5.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - uses: golangci/golangci-lint-action@v6.1.1
+      - uses: golangci/golangci-lint-action@971e284b6050e8a5849b72094c50ab08da042db8 # v6.1.1
         with:
           install-mode: goinstall
           version: v1.64.6
@@ -348,32 +349,32 @@ jobs:
     needs: [test, integration-test, e2e-test, build, security, lint]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     steps:
-      - uses: actions/checkout@v4.1.1
-      - uses: docker/setup-qemu-action@v3.0.0
-      - uses: docker/setup-buildx-action@v3.1.0
-      - uses: docker/login-action@v3.0.0
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3.0.0
+      - uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.1.0
+      - uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
         with:
           registry: ghcr.io
           username: golanafrica
           password: ${{ secrets.CR_PAT }}
       - id: meta
-        uses: docker/metadata-action@v5.5.1
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
             type=ref,event=branch
-      - uses: docker/build-push-action@v5.3.0
+      - uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.3.0
         with:
           context: .
           load: true
           tags: ${{ env.DOCKER_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      
+
       # ✅ PR-G FIX : Version stable et validée de trivy-action
-      - uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.36.0 (SHA vérifié)
         with:
           image-ref: ${{ env.DOCKER_IMAGE }}:latest
           format: table
@@ -381,8 +382,8 @@ jobs:
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
-      
-      - uses: docker/build-push-action@v5.3.0
+
+      - uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.3.0
         with:
           context: .
           push: true
