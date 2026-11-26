@@ -2,6 +2,7 @@ package orderusecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -95,37 +96,36 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 		return nil, fmt.Errorf("access denied: order does not belong to tenant shop")
 	}
 
-	// 4. Récupérer les payments associés
+	// 4. Récupérer le paiement le plus récent (🆕 PR-2 FIX : Sélection déterministe)
 	orderUUID, err := uuid.Parse(req.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order ID format: %w", err)
 	}
 
-	payments, err := uc.paymentRepo.FindByOrderID(ctx, orderUUID)
+	payment, err := uc.paymentRepo.FindLatestByOrderID(ctx, orderUUID)
 	if err != nil {
-		return nil, fmt.Errorf("payment not found for order: %w", err)
+		if errors.Is(err, repository.ErrPaymentNotFound) {
+			return nil, fmt.Errorf("no payment found for order %s", req.OrderID)
+		}
+		return nil, fmt.Errorf("failed to find latest payment for order: %w", err)
 	}
-
-	if len(payments) == 0 {
-		return nil, fmt.Errorf("no payment found for order %s", req.OrderID)
-	}
-
-	payment := payments[0]
 
 	// 5. Si le payment est déjà success, vérifier l'escrow
 	if payment.Status == entity.PaymentStatusSuccess {
 		escrow, escrowErr := uc.escrowRepo.FindByOrderID(ctx, req.OrderID)
 		if escrowErr == nil && escrow != nil {
-
-			// ✅ CORRECTION ICI : On déclare une variable pour tracer si une action a eu lieu
 			synced := false
 
-			if order.Status == string(entity.OrderStatusPending) {
-				if markErr := order.MarkAccepted(); markErr == nil {
-					_ = uc.orderRepo.UpdateOrder(ctx, order)
-					logger.Info().Str("order_id", req.OrderID).Msg("✅ Order confirmed (already-success path)")
-					synced = true // ✅ On passe à true car on a bien mis à jour la commande
+			// 🆕 PR-2 FIX : Gestion d'erreur stricte sur UpdateOrder
+			if order.Status == string(entity.OrderStatusPending) || order.Status == string(entity.OrderStatusPendingConfirmation) {
+				if markErr := order.MarkAccepted(); markErr != nil {
+					return nil, fmt.Errorf("failed to mark order accepted: %w", markErr)
 				}
+				if updateErr := uc.orderRepo.UpdateOrder(ctx, order); updateErr != nil {
+					return nil, fmt.Errorf("failed to persist accepted order: %w", updateErr)
+				}
+				synced = true
+				logger.Info().Str("order_id", req.OrderID).Msg("Order confirmed (already-success path)")
 			}
 
 			return &SyncOrderPaymentResponse{
@@ -134,7 +134,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 				OrderStatus:   order.Status,
 				PaymentStatus: string(payment.Status),
 				EscrowStatus:  string(escrow.Status),
-				Synced:        synced, // ✅ On retourne la variable dynamique, plus "false" en dur
+				Synced:        synced,
 				Message:       "Payment already confirmed, escrow exists",
 			}, nil
 		}
@@ -199,14 +199,9 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 
 		now := time.Now().UTC()
 
-		// --------------------------------------------------------
-		// Phase 2 : même settlement que process_webhook
-		// - ProviderFees : déjà connus sur payment, sinon 0 (sync)
-		// - Commission GoShop : commission_rates / fallback 250 bps
-		// --------------------------------------------------------
 		shopIDStr := shop.ID.String()
 		rateBps := paymentusecase.ResolveOnlineCommissionBps(ctx, uc.commissionRateRepo, shopIDStr, logger)
-		providerFeesCents := payment.ProviderFeesCents // 0 si jamais reçu via webhook
+		providerFeesCents := payment.ProviderFeesCents
 
 		settlement := paymentusecase.ComputeOrderSettlement(
 			payment.AmountCents,
@@ -214,7 +209,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			rateBps,
 		)
 
-		// 8.1. Mettre à jour le payment (+ traçabilité commission)
+		// 8.1. Mettre à jour le payment
 		payment.Status = entity.PaymentStatusSuccess
 		payment.CompletedAt = &now
 		payment.UpdatedAt = now
@@ -233,7 +228,7 @@ func (uc *SyncOrderPaymentUsecase) Execute(ctx context.Context, req *SyncOrderPa
 			return nil, fmt.Errorf("failed to update order: %w", err)
 		}
 
-		// 8.3. Créer l'escrow (aligné webhook)
+		// 8.3. Créer l'escrow
 		logger.Info().
 			Str("shop_id", shopIDStr).
 			Int64("gross_cents", settlement.GrossCents).

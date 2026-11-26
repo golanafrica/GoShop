@@ -868,3 +868,27 @@ func (r *PaymentRepositoryPostgres) FindStuckPaymentsMissingProviderRef(
 
 	return r.scanPayments(rows)
 }
+
+// FindLatestByOrderID retourne le paiement le plus récent pour une commande donnée.
+// 🆕 PR-2 FIX : Remplace la sélection arbitraire payments[0] par une requête déterministe.
+func (r *PaymentRepositoryPostgres) FindLatestByOrderID(ctx context.Context, orderID uuid.UUID) (*entity.Payment, error) {
+	shopID, err := r.getShopID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+		SELECT id, shop_id, order_id, provider, provider_ref,
+		       amount_cents, currency, customer_phone, customer_email,
+		       description, status, metadata, initiated_at, completed_at,
+		       expires_at, reference_type, reference_id, webhook_external_id, provider_fees_cents,
+		       refunded_amount_cents, commission_cents, commission_rate_bps, commission_status, commission_collected_at,
+		       created_at, updated_at
+		FROM payments
+		WHERE order_id = $1 AND shop_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	return r.scanPayment(r.queryRowContext(ctx, query, orderID, shopID))
+}

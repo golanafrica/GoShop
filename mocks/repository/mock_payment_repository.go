@@ -191,6 +191,21 @@ func (mr *MockPaymentRepositoryMockRecorder) FindCompletedWithoutCommission(ctx,
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCompletedWithoutCommission", reflect.TypeOf((*MockPaymentRepository)(nil).FindCompletedWithoutCommission), ctx, limit)
 }
 
+// FindLatestByOrderID mocks base method.
+func (m *MockPaymentRepository) FindLatestByOrderID(ctx context.Context, orderID uuid.UUID) (*entity.Payment, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindLatestByOrderID", ctx, orderID)
+	ret0, _ := ret[0].(*entity.Payment)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindLatestByOrderID indicates an expected call of FindLatestByOrderID.
+func (mr *MockPaymentRepositoryMockRecorder) FindLatestByOrderID(ctx, orderID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindLatestByOrderID", reflect.TypeOf((*MockPaymentRepository)(nil).FindLatestByOrderID), ctx, orderID)
+}
+
 // FindPaymentRefundByIdempotency mocks base method.
 func (m *MockPaymentRepository) FindPaymentRefundByIdempotency(ctx context.Context, shopID uuid.UUID, key string) (*entity.PaymentRefund, error) {
 	m.ctrl.T.Helper()

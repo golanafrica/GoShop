@@ -16,8 +16,6 @@ import (
 // ============================================================
 
 // ErrPaymentNotFound signale une absence confirmée de paiement.
-// Le message est volontairement identique à l'ancien fmt.Errorf("payment not found")
-// pour ne pas casser les détections textuelles encore présentes dans le codebase.
 var ErrPaymentNotFound = errors.New("payment not found")
 
 // PaymentRepository définit les opérations sur les paiements
@@ -25,6 +23,10 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *entity.Payment) error
 	FindByID(ctx context.Context, id uuid.UUID) (*entity.Payment, error)
 	FindByOrderID(ctx context.Context, orderID uuid.UUID) ([]*entity.Payment, error)
+
+	// 🆕 PR-2 FIX : Sélection déterministe du dernier paiement pour une commande
+	FindLatestByOrderID(ctx context.Context, orderID uuid.UUID) (*entity.Payment, error)
+
 	FindByProviderRef(ctx context.Context, provider entity.PaymentProvider, providerRef string) (*entity.Payment, error)
 	FindByShop(ctx context.Context, shopID uuid.UUID, filters PaymentFilters) ([]*entity.Payment, error)
 	Update(ctx context.Context, payment *entity.Payment) error
