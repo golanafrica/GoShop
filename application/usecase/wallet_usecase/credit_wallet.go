@@ -211,19 +211,31 @@ func (uc *CreditWalletUsecase) ProcessCreditWithinTx(ctx context.Context, tx rep
 			if err := assertIdempotentCreditMatch(existing, req); err != nil {
 				return nil, err
 			}
-			// Succès idempotent. Le caller (scheduler) fera le Commit.
+
+			// Calcul du previous balance historique pour une réponse précise
+			previousBalance := existing.BalanceAfterCents - existing.AmountCents
+
+			// Calcul du swept cents historique
+			var sweptCents int64
+			if existing.GrossAmountCents != nil && *existing.GrossAmountCents > existing.AmountCents {
+				sweptCents = *existing.GrossAmountCents - existing.AmountCents
+			}
+
+			// Succès idempotent. Le caller (scheduler ou Execute) fera le Commit de sa propre TX
+			// ou retournera simplement la réponse sans nouvelle mutation.
 			return &CreditWalletResponse{
-				ShopID:            wallet.ShopID,
-				BalanceCents:      wallet.BalanceCents,
+				ShopID:            existing.ShopID,
+				BalanceCents:      wallet.BalanceCents, // Balance actuelle réelle du wallet
 				HeldCents:         wallet.HeldCents,
 				AvailableCents:    wallet.AvailableCents(),
-				PreviousBalance:   wallet.BalanceCents,
+				PreviousBalance:   previousBalance,
 				IsFrozen:          wallet.IsFrozen,
 				TransactionID:     existing.ID,
 				TransactionType:   existing.TransactionType,
 				AmountCents:       existing.AmountCents,
 				BalanceAfterCents: existing.BalanceAfterCents,
-				Held:              req.HoldAfterCredit,
+				Held:              existing.Description != nil && strings.Contains(*existing.Description, "(held until proof/redeem)"),
+				SweptCents:        sweptCents,
 			}, nil
 		}
 	}
@@ -522,34 +534,37 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
-// ✅ PR-3 FIX : Logique robuste pour gérer le debt sweep et l'idempotence.
+// assertIdempotentCreditMatch vérifie qu'une requête de crédit correspond exactement
+// à une transaction existante complétée, garantissant une idempotence stricte.
 func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *CreditWalletRequest) error {
 	if existing.ShopID != req.ShopID {
-		return fmt.Errorf("idempotency conflict: shop_id mismatch")
+		return fmt.Errorf("idempotency conflict: shop_id mismatch (existing=%s, requested=%s)", existing.ShopID, req.ShopID)
 	}
 	if existing.TransactionType != req.TransactionType {
-		return fmt.Errorf("idempotency conflict: transaction_type mismatch")
+		return fmt.Errorf("idempotency conflict: transaction_type mismatch (existing=%s, requested=%s)", existing.TransactionType, req.TransactionType)
 	}
 
-	// 🆕 PR-3 FIX : Vérification de HoldAfterCredit via la description
-	// Puisque HoldAfterCredit n'est pas un champ dédié en base, on vérifie le marqueur ajouté lors de la création
+	// 1. Vérification du montant brut (GrossAmountCents)
+	// C'est la source de vérité, car AmountCents peut varier selon le debt_sweep appliqué à l'époque.
+	if existing.GrossAmountCents != nil {
+		if *existing.GrossAmountCents != req.AmountCents {
+			return fmt.Errorf("idempotency conflict: gross amount mismatch (existing=%d, requested=%d)", *existing.GrossAmountCents, req.AmountCents)
+		}
+	} else {
+		// Fallback sécurisé pour les transactions legacy (avant l'ajout de gross_amount_cents).
+		// On compare amount_cents, en assumant que le montant net était le montant demandé.
+		if existing.AmountCents != req.AmountCents {
+			return fmt.Errorf("idempotency conflict: amount mismatch on legacy transaction (existing=%d, requested=%d)", existing.AmountCents, req.AmountCents)
+		}
+	}
+
+	// 2. Vérification du flag HoldAfterCredit via le marqueur en description
 	isHeldInDB := existing.Description != nil && strings.Contains(*existing.Description, "(held until proof/redeem)")
 	if req.HoldAfterCredit && !isHeldInDB {
 		return fmt.Errorf("idempotency conflict: request requires hold, but existing transaction is not held")
 	}
 	if !req.HoldAfterCredit && isHeldInDB {
 		return fmt.Errorf("idempotency conflict: request is not held, but existing transaction is held")
-	}
-
-	// 🆕 PR-C FIX : Comparaison stricte du montant brut
-	if existing.GrossAmountCents != nil {
-		if *existing.GrossAmountCents != req.AmountCents {
-			return fmt.Errorf("idempotency conflict: gross amount mismatch (existing=%d, requested=%d)", *existing.GrossAmountCents, req.AmountCents)
-		}
-	} else {
-		// Transaction legacy : nous ne pouvons pas supposer en toute sécurité que amount_cents est le montant brut.
-		// Pour éviter un double crédit ou un rejet injustifié, nous bloquons et exigeons une réconciliation manuelle.
-		return repository.ErrLegacyIdempotencyAmbiguous
 	}
 
 	return nil

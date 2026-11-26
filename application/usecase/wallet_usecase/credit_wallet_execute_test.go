@@ -370,7 +370,6 @@ func TestCreditWalletUsecase_CreditFromSale_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows au lieu de errors.New("not found")
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, sql.ErrNoRows).
@@ -411,7 +410,6 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 	expectWalletRepoWithTXSelf(walletRepo, mockTx)
 	expectTxnRepoWithTXSelf(txnRepo, mockTx)
 
-	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, sql.ErrNoRows).
@@ -435,7 +433,7 @@ func TestCreditWalletUsecase_CreditFromCOD_SetsCorrectFields(t *testing.T) {
 }
 
 // ============================================================
-// 🛡️ TESTS : A01 FIX - Idempotence Lookup Error & Skip
+// 🛡️ TESTS : Idempotence Lookup Error, Skip & Mismatch
 // ============================================================
 
 func TestCreditWalletUsecase_IdempotencyLookupError_Aborts(t *testing.T) {
@@ -463,12 +461,10 @@ func TestCreditWalletUsecase_IdempotencyLookupError_Aborts(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows pour "not found"
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
-	// 🛡️ A01 FIX TEST : la vérification d'idempotence échoue (panne DB)
 	txnRepo.EXPECT().
 		FindByReferenceID(gomock.Any(), refType, refID).
 		Return(nil, errors.New("connection reset by peer"))
@@ -502,7 +498,6 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 	wallet := entity.NewMerchantWallet(req.ShopID)
 	wallet.BalanceCents = 25000
 
-	// 🛡️ PR-C : GrossAmountCents obligatoire pour le match d'idempotence
 	gross := int64(10000)
 	existing := &entity.WalletTransaction{
 		ID:                "txn-already",
@@ -520,12 +515,10 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
 
 	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
-	// ✅ PR-3 FIX : Utiliser sql.ErrNoRows pour "not found"
 	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, sql.ErrNoRows).AnyTimes()
 
 	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
 
-	// 🛡️ A01 FIX TEST : la transaction existe déjà et est complétée
 	txnRepo.EXPECT().FindByReferenceID(gomock.Any(), refType, refID).Return(existing, nil)
 
 	mockTx.EXPECT().Commit().Return(nil)
@@ -537,4 +530,61 @@ func TestCreditWalletUsecase_IdempotencySkip_WhenCompletedExists(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.Equal(t, "txn-already", resp.TransactionID)
 	assert.Equal(t, int64(10000), resp.AmountCents)
+}
+
+// 🆕 PR-4 FIX : Teste que l'idempotence rejette une requête avec un montant différent
+func TestCreditWalletUsecase_IdempotencyMismatch_ReturnsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	uc, walletRepo, txnRepo, escrowRepo, txManager := newCreditWalletUsecase(ctrl)
+
+	ctx, shopID := walletTestContext()
+	refType := "order"
+	refID := "order-mismatch"
+
+	// La requête demande 15000, mais la transaction existante a un gross de 10000
+	req := &walletusecase.CreditWalletRequest{
+		ShopID:          shopID.String(),
+		AmountCents:     15000,
+		TransactionType: entity.WalletTxSaleCredit,
+		ReferenceType:   &refType,
+		ReferenceID:     &refID,
+	}
+
+	mockTx := mockrepo.NewMockTx(ctrl)
+	wallet := entity.NewMerchantWallet(req.ShopID)
+	wallet.BalanceCents = 25000
+
+	gross := int64(10000)
+	existing := &entity.WalletTransaction{
+		ID:                "txn-already",
+		ShopID:            req.ShopID,
+		TransactionType:   entity.WalletTxSaleCredit,
+		AmountCents:       10000,
+		GrossAmountCents:  &gross,
+		BalanceAfterCents: 25000,
+		Status:            entity.WalletTxCompleted,
+	}
+
+	expectWalletRepoWithTXSelf(walletRepo, mockTx)
+	expectTxnRepoWithTXSelf(txnRepo, mockTx)
+
+	txManager.EXPECT().BeginTx(gomock.Any()).Return(mockTx, nil)
+
+	escrowRepo.EXPECT().WithTX(mockTx).Return(escrowRepo).AnyTimes()
+	escrowRepo.EXPECT().FindByOrderID(gomock.Any(), refID).Return(nil, sql.ErrNoRows).AnyTimes()
+
+	walletRepo.EXPECT().FindByShopIDForUpdate(gomock.Any(), req.ShopID).Return(wallet, nil)
+
+	txnRepo.EXPECT().FindByReferenceID(gomock.Any(), refType, refID).Return(existing, nil)
+
+	// Le rollback doit être appelé car l'erreur d'idempotence arrête le processus
+	mockTx.EXPECT().Rollback().Return(nil)
+
+	resp, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "idempotency conflict: gross amount mismatch")
 }
