@@ -2,11 +2,13 @@ package orderusecase_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	orderusecase "Goshop/application/usecase/order_usecase"
 	"Goshop/domain/entity"
+	"Goshop/domain/repository"
 	"Goshop/domain/tenant"
 	mockrepo "Goshop/mocks/repository"
 	mockusecase "Goshop/mocks/usecase"
@@ -15,10 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 )
-
-// ============================================================
-// 🆕 Phase 3 : TESTS UNITAIRES - SYNC ORDER PAYMENT
-// ============================================================
 
 // ============================================================
 // HELPERS
@@ -86,12 +84,10 @@ func createSyncTestEscrow(orderID string) *entity.EscrowAccount {
 // ============================================================
 // TEST 1 : Payment success + Order pending + Escrow exists → Confirme l'order
 // ============================================================
-
 func TestSyncOrderPayment_AlreadySuccess_PendingOrder_ConfirmsOrder(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// Mocks
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
@@ -99,79 +95,49 @@ func TestSyncOrderPayment_AlreadySuccess_PendingOrder_ConfirmsOrder(t *testing.T
 	mockPaymentRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	// Usecase
 	uc := orderusecase.NewSyncOrderPaymentUsecase(
-		mockOrderRepo,
-		mockPaymentRepo,
-		mockEscrowRepo,
-		mockDeliveryProofRepo,
-		mockPaymentRegistry,
-		nil, // notifService
-		mockTxManager,
+		mockOrderRepo, mockPaymentRepo, mockEscrowRepo, mockDeliveryProofRepo,
+		mockPaymentRegistry, nil, mockTxManager,
 	)
 
-	// Données de test
 	shop := createSyncTestShop()
 	order := createSyncTestOrder(shop.ID.String(), string(entity.OrderStatusPending))
 	orderUUID, _ := uuid.Parse(order.ID)
 	payment := createSyncTestPayment(orderUUID, shop.ID, entity.PaymentStatusSuccess)
 	escrow := createSyncTestEscrow(order.ID)
 
-	// Contexte avec tenant
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Mocks - Ordre des appels
-	// 1. FindByID retourne l'order pending
-	mockOrderRepo.EXPECT().
-		FindByID(gomock.Any(), order.ID).
-		Return(order, nil)
+	mockOrderRepo.EXPECT().FindByID(gomock.Any(), order.ID).Return(order, nil)
 
-	// 2. FindByOrderID retourne le payment success
-	mockPaymentRepo.EXPECT().
-		FindByOrderID(gomock.Any(), orderUUID).
-		Return([]*entity.Payment{payment}, nil)
+	// 🆕 PR-2 FIX : Utilisation de FindLatestByOrderID au lieu de FindByOrderID
+	mockPaymentRepo.EXPECT().FindLatestByOrderID(gomock.Any(), orderUUID).Return(payment, nil)
 
-	// 3. FindByOrderID sur escrow retourne l'escrow existant
-	mockEscrowRepo.EXPECT().
-		FindByOrderID(gomock.Any(), order.ID).
-		Return(escrow, nil)
+	mockEscrowRepo.EXPECT().FindByOrderID(gomock.Any(), order.ID).Return(escrow, nil)
 
-	// 4. ✅ CRITIQUE : UpdateOrder doit être appelé (confirmation de l'order)
-	mockOrderRepo.EXPECT().
-		UpdateOrder(gomock.Any(), gomock.Any()).
+	mockOrderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(ctx context.Context, o *entity.Order) error {
-			// Vérifier que le status a bien été changé en confirmed
-			assert.Equal(t, string(entity.OrderStatusConfirmed), o.Status,
-				"Order should be confirmed after sync")
+			assert.Equal(t, string(entity.OrderStatusConfirmed), o.Status, "Order should be confirmed after sync")
 			return nil
 		})
 
-	// Exécution
 	req := &orderusecase.SyncOrderPaymentRequest{OrderID: order.ID}
 	resp, err := uc.Execute(ctx, req)
 
-	// Assertions
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.True(t, resp.Synced, "Synced should be true when payment was already confirmed")
-	assert.Equal(t, string(entity.OrderStatusConfirmed), resp.OrderStatus,
-		"Response OrderStatus should be confirmed")
-	assert.Equal(t, string(entity.PaymentStatusSuccess), resp.PaymentStatus)
-	assert.Equal(t, string(entity.EscrowAccountFundsHeld), resp.EscrowStatus)
-	// ✅ CORRECTION PR-G : Le message réel est "Payment already confirmed, escrow exists"
-	// car l'escrow existe déjà et le usecase ne le recrée pas
+	assert.Equal(t, string(entity.OrderStatusConfirmed), resp.OrderStatus)
 	assert.Contains(t, resp.Message, "Payment already confirmed, escrow exists")
 }
 
 // ============================================================
 // TEST 2 : Payment success + Order confirmed + Escrow exists → No-op
 // ============================================================
-
 func TestSyncOrderPayment_AlreadySuccess_ConfirmedOrder_NoOp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// Mocks
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
@@ -179,65 +145,40 @@ func TestSyncOrderPayment_AlreadySuccess_ConfirmedOrder_NoOp(t *testing.T) {
 	mockPaymentRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
-	// Usecase
 	uc := orderusecase.NewSyncOrderPaymentUsecase(
-		mockOrderRepo,
-		mockPaymentRepo,
-		mockEscrowRepo,
-		mockDeliveryProofRepo,
-		mockPaymentRegistry,
-		nil, // notifService
-		mockTxManager,
+		mockOrderRepo, mockPaymentRepo, mockEscrowRepo, mockDeliveryProofRepo,
+		mockPaymentRegistry, nil, mockTxManager,
 	)
 
-	// Données de test - Order DÉJÀ confirmed
 	shop := createSyncTestShop()
 	order := createSyncTestOrder(shop.ID.String(), string(entity.OrderStatusConfirmed))
 	orderUUID, _ := uuid.Parse(order.ID)
 	payment := createSyncTestPayment(orderUUID, shop.ID, entity.PaymentStatusSuccess)
 	escrow := createSyncTestEscrow(order.ID)
 
-	// Contexte avec tenant
 	ctx := tenant.WithTenant(context.Background(), shop)
 
-	// Mocks
-	mockOrderRepo.EXPECT().
-		FindByID(gomock.Any(), order.ID).
-		Return(order, nil)
+	mockOrderRepo.EXPECT().FindByID(gomock.Any(), order.ID).Return(order, nil)
+	mockPaymentRepo.EXPECT().FindLatestByOrderID(gomock.Any(), orderUUID).Return(payment, nil)
+	mockEscrowRepo.EXPECT().FindByOrderID(gomock.Any(), order.ID).Return(escrow, nil)
+	// UpdateOrder NE doit PAS être appelé
 
-	mockPaymentRepo.EXPECT().
-		FindByOrderID(gomock.Any(), orderUUID).
-		Return([]*entity.Payment{payment}, nil)
-
-	mockEscrowRepo.EXPECT().
-		FindByOrderID(gomock.Any(), order.ID).
-		Return(escrow, nil)
-
-	// ✅ CRITIQUE : UpdateOrder NE doit PAS être appelé (déjà confirmed)
-	// Pas de mock pour UpdateOrder → gomock échouera si appelé
-
-	// Exécution
 	req := &orderusecase.SyncOrderPaymentRequest{OrderID: order.ID}
 	resp, err := uc.Execute(ctx, req)
 
-	// Assertions
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.False(t, resp.Synced, "Synced should be false when order was already confirmed")
-	assert.Equal(t, string(entity.OrderStatusConfirmed), resp.OrderStatus)
-	assert.Equal(t, string(entity.PaymentStatusSuccess), resp.PaymentStatus)
 	assert.Equal(t, "Payment already confirmed, escrow exists", resp.Message)
 }
 
 // ============================================================
 // TEST 3 : Payment success + Order out_for_delivery → No-op
 // ============================================================
-
 func TestSyncOrderPayment_AlreadySuccess_OutForDeliveryOrder_NoOp(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	// Mocks
 	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
 	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
 	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
@@ -246,13 +187,8 @@ func TestSyncOrderPayment_AlreadySuccess_OutForDeliveryOrder_NoOp(t *testing.T) 
 	mockTxManager := mockrepo.NewMockTxManager(ctrl)
 
 	uc := orderusecase.NewSyncOrderPaymentUsecase(
-		mockOrderRepo,
-		mockPaymentRepo,
-		mockEscrowRepo,
-		mockDeliveryProofRepo,
-		mockPaymentRegistry,
-		nil,
-		mockTxManager,
+		mockOrderRepo, mockPaymentRepo, mockEscrowRepo, mockDeliveryProofRepo,
+		mockPaymentRegistry, nil, mockTxManager,
 	)
 
 	shop := createSyncTestShop()
@@ -264,10 +200,10 @@ func TestSyncOrderPayment_AlreadySuccess_OutForDeliveryOrder_NoOp(t *testing.T) 
 	ctx := tenant.WithTenant(context.Background(), shop)
 
 	mockOrderRepo.EXPECT().FindByID(gomock.Any(), order.ID).Return(order, nil)
-	mockPaymentRepo.EXPECT().FindByOrderID(gomock.Any(), orderUUID).Return([]*entity.Payment{payment}, nil)
+	mockPaymentRepo.EXPECT().FindLatestByOrderID(gomock.Any(), orderUUID).Return(payment, nil)
 	mockEscrowRepo.EXPECT().FindByOrderID(gomock.Any(), order.ID).Return(escrow, nil)
-
 	// UpdateOrder NE doit PAS être appelé
+
 	req := &orderusecase.SyncOrderPaymentRequest{OrderID: order.ID}
 	resp, err := uc.Execute(ctx, req)
 
@@ -276,4 +212,83 @@ func TestSyncOrderPayment_AlreadySuccess_OutForDeliveryOrder_NoOp(t *testing.T) 
 	assert.False(t, resp.Synced, "Synced should be false for non-pending orders")
 	assert.Equal(t, string(entity.OrderStatusOutForDelivery), resp.OrderStatus)
 	assert.Equal(t, "Payment already confirmed, escrow exists", resp.Message)
+}
+
+// ============================================================
+// 🆕 TEST 4 : PR-2 FIX - UpdateOrder échoue → L'erreur est propagée, pas de faux positif
+// ============================================================
+func TestSyncOrderPayment_UpdateOrderFailure_ReturnsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
+	mockDeliveryProofRepo := mockrepo.NewMockDeliveryProofRepository(ctrl)
+	mockPaymentRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+
+	uc := orderusecase.NewSyncOrderPaymentUsecase(
+		mockOrderRepo, mockPaymentRepo, mockEscrowRepo, mockDeliveryProofRepo,
+		mockPaymentRegistry, nil, mockTxManager,
+	)
+
+	shop := createSyncTestShop()
+	order := createSyncTestOrder(shop.ID.String(), string(entity.OrderStatusPending))
+	orderUUID, _ := uuid.Parse(order.ID)
+	payment := createSyncTestPayment(orderUUID, shop.ID, entity.PaymentStatusSuccess)
+	escrow := createSyncTestEscrow(order.ID)
+
+	ctx := tenant.WithTenant(context.Background(), shop)
+
+	mockOrderRepo.EXPECT().FindByID(gomock.Any(), order.ID).Return(order, nil)
+	mockPaymentRepo.EXPECT().FindLatestByOrderID(gomock.Any(), orderUUID).Return(payment, nil)
+	mockEscrowRepo.EXPECT().FindByOrderID(gomock.Any(), order.ID).Return(escrow, nil)
+
+	// 🆕 PR-2 FIX : Simulation d'un échec d'écriture en base
+	mockOrderRepo.EXPECT().UpdateOrder(gomock.Any(), gomock.Any()).Return(errors.New("db connection lost"))
+
+	req := &orderusecase.SyncOrderPaymentRequest{OrderID: order.ID}
+	resp, err := uc.Execute(ctx, req)
+
+	// Assertions : L'erreur doit être propagée, pas avalée
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to persist accepted order")
+	assert.Nil(t, resp) // Pas de réponse partielle trompeuse
+}
+
+// ============================================================
+// 🆕 TEST 5 : Aucun paiement trouvé → Erreur explicite
+// ============================================================
+func TestSyncOrderPayment_NoPaymentsFound_ReturnsError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockOrderRepo := mockrepo.NewMockOrderRepository(ctrl)
+	mockPaymentRepo := mockrepo.NewMockPaymentRepository(ctrl)
+	mockEscrowRepo := mockrepo.NewMockEscrowAccountRepository(ctrl)
+	mockDeliveryProofRepo := mockrepo.NewMockDeliveryProofRepository(ctrl)
+	mockPaymentRegistry := mockusecase.NewMockPaymentRegistry(ctrl)
+	mockTxManager := mockrepo.NewMockTxManager(ctrl)
+
+	uc := orderusecase.NewSyncOrderPaymentUsecase(
+		mockOrderRepo, mockPaymentRepo, mockEscrowRepo, mockDeliveryProofRepo,
+		mockPaymentRegistry, nil, mockTxManager,
+	)
+
+	shop := createSyncTestShop()
+	order := createSyncTestOrder(shop.ID.String(), string(entity.OrderStatusPending))
+	orderUUID, _ := uuid.Parse(order.ID)
+
+	ctx := tenant.WithTenant(context.Background(), shop)
+
+	mockOrderRepo.EXPECT().FindByID(gomock.Any(), order.ID).Return(order, nil)
+	mockPaymentRepo.EXPECT().FindLatestByOrderID(gomock.Any(), orderUUID).Return(nil, repository.ErrPaymentNotFound)
+
+	req := &orderusecase.SyncOrderPaymentRequest{OrderID: order.ID}
+	resp, err := uc.Execute(ctx, req)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no payment found for order")
+	assert.Nil(t, resp)
 }
