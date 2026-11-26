@@ -90,8 +90,27 @@ func NewCreditWalletUsecase(
 
 // Execute crédite le wallet d'un marchand (gère sa propre transaction)
 func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletRequest) (*CreditWalletResponse, error) {
+	logger := zerolog.Ctx(ctx)
+
+	// ✅ PR-1 FIX : Validation AVANT BeginTx (fail-fast, pas de transaction inutile)
+	if err := req.Validate(); err != nil {
+		logger.Error().Err(err).Msg("Invalid credit wallet request")
+		return nil, fmt.Errorf("validation error: %w", err)
+	}
+
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("Multi-tenant error")
+		return nil, fmt.Errorf("multi-tenant: %w", err)
+	}
+
+	if shop.ID.String() != req.ShopID {
+		return nil, fmt.Errorf("access denied: shop_id does not match tenant")
+	}
+
 	tx, err := uc.txManager.BeginTx(ctx)
 	if err != nil {
+		logger.Error().Err(err).Msg("Failed to begin transaction")
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
@@ -102,6 +121,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 
 	if err := tx.Commit(); err != nil {
+		logger.Error().Err(err).Msg("Failed to commit transaction")
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
