@@ -88,9 +88,11 @@ func NewCreditWalletUsecase(
 	}
 }
 
+// Execute crédite le wallet d'un marchand (gère sa propre transaction)
 func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletRequest) (*CreditWalletResponse, error) {
 	logger := zerolog.Ctx(ctx)
 
+	// ✅ PR-1 FIX : Validation AVANT BeginTx (fail-fast, pas de transaction inutile)
 	if err := req.Validate(); err != nil {
 		logger.Error().Err(err).Msg("Invalid credit wallet request")
 		return nil, fmt.Errorf("validation error: %w", err)
@@ -113,9 +115,39 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	resp, err := uc.ProcessCreditWithinTx(ctx, tx, req)
+	if err != nil {
+		return nil, err // Le rollback est géré par le defer
+	}
+
+	if err := tx.Commit(); err != nil {
+		logger.Error().Err(err).Msg("Failed to commit transaction")
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return resp, nil
+}
+
+// ProcessCreditWithinTx exécute la logique de crédit au sein d'une transaction existante.
+// 🆕 PR-1 FIX : Permet au scheduler de compensation d'inclure le crédit dans sa propre transaction atomique.
+func (uc *CreditWalletUsecase) ProcessCreditWithinTx(ctx context.Context, tx repository.Tx, req *CreditWalletRequest) (*CreditWalletResponse, error) {
+	logger := zerolog.Ctx(ctx)
+
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("validation error: %w", err)
+	}
+
+	shop, err := tenant.FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("multi-tenant: %w", err)
+	}
+
+	if shop.ID.String() != req.ShopID {
+		return nil, fmt.Errorf("access denied: shop_id does not match tenant")
+	}
+
 	// ============================================================
-	// ✅ W2 FIX : SÉCURITÉ GATE ESCROW
-	// Une erreur de lecture (findErr != nil) doit ABORTER, pas être ignorée.
+	// ✅ W2 FIX : SÉCURITÉ GATE ESCROW (utilise la TX passée)
 	// ============================================================
 	if req.ReferenceType != nil && req.ReferenceID != nil && uc.escrowRepo != nil {
 		switch *req.ReferenceType {
@@ -134,110 +166,52 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 			if findErr != nil {
 				if !isNotFound(findErr) {
-					logger.Error().
-						Err(findErr).
-						Str("reference_type", *req.ReferenceType).
-						Str("reference_id", *req.ReferenceID).
-						Msg("Failed to load escrow for credit gate")
 					return nil, fmt.Errorf("failed to verify escrow before credit: %w", findErr)
 				}
-				// not found : pas d'escrow lié — on laisse le crédit (chemins hors escrow)
 			} else if escrow != nil {
 				if escrow.IsBlockedFromRelease() {
-					logger.Error().
-						Str("shop_id", req.ShopID).
-						Str("escrow_id", escrow.ID).
-						Str("escrow_status", string(escrow.Status)).
-						Str("reference_type", *req.ReferenceType).
-						Str("reference_id", *req.ReferenceID).
-						Msg("BLOCKED: Attempted to credit wallet while escrow is still locked")
 					return nil, fmt.Errorf(
-						"cannot credit wallet: escrow %s is locked (status: %s). Funds must be released first via delivery confirmation or auto-release after 3 days",
-						escrow.ID,
-						escrow.Status,
+						"cannot credit wallet: escrow %s is locked (status: %s). Funds must be released first",
+						escrow.ID, escrow.Status,
 					)
 				}
 				if !escrow.CanReleaseToMerchant() {
-					logger.Error().
-						Str("escrow_id", escrow.ID).
-						Str("escrow_status", string(escrow.Status)).
-						Msg("Escrow cannot release funds to merchant")
-					return nil, fmt.Errorf(
-						"escrow %s cannot release funds (status: %s)",
-						escrow.ID,
-						escrow.Status,
-					)
+					return nil, fmt.Errorf("escrow %s cannot release funds (status: %s)", escrow.ID, escrow.Status)
 				}
-				logger.Info().
-					Str("escrow_id", escrow.ID).
-					Str("escrow_status", string(escrow.Status)).
-					Int64("escrow_total", escrow.TotalAmountCents).
-					Int64("escrow_released", escrow.ReleasedAmountCents).
-					Msg("Escrow verified and allows wallet credit")
 			}
 		}
 	}
 
+	// 1. Trouver ou créer le wallet (avec verrou FOR UPDATE via la TX)
 	wallet, err := uc.walletRepo.WithTX(tx).FindByShopIDForUpdate(ctx, req.ShopID)
 	if err != nil {
-		// ✅ W3 FIX : Utilisation d'un helper robuste
 		if isNotFound(err) {
 			wallet = entity.NewMerchantWallet(req.ShopID)
 			if err := uc.walletRepo.WithTX(tx).Create(ctx, wallet); err != nil {
-				logger.Error().Err(err).Msg("Failed to create wallet")
 				return nil, fmt.Errorf("failed to create wallet: %w", err)
 			}
-			logger.Info().Str("shop_id", req.ShopID).Msg("Wallet created")
 		} else {
-			logger.Error().Err(err).Msg("Failed to find wallet")
 			return nil, fmt.Errorf("failed to find wallet: %w", err)
 		}
 	}
 
-	// Frozen : CreditWithDebtSweep est autorisé pour récupérer une dette.
+	// Frozen check
 	if wallet.IsFrozen && wallet.DebtCents == 0 && req.TransactionType != entity.WalletTxUnfreezeDeposit {
-		logger.Warn().
-			Str("shop_id", req.ShopID).
-			Bool("is_frozen", wallet.IsFrozen).
-			Msg("Attempted to credit frozen wallet (no outstanding debt)")
 		return nil, fmt.Errorf("wallet is frozen, cannot credit")
 	}
 
-	// ============================================================
-	// ✅ W1 FIX & PR-C FIX : IDEMPOTENCE STRICTE AVANT toute mutation mémoire
-	// ============================================================
+	// 2. Vérification d'idempotence (via la TX)
 	if req.ReferenceType != nil && req.ReferenceID != nil {
 		existing, findErr := uc.txnRepo.WithTX(tx).FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
 		if findErr != nil {
 			if !isNotFound(findErr) {
-				logger.Error().
-					Err(findErr).
-					Str("ref_type", *req.ReferenceType).
-					Str("ref_id", *req.ReferenceID).
-					Msg("Failed to check existing wallet transaction for idempotency")
 				return nil, fmt.Errorf("failed to check existing wallet transaction: %w", findErr)
 			}
 		} else if existing != nil && existing.Status == entity.WalletTxCompleted {
 			if err := assertIdempotentCreditMatch(existing, req); err != nil {
-				logger.Error().
-					Err(err).
-					Str("existing_txn", existing.ID).
-					Str("ref_type", *req.ReferenceType).
-					Str("ref_id", *req.ReferenceID).
-					Msg("Idempotency key reuse with mismatched credit parameters")
 				return nil, err
 			}
-
-			logger.Info().
-				Str("ref_type", *req.ReferenceType).
-				Str("ref_id", *req.ReferenceID).
-				Str("existing_txn", existing.ID).
-				Msg("Idempotent skip — credit already completed")
-			if err := tx.Commit(); err != nil {
-				_ = tx.Rollback()
-				return nil, fmt.Errorf("failed to commit after idempotent skip: %w", err)
-			}
-			// Soldes du wallet chargé (non muté) + txn existante
+			// Succès idempotent. Le caller (scheduler) fera le Commit.
 			return &CreditWalletResponse{
 				ShopID:            wallet.ShopID,
 				BalanceCents:      wallet.BalanceCents,
@@ -254,9 +228,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 	}
 
-	// ============================================================
-	// CRÉDIT MÉMOIRE (uniquement si pas de skip idempotent)
-	// ============================================================
+	// 3. Crédit en mémoire
 	previousBalance := wallet.BalanceCents
 	grossCents := req.AmountCents
 	var netToBalance int64
@@ -264,7 +236,6 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 	if req.HoldAfterCredit {
 		if err := wallet.CreditAndHold(grossCents); err != nil {
-			logger.Error().Err(err).Msg("Failed to credit-and-hold wallet")
 			return nil, fmt.Errorf("failed to credit-and-hold wallet: %w", err)
 		}
 		netToBalance = grossCents
@@ -272,19 +243,16 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 	} else {
 		netToBalance, swept, err = wallet.CreditWithDebtSweep(grossCents)
 		if err != nil {
-			logger.Error().Err(err).Msg("Failed to credit wallet with debt sweep")
 			return nil, fmt.Errorf("failed to credit wallet: %w", err)
 		}
 	}
 
-	// ============================================================
-	// MISE À JOUR ET CRÉATION DE LA TRANSACTION
-	// ============================================================
+	// 4. Mise à jour du wallet (via la TX)
 	if err := uc.walletRepo.WithTX(tx).Update(ctx, wallet); err != nil {
-		logger.Error().Err(err).Msg("Failed to update wallet")
 		return nil, fmt.Errorf("failed to update wallet: %w", err)
 	}
 
+	// 5. Création de la transaction ledger (via la TX)
 	txnID := uuid.New().String()
 	desc := req.Description
 	if req.HoldAfterCredit && desc != nil {
@@ -305,7 +273,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 			ShopID:            req.ShopID,
 			TransactionType:   req.TransactionType,
 			AmountCents:       netToBalance,
-			GrossAmountCents:  &grossCents, // 🆕 PR-C FIX
+			GrossAmountCents:  &grossCents,
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     req.ReferenceType,
 			ReferenceID:       req.ReferenceID,
@@ -314,55 +282,23 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		}
 
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
-			// ✅ W1 FIX (partie 2) : GESTION PROPRE DU CONFLIT UNIQUE (23505)
 			if isUniqueViolation(err) {
-				logger.Info().Msg("Unique constraint on wallet txn — reloading winner")
-				_ = tx.Rollback()
-
-				// Nouvelle lecture hors TX avortée (même tenant)
-				winner, wErr := uc.txnRepo.FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
-				if wErr != nil {
-					return nil, fmt.Errorf("concurrent credit: failed to reload existing transaction: %w", wErr)
-				}
-				if winner == nil || winner.Status != entity.WalletTxCompleted {
-					return nil, fmt.Errorf("concurrent credit: unique conflict but no completed transaction found")
-				}
-				if err := assertIdempotentCreditMatch(winner, req); err != nil {
-					return nil, err
-				}
-
-				// Recharger wallet pour soldes à jour (lecture simple)
-				w2, w2err := uc.walletRepo.FindByShopID(ctx, req.ShopID)
-				if w2err != nil {
-					return nil, fmt.Errorf("concurrent credit: reload wallet: %w", w2err)
-				}
-
-				return &CreditWalletResponse{
-					ShopID:            w2.ShopID,
-					BalanceCents:      w2.BalanceCents,
-					HeldCents:         w2.HeldCents,
-					AvailableCents:    w2.AvailableCents(),
-					PreviousBalance:   w2.BalanceCents,
-					IsFrozen:          w2.IsFrozen,
-					TransactionID:     winner.ID,
-					TransactionType:   winner.TransactionType,
-					AmountCents:       winner.AmountCents,
-					BalanceAfterCents: winner.BalanceAfterCents,
-					Held:              req.HoldAfterCredit,
-				}, nil
+				// 🆕 PR-1 FIX : Dans une TX partagée, on ne peut pas rollback et continuer.
+				// On retourne l'erreur. Le scheduler fera un rollback de SA transaction.
+				// Au prochain retry, la vérification d'idempotence (étape 2) trouvera le gagnant et réussira proprement.
+				return nil, fmt.Errorf("concurrent credit unique violation, caller should rollback and retry: %w", err)
 			}
-			logger.Error().Err(err).Msg("Failed to create transaction")
 			return nil, fmt.Errorf("failed to create transaction: %w", err)
 		}
 	} else {
-		// ✅ CORRECTION PR-C (P0-01) & PR-3 FIX : Full sweep avec gestion propre du conflit unique.
+		// Full debt sweep marker
 		markerDesc := fmt.Sprintf("Crédit de %d FCFA intégralement absorbé par la dette", grossCents)
 		markerTxn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
 			ShopID:            req.ShopID,
 			TransactionType:   req.TransactionType,
 			AmountCents:       grossCents,
-			GrossAmountCents:  &grossCents, // 🆕 PR-C FIX
+			GrossAmountCents:  &grossCents,
 			BalanceAfterCents: wallet.BalanceCents,
 			ReferenceType:     req.ReferenceType,
 			ReferenceID:       req.ReferenceID,
@@ -372,43 +308,8 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, markerTxn); err != nil {
 			if isUniqueViolation(err) {
-				logger.Info().Msg("Unique constraint hit on debt sweep marker — reloading winner")
-				_ = tx.Rollback() // 🆕 PR-3 FIX : Rollback explicite de la transaction avortée
-
-				// Nouvelle lecture hors TX
-				winner, wErr := uc.txnRepo.FindByReferenceID(ctx, *req.ReferenceType, *req.ReferenceID)
-				if wErr != nil {
-					return nil, fmt.Errorf("concurrent credit (full sweep): failed to reload existing transaction: %w", wErr)
-				}
-				if winner == nil || winner.Status != entity.WalletTxCompleted {
-					return nil, fmt.Errorf("concurrent credit (full sweep): unique conflict but no completed transaction found")
-				}
-				if err := assertIdempotentCreditMatch(winner, req); err != nil {
-					return nil, err
-				}
-
-				// Recharger wallet pour soldes à jour
-				w2, w2err := uc.walletRepo.FindByShopID(ctx, req.ShopID)
-				if w2err != nil {
-					return nil, fmt.Errorf("concurrent credit (full sweep): reload wallet: %w", w2err)
-				}
-
-				return &CreditWalletResponse{
-					ShopID:            w2.ShopID,
-					BalanceCents:      w2.BalanceCents,
-					HeldCents:         w2.HeldCents,
-					AvailableCents:    w2.AvailableCents(),
-					PreviousBalance:   w2.BalanceCents,
-					IsFrozen:          w2.IsFrozen,
-					TransactionID:     winner.ID,
-					TransactionType:   winner.TransactionType,
-					AmountCents:       winner.AmountCents,
-					BalanceAfterCents: winner.BalanceAfterCents,
-					Held:              req.HoldAfterCredit,
-					SweptCents:        grossCents,
-				}, nil
+				return nil, fmt.Errorf("concurrent credit (full sweep) unique violation, caller should rollback and retry: %w", err)
 			}
-			logger.Error().Err(err).Msg("Failed to create debt sweep marker transaction")
 			return nil, fmt.Errorf("failed to create debt sweep marker: %w", err)
 		}
 		txnID = markerTxn.ID
@@ -420,10 +321,7 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 		if req.ReferenceID != nil {
 			sweepRefID = req.ReferenceID
 		}
-		sweepDesc := fmt.Sprintf(
-			"Auto debt sweep on credit type=%s gross=%d swept=%d",
-			req.TransactionType, grossCents, swept,
-		)
+		sweepDesc := fmt.Sprintf("Auto debt sweep on credit type=%s gross=%d swept=%d", req.TransactionType, grossCents, swept)
 		sweepAmt := -swept
 		sweepTxn := &entity.WalletTransaction{
 			ID:                uuid.New().String(),
@@ -439,34 +337,20 @@ func (uc *CreditWalletUsecase) Execute(ctx context.Context, req *CreditWalletReq
 
 		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
 			msg := strings.ToLower(err.Error())
-			if !(strings.Contains(msg, "duplicate key") ||
-				strings.Contains(msg, "unique constraint") ||
-				strings.Contains(msg, "23505")) {
-				logger.Error().Err(err).Msg("Failed to create debt_sweep transaction")
+			if !(strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") || strings.Contains(msg, "23505")) {
 				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
 			}
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		logger.Error().Err(err).Msg("Failed to commit transaction")
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
+	// ⚠️ IMPORTANT : Pas de tx.Commit() ici. Le caller (Execute ou Scheduler) est responsable du Commit.
 	logger.Info().
 		Str("shop_id", req.ShopID).
 		Int64("gross_cents", grossCents).
 		Int64("net_to_balance", netToBalance).
 		Int64("swept_cents", swept).
-		Int64("previous_balance", previousBalance).
-		Int64("new_balance", wallet.BalanceCents).
-		Int64("debt_cents", wallet.DebtCents).
-		Int64("held_cents", wallet.HeldCents).
-		Int64("available_cents", wallet.AvailableCents()).
-		Bool("held", req.HoldAfterCredit).
-		Str("transaction_type", string(req.TransactionType)).
 		Str("transaction_id", txnID).
-		Msg("Wallet credited successfully (with debt sweep if any)")
+		Msg("Wallet credit logic processed successfully within transaction")
 
 	return &CreditWalletResponse{
 		ShopID:            wallet.ShopID,

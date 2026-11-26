@@ -28,7 +28,7 @@ type CompensationPendingScheduler struct {
 	db             *sql.DB
 	withdrawalRepo repository.WithdrawalRepository
 	creditWalletUC *walletusecase.CreditWalletUsecase
-	txManager      repository.TxManager // 🆕 PR-1 FIX : Pour l'atomicité
+	txManager      repository.TxManager
 	notifService   service.NotificationService
 	logger         zerolog.Logger
 
@@ -41,7 +41,7 @@ func NewCompensationPendingScheduler(
 	db *sql.DB,
 	withdrawalRepo repository.WithdrawalRepository,
 	creditWalletUC *walletusecase.CreditWalletUsecase,
-	txManager repository.TxManager, // 🆕 PR-1 FIX
+	txManager repository.TxManager,
 	notifService service.NotificationService,
 	logger zerolog.Logger,
 ) *CompensationPendingScheduler {
@@ -147,11 +147,11 @@ func (s *CompensationPendingScheduler) tooRecent(w *entity.Withdrawal) bool {
 	return time.Since(*w.LastCompensationAt) < time.Duration(s.minAgeSeconds)*time.Second
 }
 
-// 🆕 PR-1 FIX : Processus atomique avec verrouillage FOR UPDATE
+// 🆕 PR-1 FIX : Processus 100% atomique avec une seule transaction
 func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity.Withdrawal) error {
 	log := s.logger.With().Str("withdrawal_id", w.ID.String()).Logger()
 
-	// 1. Démarrer une transaction pour verrouiller le retrait
+	// 1. Démarrer UNE SEULE transaction pour l'ensemble de l'opération
 	tx, err := s.txManager.BeginTx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -169,10 +169,10 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	// 3. Vérification critique : le statut a-t-il changé entre-temps ?
 	if currentW.Status != entity.WithdrawalStatusCompensationPending {
 		log.Info().Str("current_status", string(currentW.Status)).Msg("Withdrawal status changed, skipping compensation (idempotent)")
-		return nil // Skip idempotent, pas une erreur
+		return nil
 	}
 
-	// 4. Créditer le wallet (utilise sa propre transaction, ce qui est acceptable car le retrait est déjà verrouillé)
+	// 4. Préparer la requête de crédit
 	shopUUID, err := uuid.Parse(w.ShopID.String())
 	if err != nil {
 		return fmt.Errorf("invalid shop UUID in withdrawal: %w", err)
@@ -184,7 +184,7 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 	refID := w.ID.String()
 	desc := fmt.Sprintf("Compensation retry reverse for withdrawal %s", w.ID.String())
 
-	_, err = s.creditWalletUC.Execute(shopCtx, &walletusecase.CreditWalletRequest{
+	req := &walletusecase.CreditWalletRequest{
 		ShopID:          w.ShopID.String(),
 		AmountCents:     w.AmountCents,
 		TransactionType: entity.WalletTxDeposit,
@@ -192,10 +192,12 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		ReferenceID:     &refID,
 		Description:     &desc,
 		HoldAfterCredit: false,
-	})
+	}
 
+	// 5. 🆕 PR-1 FIX : Exécuter le crédit DANS la même transaction (pas Execute)
+	_, err = s.creditWalletUC.ProcessCreditWithinTx(shopCtx, tx, req)
 	if err != nil {
-		// Échec du crédit : on enregistre la tentative et on laisse le statut 'compensation_pending' pour un futur retry
+		// Échec du crédit : on enregistre la tentative. Le defer tx.Rollback() annulera le crédit.
 		currentW.RecordCompensationAttempt(err.Error())
 		if updErr := withdrawalRepoTx.Update(ctx, currentW); updErr != nil {
 			log.Error().Err(updErr).Msg("CRITICAL: Failed to persist compensation attempt")
@@ -210,7 +212,7 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		return fmt.Errorf("credit reverse failed: %w", err)
 	}
 
-	// 5. Succès du crédit : on passe le retrait à 'failed' de manière atomique dans la même TX
+	// 6. Succès du crédit : on passe le retrait à 'failed' de manière atomique
 	msg := "compensation resolved by retry job (payout reverse applied)"
 	if markErr := currentW.MarkFailed(msg); markErr != nil {
 		return fmt.Errorf("failed to mark withdrawal failed: %w", markErr)
@@ -220,7 +222,7 @@ func (s *CompensationPendingScheduler) processOne(ctx context.Context, w *entity
 		return fmt.Errorf("failed to update withdrawal status to failed: %w", updErr)
 	}
 
-	// 6. Commit de la transaction (libère le verrou FOR UPDATE)
+	// 7. Commit de la transaction unique
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit compensation tx: %w", err)
 	}
