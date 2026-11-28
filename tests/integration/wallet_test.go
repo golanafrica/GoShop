@@ -280,3 +280,59 @@ func TestWalletFreeze_Success(t *testing.T) {
 	assert.True(t, resp.WalletIsFrozen)
 	assert.Greater(t, resp.DaysRemaining, 0)
 }
+
+// ============================================================
+// TESTS : RÉCONCILIATION & INVARIANTS (PR-5)
+// ============================================================
+
+// TestWalletReconciliation_FullDebtSweep prouve qu'un crédit intégralement absorbé
+// par la dette ne crée pas de faux positifs de réconciliation (WalletBalance == LedgerNet).
+func TestWalletReconciliation_FullDebtSweep(t *testing.T) {
+	creditUC, _, _ := setupWalletTest(t)
+
+	shopID := createTestShop(t)
+	testCtx := tenant.WithTenant(context.Background(), &entity.Shop{
+		ID: uuid.MustParse(shopID),
+	})
+
+	// 1. Créer manuellement un wallet avec une dette de 500 FCFA et un solde de 0
+	_, err := sharedDB.Exec(`
+		INSERT INTO merchant_wallets (shop_id, balance_cents, debt_cents, created_at, updated_at)
+		VALUES ($1, 0, 50000, NOW(), NOW())
+	`, shopID)
+	require.NoError(t, err)
+
+	// 2. Créditer exactement 500 FCFA (full debt sweep)
+	req := &walletusecase.CreditWalletRequest{
+		ShopID:          shopID,
+		AmountCents:     50000,
+		TransactionType: entity.WalletTxSaleCredit,
+	}
+
+	resp, err := creditUC.Execute(testCtx, req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	// Le solde doit rester à 0, et tout doit être swept
+	assert.Equal(t, int64(0), resp.BalanceAfterCents)
+	assert.Equal(t, int64(50000), resp.SweptCents)
+
+	// 3. Vérifier l'invariant de réconciliation directement via la DB
+	var walletBalance, ledgerNet int64
+	err = sharedDB.QueryRow(`
+		SELECT 
+			COALESCE(w.balance_cents, 0),
+			COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN COALESCE(t.gross_amount_cents, t.amount_cents) ELSE 0 END) + 
+					 SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0)
+		FROM merchant_wallets w
+		LEFT JOIN wallet_transactions t ON w.shop_id = t.shop_id AND t.status = 'completed'
+		WHERE w.shop_id = $1
+		GROUP BY w.balance_cents
+	`, shopID).Scan(&walletBalance, &ledgerNet)
+	require.NoError(t, err)
+
+	// L'invariant fondamental : le solde du wallet doit être strictement égal au net du ledger
+	assert.Equal(t, walletBalance, ledgerNet, "WalletBalance MUST equal LedgerNet after full debt sweep")
+	assert.Equal(t, int64(0), walletBalance)
+	assert.Equal(t, int64(0), ledgerNet)
+}
