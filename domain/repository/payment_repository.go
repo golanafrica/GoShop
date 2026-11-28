@@ -48,6 +48,8 @@ type PaymentRepository interface {
 	CreatePaymentRefund(ctx context.Context, refund *entity.PaymentRefund) error
 	UpdatePaymentRefundStatus(ctx context.Context, id uuid.UUID, status entity.PaymentRefundStatus, providerErr string) error
 	FindPaymentRefundByIdempotency(ctx context.Context, shopID uuid.UUID, key string) (*entity.PaymentRefund, error)
+	// 🆕 PR-7 FIX : Retrouver les remboursements coincés pour réconciliation manuelle ou automatique
+	FindStuckPendingRefunds(ctx context.Context, minAgeMinutes int, limit int) ([]*entity.PaymentRefund, error)
 }
 
 // PaymentFilters représente les filtres pour la recherche de paiements
