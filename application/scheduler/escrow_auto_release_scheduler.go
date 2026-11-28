@@ -21,8 +21,8 @@ import (
 // ESCROW AUTO-RELEASE SCHEDULER
 // ============================================================
 //
-// Anti race multi-instance & Atomicité (PR 2 Audit & PR-A & PR-5) :
-//  1. Pour les Tontines : ClaimRelease immédiat + mise à jour proof self-healing (PR-5).
+// Anti race multi-instance & Atomicité (PR 2 Audit & PR-A & PR-5 & PR-6) :
+//  1. Pour les Tontines : ClaimRelease immédiat + mise à jour proof self-healing.
 //  2. Pour les Orders : ClaimRelease + Commission + Ledger + Wallet.Update dans UNE SEULE transaction SQL.
 //     → Plus de divergence comptable en cas de panne. Si le crédit échoue, le claim est rollbacké.
 //  3. FindByReferenceIDAdmin avant crédit pour l'idempotence (Fail-closed sur erreur SQL).
@@ -30,6 +30,7 @@ import (
 //  5. Échec de Update(delivery_proof) après claim/crédit → erreur visible (pas de faux succès).
 //  6. 🆕 PR-A : Validation stricte de toute transaction existante (statut, shop, montant brut, référence).
 //  7. 🆕 PR-5 : Verrouillage FOR UPDATE du wallet pour éviter les "lost updates" concurrents.
+//  8. 🆕 PR-6 : Échec explicite si platformRevenueRepo est nil alors qu'une commission est due.
 // ============================================================
 
 type EscrowAutoReleaseScheduler struct {
@@ -237,7 +238,7 @@ func (s *EscrowAutoReleaseScheduler) processProof(ctx context.Context, proof *en
 		return merchantAmount, nil
 	}
 
-	// 🛡️ CAS ORDER : ClaimRelease + crédit dans la même TX.
+	// 🛡️ CAS ORDER : ClaimRelease + commission + crédit dans la même TX.
 	var lastErr error
 	var isIdempotentConflict bool
 
@@ -323,13 +324,11 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	}
 
 	// ✅ A1 FIX : Fail-closed sur la relecture initiale.
-	// Une erreur SQL (timeout, perte de connexion) ne doit JAMAIS être interprétée comme une absence de transaction.
 	existing, err := s.walletTxnRepo.FindByReferenceIDAdmin(ctx, refType, proofID)
 	if err != nil {
 		if !errors.Is(err, repository.ErrWalletTransactionNotFound) {
 			return fmt.Errorf("failed to check existing wallet transaction (DB error): %w", err)
 		}
-		// ErrWalletTransactionNotFound confirmé : pas de transaction existante, on peut continuer.
 	} else if existing != nil {
 		// ✅ PR-A FIX : Validation stricte avant skip idempotent
 		if err := validateEscrowReleaseTxn(existing, shopID, merchantAmountCents, refType, proofID); err != nil {
@@ -391,16 +390,20 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 			Msg("Escrow already claimed but wallet NOT credited — recovering credit only (orphan recovery)")
 	}
 
-	// ✅ A3 FIX : Atomicité stricte de la commission.
-	// La commission DOIT être créditée dans la même transaction que le wallet.
-	if commissionCents > 0 && s.platformRevenueRepo != nil {
+	// 🆕 PR-6 FIX : Atomicité stricte de la commission.
+	// Si une commission est due, le dépôt de revenus DOIT être configuré.
+	// Sinon, on aborte pour éviter une divergence comptable (libération sans prise de commission).
+	if commissionCents > 0 {
+		if s.platformRevenueRepo == nil {
+			return fmt.Errorf("platform revenue repository is not configured, aborting escrow release to prevent commission loss (proof=%s)", proofID)
+		}
+
 		const commRefType = "escrow_auto_release_commission"
 
 		txRepo, ok := s.platformRevenueRepo.(interface {
 			WithTx(repository.Tx) repository.PlatformRevenueRepository
 		})
 		if !ok {
-			// Échec explicite pour éviter une divergence comptable (crédit hors TX)
 			return fmt.Errorf("platform revenue repository does not support WithTx, aborting to prevent accounting divergence (proof=%s)", proofID)
 		}
 
@@ -415,7 +418,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 	}
 
 	// 🛡️ PR-5 FIX : Utilisation de FindByShopIDForUpdate pour verrouiller la ligne du wallet
-	// et éviter les "lost updates" en cas de libérations concurrentes pour le même shop.
 	wallet, err := s.walletRepo.WithTX(tx).FindByShopIDForUpdate(shopCtx, shopID)
 	if err != nil {
 		if errors.Is(err, repository.ErrWalletNotFound) {
@@ -506,9 +508,6 @@ func (s *EscrowAutoReleaseScheduler) creditMerchantWallet(
 // 🆕 PR-A FIX : VALIDATION STRICTE DE L'IDEMPOTENCE
 // ============================================================
 
-// validateEscrowReleaseTxn vérifie de manière stricte qu'une transaction existante
-// correspond bien à l'opération de libération d'escrow attendue.
-// Elle empêche de masquer une incohérence (mauvais shop, mauvais montant, statut non complété).
 func validateEscrowReleaseTxn(
 	txn *entity.WalletTransaction,
 	expectedShopID string,
@@ -526,8 +525,6 @@ func validateEscrowReleaseTxn(
 		return fmt.Errorf("shop_id mismatch (existing=%s, expected=%s)", txn.ShopID, expectedShopID)
 	}
 
-	// Vérification du montant : on utilise GrossAmountCents si disponible (PR-C),
-	// sinon on fallback sur AmountCents pour les transactions legacy.
 	actualAmount := txn.AmountCents
 	if txn.GrossAmountCents != nil {
 		actualAmount = *txn.GrossAmountCents
