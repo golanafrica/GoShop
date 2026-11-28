@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	paymentdto "Goshop/application/dto/payment_dto"
 	"Goshop/domain/entity"
@@ -150,6 +151,27 @@ func (uc *RefundPaymentUsecase) Execute(ctx context.Context, req *paymentdto.Ref
 	}
 
 	if err := txPaymentRepo.CreatePaymentRefund(ctx, refundRow); err != nil {
+		// 🆕 PR-7 FIX : Gérer la race condition sur la contrainte unique d'idempotence
+		if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "23505") {
+			existing, checkErr := txPaymentRepo.FindPaymentRefundByIdempotency(ctx, shop.ID, idemKey)
+			if checkErr != nil {
+				return nil, fmt.Errorf("failed to re-check idempotency after unique violation: %w", checkErr)
+			}
+			if existing != nil {
+				switch existing.Status {
+				case entity.PaymentRefundCompleted:
+					p, err := uc.paymentRepo.FindByID(ctx, paymentID)
+					if err != nil {
+						return nil, err
+					}
+					return mapPaymentToResponse(p), nil
+				case entity.PaymentRefundPending, entity.PaymentRefundReconciliationRequired:
+					return nil, fmt.Errorf("refund already in progress or awaiting reconciliation (key=%s)", idemKey)
+				case entity.PaymentRefundFailed:
+					return nil, fmt.Errorf("refund previously failed for this idempotency key — use a new key")
+				}
+			}
+		}
 		return nil, fmt.Errorf("create payment refund: %w", err)
 	}
 

@@ -892,3 +892,61 @@ func (r *PaymentRepositoryPostgres) FindLatestByOrderID(ctx context.Context, ord
 
 	return r.scanPayment(r.queryRowContext(ctx, query, orderID, shopID))
 }
+
+// FindStuckPendingRefunds retourne les demandes de remboursement coincées en
+// statut pending ou reconciliation_required depuis plus de X minutes.
+// 🆕 PR-7 FIX : Permet à un scheduler ou à l'admin de récupérer les refunds incertains.
+func (r *PaymentRepositoryPostgres) FindStuckPendingRefunds(
+	ctx context.Context,
+	minAgeMinutes int,
+	limit int,
+) ([]*entity.PaymentRefund, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if minAgeMinutes <= 0 {
+		minAgeMinutes = 15 // 15 min par défaut pour éviter les faux positifs
+	}
+
+	query := `
+		SELECT id, payment_id, shop_id, amount_cents, status, reason,
+		       idempotency_key, provider_ref, provider_error, created_at, updated_at
+		FROM payment_refunds
+		WHERE status IN ('pending', 'reconciliation_required')
+		  AND updated_at < NOW() - ($1 || ' minutes')::interval
+		ORDER BY updated_at ASC
+		LIMIT $2
+	`
+	rows, err := r.queryContext(ctx, query, minAgeMinutes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find stuck pending refunds: %w", err)
+	}
+	defer rows.Close()
+
+	var refunds []*entity.PaymentRefund
+	for rows.Next() {
+		var rf entity.PaymentRefund
+		var reason, providerRef, providerError sql.NullString
+
+		err := rows.Scan(
+			&rf.ID, &rf.PaymentID, &rf.ShopID, &rf.AmountCents, &rf.Status, &reason,
+			&rf.IdempotencyKey, &providerRef, &providerError, &rf.CreatedAt, &rf.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan payment refund: %w", err)
+		}
+
+		if reason.Valid {
+			rf.Reason = reason.String
+		}
+		if providerRef.Valid {
+			rf.ProviderRef = &providerRef.String
+		}
+		if providerError.Valid {
+			rf.ProviderError = &providerError.String
+		}
+		refunds = append(refunds, &rf)
+	}
+
+	return refunds, rows.Err()
+}
