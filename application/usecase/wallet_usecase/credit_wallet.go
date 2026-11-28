@@ -215,7 +215,7 @@ func (uc *CreditWalletUsecase) ProcessCreditWithinTx(ctx context.Context, tx rep
 			// Calcul du previous balance historique pour une réponse précise
 			previousBalance := existing.BalanceAfterCents - existing.AmountCents
 
-			// Calcul du swept cents historique
+			// Calcul du swept cents historique (gross - net ledger)
 			var sweptCents int64
 			if existing.GrossAmountCents != nil && *existing.GrossAmountCents > existing.AmountCents {
 				sweptCents = *existing.GrossAmountCents - existing.AmountCents
@@ -264,12 +264,22 @@ func (uc *CreditWalletUsecase) ProcessCreditWithinTx(ctx context.Context, tx rep
 		return nil, fmt.Errorf("failed to update wallet: %w", err)
 	}
 
-	// 5. Création de la transaction ledger (via la TX)
+	// ============================================================
+	// 5. Ledger : UNIQUEMENT l'effet net sur balance_cents
+	//    ✅ PR-5 FIX :
+	//    - debt_cents est hors ledger (colonne séparée sur merchant_wallets)
+	//    - Full debt sweep  → AmountCents = 0 (balance inchangée)
+	//    - Partial sweep    → AmountCents = netToBalance
+	//    - UNE seule ligne ledger (plus de +gross / -sweep / double -sweep)
+	// ============================================================
 	txnID := uuid.New().String()
 	desc := req.Description
 	if req.HoldAfterCredit && desc != nil {
 		heldNote := *desc + " (held until proof/redeem)"
 		desc = &heldNote
+	} else if swept > 0 && netToBalance == 0 {
+		markerDesc := fmt.Sprintf("Crédit de %d centimes intégralement absorbé par la dette (full debt sweep)", grossCents)
+		desc = &markerDesc
 	} else if swept > 0 {
 		base := ""
 		if desc != nil {
@@ -279,80 +289,27 @@ func (uc *CreditWalletUsecase) ProcessCreditWithinTx(ctx context.Context, tx rep
 		desc = &adj
 	}
 
-	if netToBalance > 0 {
-		txn := &entity.WalletTransaction{
-			ID:                txnID,
-			ShopID:            req.ShopID,
-			TransactionType:   req.TransactionType,
-			AmountCents:       netToBalance,
-			GrossAmountCents:  &grossCents,
-			BalanceAfterCents: wallet.BalanceCents,
-			ReferenceType:     req.ReferenceType,
-			ReferenceID:       req.ReferenceID,
-			Description:       desc,
-			Status:            entity.WalletTxCompleted,
-		}
-
-		if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
-			if isUniqueViolation(err) {
-				// 🆕 PR-1 FIX : Dans une TX partagée, on ne peut pas rollback et continuer.
-				// On retourne l'erreur. Le scheduler fera un rollback de SA transaction.
-				// Au prochain retry, la vérification d'idempotence (étape 2) trouvera le gagnant et réussira proprement.
-				return nil, fmt.Errorf("concurrent credit unique violation, caller should rollback and retry: %w", err)
-			}
-			return nil, fmt.Errorf("failed to create transaction: %w", err)
-		}
-	} else {
-		// Full debt sweep marker
-		markerDesc := fmt.Sprintf("Crédit de %d FCFA intégralement absorbé par la dette", grossCents)
-		markerTxn := &entity.WalletTransaction{
-			ID:                uuid.New().String(),
-			ShopID:            req.ShopID,
-			TransactionType:   req.TransactionType,
-			AmountCents:       grossCents,
-			GrossAmountCents:  &grossCents,
-			BalanceAfterCents: wallet.BalanceCents,
-			ReferenceType:     req.ReferenceType,
-			ReferenceID:       req.ReferenceID,
-			Description:       &markerDesc,
-			Status:            entity.WalletTxCompleted,
-		}
-
-		if err := uc.txnRepo.WithTX(tx).Create(ctx, markerTxn); err != nil {
-			if isUniqueViolation(err) {
-				return nil, fmt.Errorf("concurrent credit (full sweep) unique violation, caller should rollback and retry: %w", err)
-			}
-			return nil, fmt.Errorf("failed to create debt sweep marker: %w", err)
-		}
-		txnID = markerTxn.ID
+	txn := &entity.WalletTransaction{
+		ID:                txnID,
+		ShopID:            req.ShopID,
+		TransactionType:   req.TransactionType,
+		AmountCents:       netToBalance, // 0 si full debt sweep
+		GrossAmountCents:  &grossCents,
+		BalanceAfterCents: wallet.BalanceCents,
+		ReferenceType:     req.ReferenceType,
+		ReferenceID:       req.ReferenceID,
+		Description:       desc,
+		Status:            entity.WalletTxCompleted,
 	}
 
-	if swept > 0 {
-		sweepRefType := "debt_sweep"
-		var sweepRefID *string
-		if req.ReferenceID != nil {
-			sweepRefID = req.ReferenceID
+	if err := uc.txnRepo.WithTX(tx).Create(ctx, txn); err != nil {
+		if isUniqueViolation(err) {
+			// 🆕 PR-1 FIX : Dans une TX partagée, on ne peut pas rollback et continuer.
+			// On retourne l'erreur. Le scheduler fera un rollback de SA transaction.
+			// Au prochain retry, la vérification d'idempotence (étape 2) trouvera le gagnant et réussira proprement.
+			return nil, fmt.Errorf("concurrent credit unique violation, caller should rollback and retry: %w", err)
 		}
-		sweepDesc := fmt.Sprintf("Auto debt sweep on credit type=%s gross=%d swept=%d", req.TransactionType, grossCents, swept)
-		sweepAmt := -swept
-		sweepTxn := &entity.WalletTransaction{
-			ID:                uuid.New().String(),
-			ShopID:            req.ShopID,
-			TransactionType:   entity.WalletTxDebtSweep,
-			AmountCents:       sweepAmt,
-			BalanceAfterCents: wallet.BalanceCents,
-			ReferenceType:     &sweepRefType,
-			ReferenceID:       sweepRefID,
-			Description:       &sweepDesc,
-			Status:            entity.WalletTxCompleted,
-		}
-
-		if err := uc.txnRepo.WithTX(tx).Create(ctx, sweepTxn); err != nil {
-			msg := strings.ToLower(err.Error())
-			if !(strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") || strings.Contains(msg, "23505")) {
-				return nil, fmt.Errorf("failed to create debt_sweep transaction: %w", err)
-			}
-		}
+		return nil, fmt.Errorf("failed to create transaction: %w", err)
 	}
 
 	// ⚠️ IMPORTANT : Pas de tx.Commit() ici. Le caller (Execute ou Scheduler) est responsable du Commit.
@@ -503,7 +460,6 @@ func (uc *CreditWalletUsecase) CreditFromUnfreeze(
 
 // isNotFound vérifie de manière robuste si une erreur correspond à un état "non trouvé".
 // ✅ PR-3 FIX : Utilisation exclusive des erreurs sentinelles pour éviter les faux positifs
-// (ex: une erreur SQL contenant "not found" dans le nom d'une table ne doit pas être interprétée comme une absence)
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
@@ -526,7 +482,6 @@ func isUniqueViolation(err error) bool {
 	if errors.As(err, &pqErr) {
 		return pqErr.Code == "23505"
 	}
-	// Fallback de sécurité si l'erreur est enveloppée différemment
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate key") ||
 		strings.Contains(msg, "unique constraint") ||
@@ -545,14 +500,11 @@ func assertIdempotentCreditMatch(existing *entity.WalletTransaction, req *Credit
 	}
 
 	// 1. Vérification du montant brut (GrossAmountCents)
-	// C'est la source de vérité, car AmountCents peut varier selon le debt_sweep appliqué à l'époque.
 	if existing.GrossAmountCents != nil {
 		if *existing.GrossAmountCents != req.AmountCents {
 			return fmt.Errorf("idempotency conflict: gross amount mismatch (existing=%d, requested=%d)", *existing.GrossAmountCents, req.AmountCents)
 		}
 	} else {
-		// Fallback sécurisé pour les transactions legacy (avant l'ajout de gross_amount_cents).
-		// On compare amount_cents, en assumant que le montant net était le montant demandé.
 		if existing.AmountCents != req.AmountCents {
 			return fmt.Errorf("idempotency conflict: amount mismatch on legacy transaction (existing=%d, requested=%d)", existing.AmountCents, req.AmountCents)
 		}
